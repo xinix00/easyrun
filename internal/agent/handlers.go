@@ -49,6 +49,15 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 	io.Copy(w, resp.Body)
 }
 
+// handleLeader returns the current leader address
+func (a *Agent) handleLeader(w http.ResponseWriter, r *http.Request) {
+	leader := ""
+	if a.getLeader != nil {
+		leader = a.getLeader()
+	}
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"leader": leader})
+}
+
 // handleHealth returns health status
 func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})

@@ -138,6 +138,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/run", a.handleRun)
 	mux.HandleFunc("/stop/", a.handleStop)
 	mux.HandleFunc("/logs/", a.handleLogs)
+	mux.HandleFunc("/leader", a.handleLeader)
 
 	// Proxy endpoints - forward to leader for cluster-wide operations
 	mux.HandleFunc("/v1/agents", a.proxyToLeader)
