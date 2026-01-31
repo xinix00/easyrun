@@ -12,9 +12,12 @@ import (
 )
 
 // DispatchJob sends a job to agents (Count times with round-robin spreading)
+// count=-1 means run on ALL agents
 func (l *Leader) DispatchJob(job *types.Job) error {
 	count := job.Count
-	if count <= 0 {
+	if count == -1 {
+		count = len(l.GetAgents())
+	} else if count <= 0 {
 		count = 1
 	}
 

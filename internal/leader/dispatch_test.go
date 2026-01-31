@@ -260,6 +260,128 @@ func TestLeaderDispatchJobWithZeroCount(t *testing.T) {
 	}
 }
 
+func TestLeaderDispatchCountMinusOne(t *testing.T) {
+	store := NewMockJobStore()
+
+	dispatches := make(map[string]int)
+	var mu sync.Mutex
+
+	// Create 3 agents
+	servers := make([]*httptest.Server, 3)
+	for i := 0; i < 3; i++ {
+		idx := i
+		servers[i] = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/run" {
+				mu.Lock()
+				dispatches[servers[idx].URL]++
+				mu.Unlock()
+				w.WriteHeader(http.StatusCreated)
+			}
+		}))
+		defer servers[i].Close()
+	}
+
+	leader := New("local-agent", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	// Register all 3 agents
+	for i, s := range servers {
+		leader.Heartbeat("agent-"+string(rune('a'+i)), s.URL, nil, time.Time{})
+	}
+	time.Sleep(10 * time.Millisecond)
+
+	// count=-1 should run on ALL agents
+	job := &types.Job{
+		ID:      "everywhere-job",
+		Name:    "easydns",
+		Command: "/usr/bin/easydns",
+		Count:   -1,
+	}
+
+	err := leader.DispatchJob(job)
+	if err != nil {
+		t.Errorf("DispatchJob failed: %v", err)
+	}
+
+	mu.Lock()
+	total := 0
+	for _, count := range dispatches {
+		total += count
+	}
+	mu.Unlock()
+
+	if total != 3 {
+		t.Errorf("Total dispatched = %d, want 3 (all agents)", total)
+	}
+}
+
+func TestLeaderCountMinusOneNewAgent(t *testing.T) {
+	store := NewMockJobStore()
+
+	dispatches := make(map[string]int)
+	var mu sync.Mutex
+
+	makeServer := func() *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/run" {
+				mu.Lock()
+				dispatches[r.Host]++
+				mu.Unlock()
+				w.WriteHeader(http.StatusCreated)
+			}
+		}))
+	}
+
+	server1 := makeServer()
+	defer server1.Close()
+
+	leader := New("local-agent", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	// Register first agent
+	leader.Heartbeat("agent-a", server1.URL, nil, time.Time{})
+	time.Sleep(10 * time.Millisecond)
+
+	// Dispatch count=-1 job
+	job := &types.Job{
+		ID:      "everywhere-job",
+		Name:    "easydns",
+		Command: "/usr/bin/easydns",
+		Count:   -1,
+	}
+	leader.DispatchJob(job)
+	time.Sleep(10 * time.Millisecond)
+
+	mu.Lock()
+	if len(dispatches) != 1 {
+		t.Errorf("Expected 1 dispatch, got %d", len(dispatches))
+	}
+	mu.Unlock()
+
+	// Add new agent - should automatically get the job
+	server2 := makeServer()
+	defer server2.Close()
+	leader.Heartbeat("agent-b", server2.URL, nil, time.Time{})
+	time.Sleep(10 * time.Millisecond)
+
+	mu.Lock()
+	total := 0
+	for _, count := range dispatches {
+		total += count
+	}
+	mu.Unlock()
+
+	if total != 2 {
+		t.Errorf("Total dispatched = %d, want 2 (new agent should get job)", total)
+	}
+}
+
 func TestLeaderConcurrentDispatchAndStop(t *testing.T) {
 	store := NewMockJobStore()
 

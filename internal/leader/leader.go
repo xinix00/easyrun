@@ -90,18 +90,24 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 
 // Heartbeat updates agent's LastSeen and learns jobs from remote agents
 func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentStateTime time.Time) []*types.Job {
-	// Update agent
-	l.do(func(s *leaderState) {
+	// Register or update agent
+	isNew := query(l, func(s *leaderState) bool {
 		if agent, ok := s.agents[id]; ok {
 			agent.LastSeen = time.Now()
-		} else {
-			s.agents[id] = &types.Agent{
-				ID:       id,
-				Endpoint: endpoint,
-				LastSeen: time.Now(),
-			}
+			return false
 		}
+		s.agents[id] = &types.Agent{
+			ID:       id,
+			Endpoint: endpoint,
+			LastSeen: time.Now(),
+		}
+		return true
 	})
+
+	// New agent gets count=-1 jobs
+	if isNew {
+		l.ensureAllAgentJobs(id, endpoint)
+	}
 
 	// If agent has newer state than us, adopt their state
 	myStateTime := l.jobStore.GetStateTime()
@@ -169,4 +175,27 @@ func containsString(slice []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ensureAllAgentJobs dispatches count=-1 jobs to agent if missing
+func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
+	agent := &types.Agent{ID: agentID, Endpoint: endpoint}
+	for _, job := range l.jobStore.GetJobs() {
+		if job.Count != -1 {
+			continue
+		}
+		hasJob := query(l, func(s *leaderState) bool {
+			return containsString(s.placement[job.ID], agentID)
+		})
+		if hasJob {
+			continue
+		}
+		if err := l.sendJobToAgent(agent, job); err != nil {
+			log.Printf("Failed to dispatch job %s to agent %s: %v", job.ID, agentID, err)
+			continue
+		}
+		l.do(func(s *leaderState) {
+			s.placement[job.ID] = append(s.placement[job.ID], agentID)
+		})
+	}
 }

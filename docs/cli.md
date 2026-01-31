@@ -34,6 +34,7 @@ agent-2   ghi789    api    54323  running
 ./bin/easyrun run \
     --name api \
     --command "./api-binary" \
+    --count 3 \
     --cpu 2000 \
     --memory 512M \
     --env "LOG_LEVEL=info"
@@ -43,6 +44,19 @@ Output:
 ```
 Job 'api' dispatched with ID abc123
 ```
+
+### Run op alle nodes
+
+Use `--count -1` to run on every agent:
+
+```bash
+./bin/easyrun run \
+    --name easydns \
+    --command "/usr/local/bin/easydns" \
+    --count -1
+```
+
+New agents automatically receive the job on registration.
 
 ### Job stoppen
 

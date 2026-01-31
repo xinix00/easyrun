@@ -10,7 +10,7 @@ type Job struct {
     Name        string            // Human-readable name
     Artifact    *Artifact         // Binary/assets to download (optional)
     Command     string            // Command to execute
-    Count       int               // Number of instances (default: 1)
+    Count       int               // Number of instances (see below)
     Ports       map[string]int    // Port name -> fixed port (0 = dynamic)
     CPUShares   int               // Relative CPU priority (0 = no limiting)
     MemoryLimit uint64            // Bytes (0 = no limiting)
@@ -20,6 +20,16 @@ type Job struct {
     MaxRestarts int               // Max restart attempts (0=default 5, -1=unlimited)
 }
 ```
+
+### Count
+
+| Value | Behavior |
+|-------|----------|
+| `count: 3` | Run 3 instances, spread via round-robin |
+| `count: 0` or omitted | Default to 1 instance |
+| `count: -1` | **Run on ALL agents** |
+
+`count: -1` is useful for node-level services like easydns or monitoring agents. New agents automatically receive all `count: -1` jobs on registration.
 
 ### Ports
 
