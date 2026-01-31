@@ -346,3 +346,328 @@ func TestAgentConcurrentStateAccess(t *testing.T) {
 		t.Errorf("GetJobs() returned %d jobs, want 10", len(jobs))
 	}
 }
+
+// ============== EDGE CASE TESTS ==============
+
+func TestAgentCapacityWithRunningTasks(t *testing.T) {
+	cfg := testConfig()
+	cfg.Capacity.CPUShares = 100
+	cfg.Capacity.Memory = 1024
+
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	// Store a job and create a running task
+	job := &types.Job{
+		ID:          "existing-job",
+		Name:        "existing",
+		Command:     "echo",
+		CPUShares:   60,
+		MemoryLimit: 600,
+	}
+	agent.StoreJob(job)
+
+	// Add a running task that uses capacity
+	agent.do(func(s *agentState) {
+		s.tasks["task-1"] = &types.Task{
+			ID:    "task-1",
+			JobID: "existing-job",
+			State: types.TaskRunning,
+		}
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	// New job that would fit if alone, but not with existing task
+	newJob := &types.Job{
+		ID:          "new-job",
+		CPUShares:   50,
+		MemoryLimit: 500,
+	}
+
+	// Should not have capacity (60 + 50 > 100)
+	if agent.hasCapacity(newJob) {
+		t.Error("hasCapacity should return false when existing tasks consume capacity")
+	}
+}
+
+func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
+	cfg := testConfig()
+	cfg.Capacity.CPUShares = 100
+
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	// Store a job and create a FAILED task (should not count against capacity)
+	job := &types.Job{
+		ID:        "failed-job",
+		CPUShares: 80,
+	}
+	agent.StoreJob(job)
+
+	agent.do(func(s *agentState) {
+		s.tasks["task-1"] = &types.Task{
+			ID:    "task-1",
+			JobID: "failed-job",
+			State: types.TaskFailed, // Failed, not running
+		}
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	// New job should fit because failed tasks don't count
+	newJob := &types.Job{
+		ID:        "new-job",
+		CPUShares: 50,
+	}
+
+	if !agent.hasCapacity(newJob) {
+		t.Error("hasCapacity should ignore failed tasks")
+	}
+}
+
+func TestAgentCapacityNoLimitsConfigured(t *testing.T) {
+	cfg := testConfig()
+	cfg.Capacity.CPUShares = 0 // No limit
+	cfg.Capacity.Memory = 0    // No limit
+
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Any job should fit when no limits configured
+	hugeJob := &types.Job{
+		ID:          "huge-job",
+		CPUShares:   1000000,
+		MemoryLimit: 1000000000000,
+	}
+
+	if !agent.hasCapacity(hugeJob) {
+		t.Error("hasCapacity should return true when no limits configured")
+	}
+}
+
+func TestAgentCapacityJobWithNoLimits(t *testing.T) {
+	cfg := testConfig()
+	cfg.Capacity.CPUShares = 100
+	cfg.Capacity.Memory = 1024
+
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Job with no resource limits
+	noLimitJob := &types.Job{
+		ID:          "no-limit-job",
+		CPUShares:   0,
+		MemoryLimit: 0,
+	}
+
+	// Should always fit
+	if !agent.hasCapacity(noLimitJob) {
+		t.Error("hasCapacity should return true for job with no limits")
+	}
+}
+
+func TestAgentGetJobNotFound(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	job := agent.GetJob("nonexistent")
+	if job != nil {
+		t.Error("GetJob should return nil for nonexistent job")
+	}
+}
+
+func TestAgentStoreJobOverwrite(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	// Store job
+	agent.StoreJob(&types.Job{
+		ID:      "job-1",
+		Name:    "original",
+		Command: "echo original",
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Overwrite with same ID
+	agent.StoreJob(&types.Job{
+		ID:      "job-1",
+		Name:    "updated",
+		Command: "echo updated",
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	job := agent.GetJob("job-1")
+	if job.Name != "updated" {
+		t.Errorf("Job name = %q, want %q (overwrite failed)", job.Name, "updated")
+	}
+
+	// Should still have only 1 job
+	jobs := agent.GetJobs()
+	if len(jobs) != 1 {
+		t.Errorf("GetJobs() returned %d jobs, want 1", len(jobs))
+	}
+}
+
+func TestMockRunnerError(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	mockRunner.runErr = &testError{"simulated runner error"}
+
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{
+		ID:      "failing-job",
+		Name:    "test",
+		Command: "echo",
+	}
+
+	task, err := agent.startJob(job)
+	if err == nil {
+		t.Error("startJob should fail when runner returns error")
+	}
+	if task != nil {
+		t.Error("task should be nil when runner fails")
+	}
+}
+
+type testError struct {
+	msg string
+}
+
+func (e *testError) Error() string {
+	return e.msg
+}
+
+func TestAgentStopAllTasks(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	// Create some running tasks
+	for i := 0; i < 3; i++ {
+		job := &types.Job{
+			ID:      "job-" + string(rune('a'+i)),
+			Name:    "test",
+			Command: "echo",
+		}
+		agent.StoreJob(job)
+		agent.do(func(s *agentState) {
+			s.tasks["task-"+string(rune('a'+i))] = &types.Task{
+				ID:    "task-" + string(rune('a'+i)),
+				JobID: job.ID,
+				State: types.TaskRunning,
+			}
+		})
+	}
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Stop all tasks
+	agent.StopAllTasks()
+
+	time.Sleep(10 * time.Millisecond)
+
+	// All tasks should be stopped
+	for i := 0; i < 3; i++ {
+		taskID := "task-" + string(rune('a'+i))
+		if !mockRunner.WasStopped(taskID) {
+			t.Errorf("Task %s should be stopped", taskID)
+		}
+	}
+}
+
+func TestAgentConcurrentCapacityCheck(t *testing.T) {
+	cfg := testConfig()
+	cfg.Capacity.CPUShares = 100
+
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	var wg sync.WaitGroup
+	results := make(chan bool, 100)
+
+	// Many concurrent capacity checks
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			job := &types.Job{
+				ID:        "job-" + string(rune('0'+n%10)),
+				CPUShares: 10,
+			}
+			results <- agent.hasCapacity(job)
+		}(i)
+	}
+
+	wg.Wait()
+	close(results)
+
+	// All should succeed (no running tasks)
+	for r := range results {
+		if !r {
+			t.Error("hasCapacity should return true for all concurrent checks when no tasks running")
+		}
+	}
+}
+
+func TestAgentNewWithNilRunner(t *testing.T) {
+	cfg := testConfig()
+
+	// New with nil runner should create default ProcessRunner
+	agent := New(cfg, "test-agent", nil)
+
+	if agent.runner == nil {
+		t.Error("Agent runner should not be nil when created with nil runner")
+	}
+}
