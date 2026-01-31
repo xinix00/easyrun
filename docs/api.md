@@ -185,3 +185,33 @@ DELETE /stop/{job_id}
 ```
 
 Stops all tasks of a job on this agent.
+
+### Logs (streaming)
+
+```
+GET /logs/{task_id}/stdout   # Stream stdout (SSE)
+GET /logs/{task_id}/stderr   # Stream stderr (SSE)
+```
+
+Live stream of task output. Server-Sent Events (SSE) format.
+
+**Example:**
+```bash
+curl http://agent:8080/logs/abc123/stdout
+
+# SSE output:
+data: [2025-01-31 12:00:00] Server starting...
+data: [2025-01-31 12:00:01] Listening on port 8080
+```
+
+**Usage with CLI:**
+```bash
+orch logs abc123                    # Stream stdout
+orch logs abc123 --stream stderr    # Stream stderr
+```
+
+**No persistence** - logs are streamed live only. For permanent logging, pipe to external logger:
+```bash
+orch logs abc123 | tee /var/log/myapp.log
+orch logs abc123 | ./log-forwarder --destination loki://...
+```

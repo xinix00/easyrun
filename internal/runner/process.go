@@ -21,6 +21,8 @@ type ProcessRunner struct {
 	config    *Config
 	processes map[string]*exec.Cmd
 	taskDirs  map[string]string // taskID -> work directory
+	stdoutLog map[string]*LogBroadcaster
+	stderrLog map[string]*LogBroadcaster
 	mu        sync.RWMutex
 }
 
@@ -30,6 +32,8 @@ func NewProcessRunner(config *Config) *ProcessRunner {
 		config:    config,
 		processes: make(map[string]*exec.Cmd),
 		taskDirs:  make(map[string]string),
+		stdoutLog: make(map[string]*LogBroadcaster),
+		stderrLog: make(map[string]*LogBroadcaster),
 	}
 }
 
@@ -94,15 +98,37 @@ func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, 
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
 
+	// Setup log broadcasting
+	stdoutBroadcaster := NewLogBroadcaster()
+	stderrBroadcaster := NewLogBroadcaster()
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		r.cleanupTaskDir(taskID)
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		r.cleanupTaskDir(taskID)
+		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+	}
+
 	// Start the process
 	if err := cmd.Start(); err != nil {
 		r.cleanupTaskDir(taskID)
 		return nil, fmt.Errorf("failed to start process: %w", err)
 	}
 
+	// Start log broadcasting
+	go PipeReader(stdoutBroadcaster, stdoutPipe)
+	go PipeReader(stderrBroadcaster, stderrPipe)
+
 	r.mu.Lock()
 	r.processes[taskID] = cmd
 	r.taskDirs[taskID] = taskDir
+	r.stdoutLog[taskID] = stdoutBroadcaster
+	r.stderrLog[taskID] = stderrBroadcaster
 	r.mu.Unlock()
 
 	// Apply resource limits
@@ -326,11 +352,27 @@ func (r *ProcessRunner) cleanupTaskDir(taskID string) {
 	if ok {
 		delete(r.taskDirs, taskID)
 	}
+	delete(r.stdoutLog, taskID)
+	delete(r.stderrLog, taskID)
 	r.mu.Unlock()
 
 	if taskDir != "" {
 		os.RemoveAll(taskDir)
 	}
+}
+
+// GetStdout returns the stdout broadcaster for a task
+func (r *ProcessRunner) GetStdout(taskID string) *LogBroadcaster {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.stdoutLog[taskID]
+}
+
+// GetStderr returns the stderr broadcaster for a task
+func (r *ProcessRunner) GetStderr(taskID string) *LogBroadcaster {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.stderrLog[taskID]
 }
 
 // CleanupAll removes all task directories (called at startup)

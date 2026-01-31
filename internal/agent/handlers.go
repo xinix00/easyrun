@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"easyrun/internal/runner"
 	"easyrun/internal/types"
 )
 
@@ -176,6 +177,72 @@ func (a *Agent) stopJob(jobID string) int {
 		}
 	}
 	return stopped
+}
+
+// handleLogs streams task logs (stdout or stderr)
+func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
+	// Parse URL: /logs/{taskID}/{stream}
+	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/logs/"), "/")
+	if len(parts) != 2 {
+		http.Error(w, "usage: /logs/{taskID}/stdout or /logs/{taskID}/stderr", http.StatusBadRequest)
+		return
+	}
+
+	taskID := parts[0]
+	stream := parts[1]
+
+	// Get ProcessRunner
+	pr, ok := a.runner.(*runner.ProcessRunner)
+	if !ok {
+		http.Error(w, "logs not available", http.StatusInternalServerError)
+		return
+	}
+
+	// Get broadcaster
+	var broadcaster *runner.LogBroadcaster
+	switch stream {
+	case "stdout":
+		broadcaster = pr.GetStdout(taskID)
+	case "stderr":
+		broadcaster = pr.GetStderr(taskID)
+	default:
+		http.Error(w, "stream must be stdout or stderr", http.StatusBadRequest)
+		return
+	}
+
+	if broadcaster == nil {
+		http.Error(w, "task not found or not running", http.StatusNotFound)
+		return
+	}
+
+	// Setup SSE
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	// Subscribe to log stream
+	logCh := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(logCh)
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Stream logs
+	for {
+		select {
+		case line, ok := <-logCh:
+			if !ok {
+				return
+			}
+			fmt.Fprintf(w, "data: %s\n\n", line)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, data any) {

@@ -9,6 +9,8 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 - **Named ports**: Flexible port allocation per service
 - **Service discovery**: Tags for external load balancers
 - **Health checks**: HTTP-based monitoring with auto-restart
+- **Live log streaming**: Real-time stdout/stderr via SSE (no persistence)
+- **Artifact downloads**: HTTP and S3 with flexible auth
 - **Fault tolerance**: Automatic failover on node crashes
 - **Resource limits**: CPU shares and memory limiting
 - **State persistence**: Jobs survive agent restarts
@@ -204,11 +206,41 @@ Agent generates: `Authorization: Basic base64(username:password)`
 ```
 
 **Download process:**
-1. Parse URL scheme (`http://`, `s3://`, `file://`)
+1. Parse URL scheme (`http://`, `s3://`)
 2. Route to appropriate downloader
 3. Download to task's `/app` directory
-4. Extract if .tar.gz/.zip
+4. Extract .tar.gz
 5. Execute command
+
+## Live Log Streaming
+
+**Stream task logs in real-time** (no persistence):
+
+```bash
+# Via CLI
+orch logs <task-id>                    # stdout
+orch logs <task-id> --stream stderr    # stderr
+
+# Via API
+curl http://agent:8080/logs/{task-id}/stdout
+```
+
+**SSE format** - live stream only, no storage:
+```
+data: [2025-01-31 12:00:00] Server starting...
+data: [2025-01-31 12:00:01] Listening on :8080
+```
+
+**External logging:**
+```bash
+# Pipe to file
+orch logs abc123 | tee /var/log/app.log
+
+# Forward to Loki/Elasticsearch
+orch logs abc123 | ./log-forwarder --dest loki://...
+```
+
+**KISS:** Easyrun streams logs, external tools handle persistence/aggregation.
 
 ## Service Discovery via Tags
 

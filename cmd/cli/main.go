@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"text/tabwriter"
 
 	"easyrun/internal/types"
@@ -35,6 +37,7 @@ func main() {
 			stopCommand(),
 			statusCommand(),
 			agentsCommand(),
+			logsCommand(),
 		},
 	}
 
@@ -209,6 +212,91 @@ func listAgents(c *cli.Context) error {
 	}
 	w.Flush()
 	return nil
+}
+
+func logsCommand() *cli.Command {
+	return &cli.Command{
+		Name:      "logs",
+		Usage:     "Stream task logs",
+		ArgsUsage: "<task-id>",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:  "stream",
+				Usage: "Log stream (stdout or stderr)",
+				Value: "stdout",
+			},
+		},
+		Action: streamLogs,
+	}
+}
+
+func streamLogs(c *cli.Context) error {
+	taskID := c.Args().First()
+	if taskID == "" {
+		return fmt.Errorf("task ID required")
+	}
+
+	stream := c.String("stream")
+	if stream != "stdout" && stream != "stderr" {
+		return fmt.Errorf("stream must be stdout or stderr")
+	}
+
+	// Get cluster status to find which agent has this task
+	resp, err := doRequest("GET", "/v1/status", nil)
+	if err != nil {
+		return err
+	}
+
+	var status struct {
+		TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
+	}
+	if err := json.Unmarshal(resp, &status); err != nil {
+		return err
+	}
+
+	// Find task and its agent
+	var agentEndpoint string
+	for agent, tasks := range status.TasksByAgent {
+		for _, task := range tasks {
+			if task.ID == taskID {
+				// Extract agent endpoint from agent ID or use direct connection
+				// For now, assume agent is hostname:port format
+				agentEndpoint = agent
+				break
+			}
+		}
+		if agentEndpoint != "" {
+			break
+		}
+	}
+
+	if agentEndpoint == "" {
+		return fmt.Errorf("task %s not found", taskID)
+	}
+
+	// Stream logs from agent
+	url := fmt.Sprintf("http://%s/logs/%s/%s", agentEndpoint, taskID, stream)
+	resp2, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("failed to connect to agent: %w", err)
+	}
+	defer resp2.Body.Close()
+
+	if resp2.StatusCode != http.StatusOK {
+		return fmt.Errorf("agent returned status %d", resp2.StatusCode)
+	}
+
+	// Stream SSE events to stdout
+	scanner := bufio.NewScanner(resp2.Body)
+	for scanner.Scan() {
+		line := scanner.Text()
+		// SSE format: "data: <content>"
+		if strings.HasPrefix(line, "data: ") {
+			fmt.Print(strings.TrimPrefix(line, "data: "))
+		}
+	}
+
+	return scanner.Err()
 }
 
 // HTTP helpers

@@ -87,6 +87,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/tasks", a.handleTasks)
 	mux.HandleFunc("/run", a.handleRun)
 	mux.HandleFunc("/stop/", a.handleStop)
+	mux.HandleFunc("/logs/", a.handleLogs)
 
 	addr := fmt.Sprintf("%s:%d", a.config.Node.IP, a.config.Node.Port)
 	a.server = &http.Server{
