@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 
@@ -98,12 +99,15 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 
 // allocatePorts allocates ports based on job port config
 // If value is 0, allocates a dynamic free port
-// If value > 0, uses that fixed port
+// If value > 0, uses that fixed port (after checking availability)
 func allocatePorts(portConfig map[string]int) (map[string]int, error) {
 	ports := make(map[string]int)
 	for name, fixed := range portConfig {
 		if fixed > 0 {
-			// Use fixed port
+			// Check if fixed port is available
+			if !isPortAvailable(fixed) {
+				return nil, fmt.Errorf("port %d for %s is already in use", fixed, name)
+			}
 			ports[name] = fixed
 		} else {
 			// Allocate dynamic port
@@ -115,6 +119,17 @@ func allocatePorts(portConfig map[string]int) (map[string]int, error) {
 		}
 	}
 	return ports, nil
+}
+
+// isPortAvailable checks if a port is available for binding
+func isPortAvailable(port int) bool {
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return false
+	}
+	listener.Close()
+	return true
 }
 
 // restartTask restarts a failed task

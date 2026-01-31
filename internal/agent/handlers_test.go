@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -477,5 +479,49 @@ func TestHandleRunWithFixedPorts(t *testing.T) {
 	// grpc should be dynamic (non-zero)
 	if task.Ports["grpc"] == 0 {
 		t.Error("grpc port should be dynamically allocated")
+	}
+}
+
+func TestHandleRunPortInUse(t *testing.T) {
+	// Occupy a port
+	listener, err := net.Listen("tcp", "127.0.0.1:19876")
+	if err != nil {
+		t.Fatalf("Failed to occupy port: %v", err)
+	}
+	defer listener.Close()
+
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	job := types.Job{
+		ID:      "port-conflict-job",
+		Name:    "test",
+		Command: "echo",
+		Ports:   map[string]int{"http": 19876}, // Port is in use
+	}
+
+	body, _ := json.Marshal(job)
+	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	agent.handleRun(w, req)
+
+	// Should fail because port is in use
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusInternalServerError)
+	}
+
+	var resp map[string]string
+	json.NewDecoder(w.Body).Decode(&resp)
+
+	if !strings.Contains(resp["error"], "already in use") {
+		t.Errorf("Error should mention port in use, got: %s", resp["error"])
 	}
 }

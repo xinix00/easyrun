@@ -91,7 +91,7 @@ curl -X POST http://localhost:9080/v1/jobs \
     },
     "command": "./server --http=$ER_PORT_HTTP --grpc=$ER_PORT_GRPC",
     "count": 3,
-    "ports": ["http", "grpc", "metrics"],
+    "ports": {"http": 0, "grpc": 0, "metrics": 9090},
     "cpu_shares": 2048,
     "memory_limit": 536870912,
     "env": {
@@ -119,7 +119,7 @@ curl -X POST http://localhost:9080/v1/jobs \
   - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
   - `auth` (map): Other credentials (S3: access_key/secret_key/region, HTTP helper: username/password)
 - `count` (int): Number of instances (default 1)
-- `ports` ([]string): Named ports → ENV vars `ER_PORT_<NAME>`
+- `ports` (map): Port name → fixed port (0 = dynamic). ENV vars `ER_PORT_<NAME>`
 - `tags` (map): Labels for service discovery
 - `health_check`: HTTP health monitoring
   - `port` (string): Named port to check (default "http")

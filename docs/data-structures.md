@@ -11,7 +11,7 @@ type Job struct {
     Artifact    *Artifact         // Binary/assets to download (optional)
     Command     string            // Command to execute
     Count       int               // Number of instances (default: 1)
-    Ports       []string          // Named ports (["http", "grpc", "metrics"])
+    Ports       map[string]int    // Port name -> fixed port (0 = dynamic)
     CPUShares   int               // Relative CPU priority (0 = no limiting)
     MemoryLimit uint64            // Bytes (0 = no limiting)
     Env         map[string]string // Extra environment variables
@@ -20,6 +20,24 @@ type Job struct {
     MaxRestarts int               // Max restart attempts (0=default 5, -1=unlimited)
 }
 ```
+
+### Ports
+
+Ports can be dynamic (assigned at runtime) or fixed:
+
+```json
+{
+  "ports": {
+    "http": 0,      // Dynamic - system assigns a free port
+    "grpc": 0,      // Dynamic
+    "metrics": 9090 // Fixed - must use port 9090
+  }
+}
+```
+
+**Fixed ports:** If the specified port is already in use, the job will be rejected with an error.
+
+**Environment variables:** Task gets `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all ports.
 
 ### Artifact
 
@@ -105,7 +123,7 @@ type Task struct {
 }
 ```
 
-**Named Ports:** Task gets ENV vars `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all ports in the map.
+**Ports:** Task gets ENV vars `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all allocated ports.
 
 ### Task States
 
