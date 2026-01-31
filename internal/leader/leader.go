@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"slices"
 	"time"
 
 	"easyrun/internal/types"
@@ -118,7 +119,7 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 		// Update placement for these jobs
 		l.do(func(s *leaderState) {
 			for _, job := range agentJobs {
-				if !containsString(s.placement[job.ID], id) {
+				if !slices.Contains(s.placement[job.ID], id) {
 					s.placement[job.ID] = append(s.placement[job.ID], id)
 				}
 			}
@@ -133,7 +134,7 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 				if len(s.placement[job.ID]) == 0 {
 					l.jobStore.StoreJob(job)
 				}
-				if !containsString(s.placement[job.ID], id) {
+				if !slices.Contains(s.placement[job.ID], id) {
 					s.placement[job.ID] = append(s.placement[job.ID], id)
 				}
 			}
@@ -167,16 +168,6 @@ func (l *Leader) GetJobs() []*types.Job {
 	return l.jobStore.GetJobs()
 }
 
-// containsString checks if a slice contains a string
-func containsString(slice []string, s string) bool {
-	for _, item := range slice {
-		if item == s {
-			return true
-		}
-	}
-	return false
-}
-
 // ensureAllAgentJobs dispatches count=-1 jobs to agent if missing
 func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
 	agent := &types.Agent{ID: agentID, Endpoint: endpoint}
@@ -185,7 +176,7 @@ func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
 			continue
 		}
 		hasJob := query(l, func(s *leaderState) bool {
-			return containsString(s.placement[job.ID], agentID)
+			return slices.Contains(s.placement[job.ID], agentID)
 		})
 		if hasJob {
 			continue

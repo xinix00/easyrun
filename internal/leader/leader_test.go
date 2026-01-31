@@ -45,22 +45,3 @@ func TestLeaderGetJobs(t *testing.T) {
 	}
 }
 
-func TestContainsString(t *testing.T) {
-	tests := []struct {
-		slice []string
-		s     string
-		want  bool
-	}{
-		{[]string{"a", "b", "c"}, "b", true},
-		{[]string{"a", "b", "c"}, "d", false},
-		{[]string{}, "a", false},
-		{nil, "a", false},
-	}
-
-	for _, tt := range tests {
-		got := containsString(tt.slice, tt.s)
-		if got != tt.want {
-			t.Errorf("containsString(%v, %q) = %v, want %v", tt.slice, tt.s, got, tt.want)
-		}
-	}
-}
