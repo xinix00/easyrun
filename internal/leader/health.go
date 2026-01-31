@@ -124,8 +124,14 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	return result
 }
 
-// ResolveJob returns IPs of agents running tasks for the given job name
-func (l *Leader) ResolveJob(jobName string) []string {
+// ServiceEndpoint represents a running task's network endpoint
+type ServiceEndpoint struct {
+	IP    string         `json:"ip"`
+	Ports map[string]int `json:"ports"` // port name -> port number
+}
+
+// ResolveJob returns endpoints (IP + ports) of running tasks for the given job name
+func (l *Leader) ResolveJob(jobName string) []ServiceEndpoint {
 	agents := l.GetAgents()
 	agentEndpoints := make(map[string]string) // agentID -> endpoint
 	for _, a := range agents {
@@ -134,8 +140,7 @@ func (l *Leader) ResolveJob(jobName string) []string {
 
 	status := l.GetClusterStatus()
 
-	var ips []string
-	seen := make(map[string]bool)
+	var endpoints []ServiceEndpoint
 
 	for agentID, tasks := range status {
 		for _, task := range tasks {
@@ -145,14 +150,16 @@ func (l *Leader) ResolveJob(jobName string) []string {
 
 			endpoint := agentEndpoints[agentID]
 			ip := extractIPFromEndpoint(endpoint)
-			if ip != "" && !seen[ip] {
-				seen[ip] = true
-				ips = append(ips, ip)
+			if ip != "" {
+				endpoints = append(endpoints, ServiceEndpoint{
+					IP:    ip,
+					Ports: task.Ports,
+				})
 			}
 		}
 	}
 
-	return ips
+	return endpoints
 }
 
 // extractIPFromEndpoint extracts IP from endpoint (http://ip:port -> ip)

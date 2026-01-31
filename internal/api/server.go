@@ -188,7 +188,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleResolve returns IPs for a job name (for DNS resolution)
+// handleResolve returns endpoints (IP + ports) for a job name
 func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 	jobName := strings.TrimPrefix(r.URL.Path, "/v1/resolve/")
 	if jobName == "" {
@@ -196,10 +196,10 @@ func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ips := s.leader.ResolveJob(jobName)
+	endpoints := s.leader.ResolveJob(jobName)
 	writeJSON(w, http.StatusOK, map[string]any{
-		"job":  jobName,
-		"ips":  ips,
+		"job":       jobName,
+		"endpoints": endpoints,
 	})
 }
 
