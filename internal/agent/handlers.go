@@ -10,11 +10,12 @@ import (
 
 	"easyrun/internal/runner"
 	"easyrun/internal/types"
+	"easyrun/pkg/httputil"
 )
 
 // handleHealth returns health status
 func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleTasks returns all running tasks
@@ -26,7 +27,7 @@ func (a *Agent) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		return result
 	})
-	writeJSON(w, http.StatusOK, tasks)
+	httputil.WriteJSON(w, http.StatusOK, tasks)
 }
 
 // handleRun starts a new job
@@ -38,12 +39,12 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
 
 	if !a.hasCapacity(&job) {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+		httputil.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "insufficient capacity",
 		})
 		return
@@ -51,11 +52,11 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	task, err := a.startJob(&job)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		httputil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, task)
+	httputil.WriteJSON(w, http.StatusCreated, task)
 }
 
 // handleStop stops a job
@@ -67,12 +68,12 @@ func (a *Agent) handleStop(w http.ResponseWriter, r *http.Request) {
 
 	jobID := strings.TrimPrefix(r.URL.Path, "/stop/")
 	if jobID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "job_id required"})
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job_id required"})
 		return
 	}
 
 	stopped := a.stopJob(jobID)
-	writeJSON(w, http.StatusOK, map[string]int{"stopped": stopped})
+	httputil.WriteJSON(w, http.StatusOK, map[string]int{"stopped": stopped})
 }
 
 // startJob starts a job and returns the task
@@ -279,10 +280,4 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-}
-
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
 }

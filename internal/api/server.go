@@ -10,6 +10,7 @@ import (
 
 	"easyrun/internal/leader"
 	"easyrun/internal/types"
+	"easyrun/pkg/httputil"
 
 	"github.com/google/uuid"
 )
@@ -74,13 +75,13 @@ func (s *Server) Stop() {
 
 // handleHealth returns health status
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // handleGetAgents returns all registered agents
 func (s *Server) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 	agents := s.leader.GetAgents()
-	writeJSON(w, http.StatusOK, agents)
+	httputil.WriteJSON(w, http.StatusOK, agents)
 }
 
 // handleHeartbeat handles agent heartbeat (also registers new agents)
@@ -92,17 +93,17 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		StateTime time.Time    `json:"state_time,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
 	if req.ID == "" || req.Endpoint == "" {
-		writeError(w, http.StatusBadRequest, "id and endpoint required")
+		httputil.WriteError(w, http.StatusBadRequest, "id and endpoint required")
 		return
 	}
 
 	jobs := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime)
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
 		"jobs":       jobs,
 		"state_time": time.Now(),
@@ -113,7 +114,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleUnregisterAgent(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/agents/")
 	if id == "" {
-		writeError(w, http.StatusBadRequest, "agent id required")
+		httputil.WriteError(w, http.StatusBadRequest, "agent id required")
 		return
 	}
 
@@ -125,12 +126,12 @@ func (s *Server) handleUnregisterAgent(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json")
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
 
 	if job.Command == "" {
-		writeError(w, http.StatusBadRequest, "command required")
+		httputil.WriteError(w, http.StatusBadRequest, "command required")
 		return
 	}
 
@@ -139,11 +140,11 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.leader.DispatchJob(&job); err != nil {
-		writeError(w, http.StatusServiceUnavailable, err.Error())
+		httputil.WriteError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]string{
+	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
 		"id":     job.ID,
 		"status": "dispatched",
 	})
@@ -153,7 +154,7 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleStopJob(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
 	if id == "" {
-		writeError(w, http.StatusBadRequest, "job id required")
+		httputil.WriteError(w, http.StatusBadRequest, "job id required")
 		return
 	}
 
@@ -177,7 +178,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"agents":        len(agents),
 		"total_tasks":   totalTasks,
 		"running_tasks": running,
@@ -185,12 +186,3 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func writeJSON(w http.ResponseWriter, status int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
-}
-
-func writeError(w http.ResponseWriter, status int, message string) {
-	writeJSON(w, status, map[string]string{"error": message})
-}
