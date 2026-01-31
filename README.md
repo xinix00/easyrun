@@ -93,6 +93,10 @@ go build -o bin/orch ./cmd/cli
 ### Fields
 
 - **name**: Job identifier
+- **artifact**: Binary/assets to download (optional)
+  - **url**: Download URL - scheme determines downloader (http://, https://, s3://, file://)
+  - **headers**: HTTP headers map (Authorization, X-API-Key, etc.)
+  - **auth**: Other credentials (S3: access_key/secret_key/region, HTTP helper: username/password)
 - **command**: Command to execute
 - **count**: Number of instances (default: 1)
 - **ports**: Named ports array - generates ENV vars `ER_PORT_HTTP`, etc.
@@ -142,6 +146,69 @@ ER_PORT_METRICS=9091
 ```
 
 **No ports = no ports:** Jobs without `ports` field get no port ENV vars.
+
+## Artifact Downloads
+
+Jobs can download binaries/assets before starting. URL scheme determines downloader.
+
+### S3 with credentials
+```json
+{
+  "artifact": {
+    "url": "s3://mybucket/myapp-v1.2.3.tar.gz",
+    "auth": {
+      "access_key": "AKIAIOSFODNN7EXAMPLE",
+      "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+      "region": "eu-west-1"
+    }
+  },
+  "command": "./myapp"
+}
+```
+
+### HTTP with custom headers
+```json
+{
+  "artifact": {
+    "url": "https://artifacts.example.com/app.tar.gz",
+    "headers": {
+      "Authorization": "Bearer token123",
+      "X-API-Key": "secret-key",
+      "X-Tenant-ID": "tenant-123"
+    }
+  }
+}
+```
+
+### HTTP with Basic Auth (helper)
+```json
+{
+  "artifact": {
+    "url": "https://artifacts.example.com/app.zip",
+    "auth": {
+      "username": "deploy",
+      "password": "secret123"
+    }
+  }
+}
+```
+Agent generates: `Authorization: Basic base64(username:password)`
+
+### Public HTTP (no auth)
+```json
+{
+  "artifact": {
+    "url": "https://github.com/user/repo/releases/download/v1.0.0/app.tar.gz"
+  }
+}
+```
+
+**Download process:**
+1. Parse URL scheme (`http://`, `s3://`, `file://`)
+2. Route to appropriate downloader
+3. Download to task's `/app` directory
+4. Extract if .tar.gz/.zip
+5. Execute command
 
 ## Service Discovery via Tags
 

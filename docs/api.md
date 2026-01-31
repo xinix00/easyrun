@@ -81,6 +81,14 @@ curl -X POST http://localhost:9080/v1/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "name": "api",
+    "artifact": {
+      "url": "s3://mybucket/api-v2.0.tar.gz",
+      "auth": {
+        "access_key": "AKIAIOSFODNN7EXAMPLE",
+        "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        "region": "eu-west-1"
+      }
+    },
     "command": "./server --http=$ER_PORT_HTTP --grpc=$ER_PORT_GRPC",
     "count": 3,
     "ports": ["http", "grpc", "metrics"],
@@ -106,12 +114,26 @@ curl -X POST http://localhost:9080/v1/jobs \
 ```
 
 **Fields:**
+- `artifact` (object): Binary/assets to download (optional)
+  - `url` (string): URL with scheme - determines downloader (http://, s3://, file://)
+  - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
+  - `auth` (map): Other credentials (S3: access_key/secret_key/region, HTTP helper: username/password)
 - `count` (int): Number of instances (default 1)
 - `ports` ([]string): Named ports → ENV vars `ER_PORT_<NAME>`
 - `tags` (map): Labels for service discovery
 - `health_check`: HTTP health monitoring
   - `port` (string): Named port to check (default "http")
 - `max_restarts` (int): Max restart attempts (0=default 5, -1=unlimited)
+
+**Artifact Downloaders:**
+
+URL scheme → downloader:
+- `http://`, `https://` → HTTP downloader
+  - Uses `headers` for custom headers
+  - Or `auth.username`/`auth.password` → generates Basic Auth header
+- `s3://bucket/key` → S3 downloader
+  - Uses `auth.access_key`, `auth.secret_key`, `auth.region`
+- `file://path` → Local file copier
 
 Response:
 ```json

@@ -93,7 +93,9 @@ func runJob(c *cli.Context) error {
 	}
 
 	if artifact := c.String("artifact"); artifact != "" {
-		job.ArtifactURL = artifact
+		job.Artifact = &types.Artifact{
+			URL: artifact,
+		}
 	}
 
 	if mem := c.String("memory"); mem != "" {

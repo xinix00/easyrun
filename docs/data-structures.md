@@ -8,7 +8,7 @@ What the user wants to run.
 type Job struct {
     ID          string            // Unique identifier
     Name        string            // Human-readable name
-    ArtifactURL string            // Download URL for binary/zip (optional)
+    Artifact    *Artifact         // Binary/assets to download (optional)
     Command     string            // Command to execute
     Count       int               // Number of instances (default: 1)
     Ports       []string          // Named ports (["http", "grpc", "metrics"])
@@ -18,6 +18,62 @@ type Job struct {
     Tags        map[string]string // Labels for service discovery/grouping
     HealthCheck *HealthCheck      // HTTP health check config (optional)
     MaxRestarts int               // Max restart attempts (0=default 5, -1=unlimited)
+}
+```
+
+### Artifact
+
+```go
+type Artifact struct {
+    URL     string            // Download URL (http://, https://, s3://, file://)
+    Headers map[string]string // HTTP headers (Authorization, X-API-Key, etc.)
+    Auth    map[string]string // Other credentials (S3, helpers)
+}
+```
+
+**URL scheme determines which downloader to use.**
+
+**HTTP/HTTPS downloaders:**
+- Use `headers` for custom HTTP headers (direct pass-through)
+- Or use `auth` helpers: `username`/`password` → generates Basic Auth header
+
+**S3 downloader:**
+- Use `auth` for S3 credentials: `access_key`, `secret_key`, `region`
+
+**Examples:**
+
+Custom headers:
+```json
+{
+  "url": "https://artifacts.example.com/app.tar.gz",
+  "headers": {
+    "Authorization": "Bearer token123",
+    "X-API-Key": "secret",
+    "X-Tenant-ID": "123"
+  }
+}
+```
+
+Basic Auth helper:
+```json
+{
+  "url": "https://artifacts.example.com/app.zip",
+  "auth": {
+    "username": "deploy",
+    "password": "secret"
+  }
+}
+```
+
+S3:
+```json
+{
+  "url": "s3://bucket/key",
+  "auth": {
+    "access_key": "AKIA...",
+    "secret_key": "...",
+    "region": "eu-west-1"
+  }
 }
 ```
 

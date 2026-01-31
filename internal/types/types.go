@@ -11,6 +11,13 @@ const (
 	TaskStopped TaskState = "stopped"
 )
 
+// Artifact describes where to download the application binary/assets
+type Artifact struct {
+	URL     string            `json:"url"`               // http://, https://, s3://, file://
+	Headers map[string]string `json:"headers,omitempty"` // HTTP headers (Authorization, X-API-Key, etc.)
+	Auth    map[string]string `json:"auth,omitempty"`    // other credentials (S3: access_key/secret_key/region)
+}
+
 // HealthCheck configuration for a job
 type HealthCheck struct {
 	Path     string        `json:"path"`               // e.g., "/health"
@@ -23,7 +30,7 @@ type HealthCheck struct {
 type Job struct {
 	ID          string            `json:"id"`
 	Name        string            `json:"name"`
-	ArtifactURL string            `json:"artifact_url,omitempty"`
+	Artifact    *Artifact         `json:"artifact,omitempty"`      // binary/assets to download
 	Command     string            `json:"command"`
 	Count       int               `json:"count,omitempty"`         // number of instances (default 1)
 	Ports       []string          `json:"ports,omitempty"`         // named ports (e.g., ["http", "grpc"])
