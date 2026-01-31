@@ -47,6 +47,15 @@ func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, 
 		return nil, fmt.Errorf("failed to setup task directory: %w", err)
 	}
 
+	// Download artifact if specified
+	if job.Artifact != nil {
+		appDir := filepath.Join(taskDir, "app")
+		if err := downloadArtifact(job.Artifact, appDir); err != nil {
+			r.cleanupTaskDir(taskID)
+			return nil, fmt.Errorf("failed to download artifact: %w", err)
+		}
+	}
+
 	// Wrap command with memory limit (ulimit)
 	command := r.wrapCommand(job.Command, job.MemoryLimit)
 	cmd := exec.Command("/bin/sh", "-c", command)
