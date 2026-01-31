@@ -61,10 +61,23 @@ func (b *LogBroadcaster) Unsubscribe(ch chan string) {
 	}
 }
 
-// PipeReader creates a reader that broadcasts to the broadcaster
+// Close closes all listeners (call when process exits)
+func (b *LogBroadcaster) Close() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	for _, ch := range b.listeners {
+		close(ch)
+	}
+	b.listeners = nil
+}
+
+// PipeReader reads from reader and broadcasts to broadcaster until EOF
 func PipeReader(broadcaster *LogBroadcaster, reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		broadcaster.Write(append(scanner.Bytes(), '\n'))
 	}
+	// Reader closed (process exited), close broadcaster
+	broadcaster.Close()
 }

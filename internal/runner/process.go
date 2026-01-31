@@ -16,6 +16,14 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	gracefulShutdownTimeout = 5 * time.Second
+	processExitPollInterval = 100 * time.Millisecond
+	processExitPollAttempts = 50
+	defaultMaxCPUShares     = 14000
+	maxNiceValue            = 19
+)
+
 // ProcessRunner runs processes with optional isolation
 type ProcessRunner struct {
 	config    *Config
@@ -194,7 +202,9 @@ func (r *ProcessRunner) Stop(task *types.Task) error {
 	}
 
 	// Kill process group
-	syscall.Kill(-pid, syscall.SIGTERM)
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+		fmt.Printf("Warning: failed to send SIGTERM to process group %d: %v\n", pid, err)
+	}
 
 	// Wait for graceful shutdown
 	done := make(chan struct{})
@@ -203,11 +213,11 @@ func (r *ProcessRunner) Stop(task *types.Task) error {
 			cmd.Wait()
 		} else {
 			// Poll for process exit
-			for i := 0; i < 50; i++ {
+			for i := 0; i < processExitPollAttempts; i++ {
 				if err := syscall.Kill(pid, 0); err != nil {
 					break
 				}
-				time.Sleep(100 * time.Millisecond)
+				time.Sleep(processExitPollInterval)
 			}
 		}
 		close(done)
@@ -215,8 +225,10 @@ func (r *ProcessRunner) Stop(task *types.Task) error {
 
 	select {
 	case <-done:
-	case <-time.After(5 * time.Second):
-		syscall.Kill(-pid, syscall.SIGKILL)
+	case <-time.After(gracefulShutdownTimeout):
+		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+			fmt.Printf("Warning: failed to send SIGKILL to process group %d: %v\n", pid, err)
+		}
 		<-done
 	}
 
@@ -271,16 +283,16 @@ func (r *ProcessRunner) applyLimits(pid int, job *types.Job) {
 func (r *ProcessRunner) applyNice(pid int, cpuShares int) {
 	maxShares := r.config.MaxCPUShares
 	if maxShares <= 0 {
-		maxShares = 14000
+		maxShares = defaultMaxCPUShares
 	}
 
 	// More shares = lower nice = higher priority
-	nice := 19 - (cpuShares * 19 / maxShares)
+	nice := maxNiceValue - (cpuShares * maxNiceValue / maxShares)
 	if nice < 0 {
 		nice = 0
 	}
-	if nice > 19 {
-		nice = 19
+	if nice > maxNiceValue {
+		nice = maxNiceValue
 	}
 
 	if err := syscall.Setpriority(syscall.PRIO_PROCESS, pid, nice); err != nil {

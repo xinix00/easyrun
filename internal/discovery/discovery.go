@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,14 +10,16 @@ import (
 	"time"
 )
 
+const httpClientTimeout = 5 * time.Second
+
 // Discovery handles leader election via easyraft
 // easyraft manages all the complexity - we just ask it who's leader
 type Discovery struct {
-	clusterName   string
-	nodeAddr      string
-	raftEndpoint  string
-	leaderLease   time.Duration
-	httpClient    *http.Client
+	clusterName  string
+	nodeAddr     string
+	raftEndpoint string
+	leaderLease  time.Duration
+	httpClient   *http.Client
 }
 
 // New creates a new Discovery instance
@@ -32,7 +35,7 @@ func New(clusterName, nodeIP string, nodePort int, raftEndpoints []string, leade
 		nodeAddr:     fmt.Sprintf("%s:%d", nodeIP, nodePort),
 		raftEndpoint: endpoint,
 		leaderLease:  leaderLease,
-		httpClient:   &http.Client{Timeout: 5 * time.Second},
+		httpClient:   &http.Client{Timeout: httpClientTimeout},
 	}
 }
 
@@ -43,7 +46,12 @@ func (d *Discovery) GetLeader() string {
 	}
 
 	url := fmt.Sprintf("%s/leader/%s", d.raftEndpoint, d.clusterName)
-	resp, err := d.httpClient.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return ""
+	}
+
+	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return ""
 	}
@@ -75,7 +83,13 @@ func (d *Discovery) TryBecomeLeader() bool {
 	})
 
 	url := fmt.Sprintf("%s/leader/%s", d.raftEndpoint, d.clusterName)
-	resp, err := d.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := d.httpClient.Do(req)
 	if err != nil {
 		return false
 	}
@@ -100,7 +114,10 @@ func (d *Discovery) ReleaseLeadership() {
 
 	body, _ := json.Marshal(map[string]string{"ip": d.nodeAddr})
 	url := fmt.Sprintf("%s/leader/%s", d.raftEndpoint, d.clusterName)
-	req, _ := http.NewRequest(http.MethodDelete, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodDelete, url, bytes.NewReader(body))
+	if err != nil {
+		return
+	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := d.httpClient.Do(req)

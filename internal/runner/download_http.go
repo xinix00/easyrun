@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
@@ -11,9 +12,14 @@ import (
 	"easyrun/internal/types"
 )
 
+const downloadTimeout = 5 * time.Minute
+
 // downloadHTTP downloads from HTTP/HTTPS URL
 func downloadHTTP(artifact *types.Artifact, destPath string) error {
-	req, err := http.NewRequest("GET", artifact.URL, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, artifact.URL, nil)
 	if err != nil {
 		return err
 	}
@@ -31,7 +37,7 @@ func downloadHTTP(artifact *types.Artifact, destPath string) error {
 		req.Header.Set("Authorization", "Basic "+auth)
 	}
 
-	client := &http.Client{Timeout: 5 * time.Minute}
+	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

@@ -22,7 +22,13 @@ type State struct {
 	Updated time.Time    `json:"updated"`
 }
 
-const defaultMaxRestarts = 5
+const (
+	defaultMaxRestarts     = 5
+	taskMonitorInterval    = 5 * time.Second
+	defaultHealthTimeout   = 5 * time.Second
+	shutdownTimeout        = 5 * time.Second
+	stateChannelBufferSize = 64
+)
 
 // agentState holds all mutable state (owned by single goroutine)
 type agentState struct {
@@ -59,7 +65,7 @@ func New(cfg *config.Config, id string) *Agent {
 		endpoint: endpoint,
 		config:   cfg,
 		runner:   runner.NewProcessRunner(runnerCfg),
-		ops:      make(chan func(*agentState), 64),
+		ops:      make(chan func(*agentState), stateChannelBufferSize),
 	}
 }
 
@@ -176,7 +182,7 @@ func (a *Agent) StopAllTasks() {
 func (a *Agent) shutdown() {
 	log.Println("Agent shutting down...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	a.server.Shutdown(ctx)
 

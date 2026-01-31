@@ -2,6 +2,7 @@ package leader
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -30,16 +31,16 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 
 // dispatchToAvailableAgent tries agents until one accepts the job
 func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
-	l.agentsMu.RLock()
-	agentCount := len(l.agents)
-	l.agentsMu.RUnlock()
+	agentCount := query(l, func(s *leaderState) int {
+		return len(s.agents)
+	})
 
 	if agentCount == 0 {
 		return fmt.Errorf("no agents available")
 	}
 
 	tried := 0
-	maxTries := agentCount + 1 // try all agents at least once
+	maxTries := agentCount + 1
 
 	for tried < maxTries {
 		agent := l.nextAgent()
@@ -50,13 +51,12 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 		err := l.sendJobToAgent(agent, job)
 		if err == nil {
 			// Success! Track placement
-			l.placementMu.Lock()
-			l.placement[job.ID] = append(l.placement[job.ID], agent.ID)
-			l.placementMu.Unlock()
+			l.do(func(s *leaderState) {
+				s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
+			})
 			return nil
 		}
 
-		// Agent said no or error, try next
 		log.Printf("Agent %s rejected job %s: %v, trying next agent", agent.ID, job.ID, err)
 		tried++
 	}
@@ -66,53 +66,60 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 
 // StopJob sends stop requests to all agents running instances of this job
 func (l *Leader) StopJob(jobID string) {
-	l.placementMu.Lock()
-	agentIDs := l.placement[jobID]
-	delete(l.placement, jobID)
-	l.placementMu.Unlock()
-
-	// Note: we don't remove from jobStore - agent handles that
+	// Get agents and clear placement
+	agentIDs := query(l, func(s *leaderState) []string {
+		ids := s.placement[jobID]
+		delete(s.placement, jobID)
+		return ids
+	})
 
 	if len(agentIDs) == 0 {
 		return
 	}
 
-	// Stop on all agents
-	for _, agentID := range agentIDs {
-		l.agentsMu.RLock()
-		agent := l.agents[agentID]
-		l.agentsMu.RUnlock()
+	// Get agent endpoints
+	agents := query(l, func(s *leaderState) []*types.Agent {
+		var result []*types.Agent
+		for _, id := range agentIDs {
+			if a := s.agents[id]; a != nil {
+				result = append(result, a)
+			}
+		}
+		return result
+	})
 
-		if agent == nil {
+	// Stop on all agents (outside state loop - HTTP can block)
+	ctx := context.Background()
+	for _, agent := range agents {
+		url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobID)
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+		if err != nil {
+			log.Printf("Failed to create stop request for agent %s: %v", agent.ID, err)
 			continue
 		}
-
-		url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobID)
-		req, _ := http.NewRequest(http.MethodDelete, url, nil)
-		l.httpClient.Do(req)
+		if _, err := l.httpClient.Do(req); err != nil {
+			log.Printf("Failed to stop job %s on agent %s: %v", jobID, agent.ID, err)
+		}
 	}
 }
 
 // nextAgent returns the next agent in round-robin order
 func (l *Leader) nextAgent() *types.Agent {
-	l.agentsMu.RLock()
-	defer l.agentsMu.RUnlock()
+	return query(l, func(s *leaderState) *types.Agent {
+		if len(s.agents) == 0 {
+			return nil
+		}
 
-	if len(l.agents) == 0 {
-		return nil
-	}
+		var agents []*types.Agent
+		for _, a := range s.agents {
+			agents = append(agents, a)
+		}
 
-	var agents []*types.Agent
-	for _, a := range l.agents {
-		agents = append(agents, a)
-	}
+		idx := s.roundRobin % len(agents)
+		s.roundRobin++
 
-	l.rrMu.Lock()
-	idx := l.roundRobin % len(agents)
-	l.roundRobin++
-	l.rrMu.Unlock()
-
-	return agents[idx]
+		return agents[idx]
+	})
 }
 
 // sendJobToAgent sends a job to a specific agent
@@ -124,7 +131,13 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 		return err
 	}
 
-	resp, err := l.httpClient.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to contact agent %s: %w", agent.ID, err)
 	}

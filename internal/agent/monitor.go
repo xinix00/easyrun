@@ -12,7 +12,7 @@ import (
 
 // monitorTasks periodically checks task states and health
 func (a *Agent) monitorTasks(ctx context.Context) {
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(taskMonitorInterval)
 	defer ticker.Stop()
 
 	for {
@@ -92,7 +92,7 @@ func (a *Agent) checkTasks() {
 func (a *Agent) checkHealth(task *types.Task, hc *types.HealthCheck) bool {
 	timeout := hc.Timeout
 	if timeout == 0 {
-		timeout = 5 * time.Second
+		timeout = defaultHealthTimeout
 	}
 
 	portName := hc.Port

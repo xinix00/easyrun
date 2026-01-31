@@ -5,15 +5,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
 	"easyrun/internal/types"
 )
 
-// Run starts the leader's dead agent checker loop
+// Run starts the leader's state loop and dead agent checker
 func (l *Leader) Run(ctx context.Context) {
-	ticker := time.NewTicker(10 * time.Second)
+	// Start the state loop
+	go l.stateLoop(ctx)
+
+	ticker := time.NewTicker(deadAgentCheckInterval)
 	defer ticker.Stop()
 
 	for {
@@ -28,16 +32,17 @@ func (l *Leader) Run(ctx context.Context) {
 
 // checkDeadAgents removes agents that haven't sent heartbeat and redispatches their jobs
 func (l *Leader) checkDeadAgents() {
-	l.agentsMu.Lock()
-	var dead []string
-	for id, agent := range l.agents {
-		if time.Since(agent.LastSeen) > l.agentTimeout {
-			log.Printf("Agent %s is dead (no heartbeat for %v)", id, time.Since(agent.LastSeen))
-			dead = append(dead, id)
-			delete(l.agents, id)
+	dead := query(l, func(s *leaderState) []string {
+		var deadAgents []string
+		for id, agent := range s.agents {
+			if time.Since(agent.LastSeen) > l.agentTimeout {
+				log.Printf("Agent %s is dead (no heartbeat for %v)", id, time.Since(agent.LastSeen))
+				deadAgents = append(deadAgents, id)
+				delete(s.agents, id)
+			}
 		}
-	}
-	l.agentsMu.Unlock()
+		return deadAgents
+	})
 
 	for _, agentID := range dead {
 		l.redispatchJobsFrom(agentID)
@@ -46,40 +51,41 @@ func (l *Leader) checkDeadAgents() {
 
 // redispatchJobsFrom moves instances from a failed agent to other agents
 func (l *Leader) redispatchJobsFrom(failedAgentID string) {
-	l.placementMu.Lock()
-	var jobsToRedispatch []*types.Job
+	// Get jobs to redispatch and update placement
+	jobsToRedispatch := query(l, func(s *leaderState) []*types.Job {
+		var jobs []*types.Job
 
-	for jobID, agentIDs := range l.placement {
-		// Count how many instances were on failed agent
-		instancesOnFailedAgent := 0
-		newAgentList := []string{}
+		for jobID, agentIDs := range s.placement {
+			instancesOnFailedAgent := 0
+			var newAgentList []string
 
-		for _, agentID := range agentIDs {
-			if agentID == failedAgentID {
-				instancesOnFailedAgent++
+			for _, agentID := range agentIDs {
+				if agentID == failedAgentID {
+					instancesOnFailedAgent++
+				} else {
+					newAgentList = append(newAgentList, agentID)
+				}
+			}
+
+			// Update placement
+			if len(newAgentList) > 0 {
+				s.placement[jobID] = newAgentList
 			} else {
-				newAgentList = append(newAgentList, agentID)
+				delete(s.placement, jobID)
+			}
+
+			// Queue redispatch for lost instances
+			if instancesOnFailedAgent > 0 {
+				if job := l.jobStore.GetJob(jobID); job != nil {
+					jobCopy := *job
+					jobCopy.Count = instancesOnFailedAgent
+					jobs = append(jobs, &jobCopy)
+				}
 			}
 		}
 
-		// Update placement (remove failed agent instances)
-		if len(newAgentList) > 0 {
-			l.placement[jobID] = newAgentList
-		} else {
-			delete(l.placement, jobID)
-		}
-
-		// Queue redispatch for lost instances
-		if instancesOnFailedAgent > 0 {
-			if job := l.jobStore.GetJob(jobID); job != nil {
-				// Create a copy with adjusted Count for only the lost instances
-				jobCopy := *job
-				jobCopy.Count = instancesOnFailedAgent
-				jobsToRedispatch = append(jobsToRedispatch, &jobCopy)
-			}
-		}
-	}
-	l.placementMu.Unlock()
+		return jobs
+	})
 
 	for _, job := range jobsToRedispatch {
 		log.Printf("Redispatching %d instance(s) of job %s from dead agent %s", job.Count, job.ID, failedAgentID)
@@ -91,12 +97,7 @@ func (l *Leader) redispatchJobsFrom(failedAgentID string) {
 
 // GetClusterStatus fetches status from all agents
 func (l *Leader) GetClusterStatus() map[string][]*types.Task {
-	l.agentsMu.RLock()
-	agents := make([]*types.Agent, 0, len(l.agents))
-	for _, a := range l.agents {
-		agents = append(agents, a)
-	}
-	l.agentsMu.RUnlock()
+	agents := l.GetAgents()
 
 	result := make(map[string][]*types.Task)
 	var wg sync.WaitGroup
@@ -127,7 +128,12 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 func (l *Leader) fetchAgentTasks(agent *types.Agent) ([]*types.Task, error) {
 	url := fmt.Sprintf("%s/tasks", agent.Endpoint)
 
-	resp, err := l.httpClient.Get(url)
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
