@@ -72,7 +72,7 @@ go build -o bin/orch ./cmd/cli
   "name": "api-service",
   "command": "./server --http=$ER_PORT_HTTP --grpc=$ER_PORT_GRPC",
   "count": 3,
-  "ports": ["http", "grpc", "metrics"],
+  "ports": {"http": 0, "grpc": 0, "metrics": 0},
   "cpu_shares": 2048,
   "memory_limit": 536870912,
   "env": {
@@ -96,12 +96,12 @@ go build -o bin/orch ./cmd/cli
 
 - **name**: Job identifier
 - **artifact**: Binary/assets to download (optional)
-  - **url**: Download URL - scheme determines downloader (http://, https://, s3://, file://)
+  - **url**: Download URL - scheme determines downloader (http://, https://, s3://)
   - **headers**: HTTP headers map (Authorization, X-API-Key, etc.)
   - **auth**: Other credentials (S3: access_key/secret_key/region, HTTP helper: username/password)
 - **command**: Command to execute
 - **count**: Number of instances (default: 1)
-- **ports**: Named ports array - generates ENV vars `ER_PORT_HTTP`, etc.
+- **ports**: Port name → fixed port (0 = dynamic) - generates ENV vars `ER_PORT_HTTP`, etc.
 - **cpu_shares**: CPU priority (higher = more CPU time)
 - **memory_limit**: Memory limit in bytes
 - **env**: Environment variables
@@ -137,7 +137,7 @@ Leader dispatches → Agent A (full) → 503
 ```json
 {
   "command": "cloudflared --url http://localhost:$ER_PORT_HTTP --metrics :$ER_PORT_METRICS",
-  "ports": ["http", "metrics"]
+  "ports": {"http": 0, "metrics": 0}
 }
 ```
 
@@ -247,7 +247,7 @@ orch logs abc123 | ./log-forwarder --dest loki://...
 ```json
 {
   "name": "api",
-  "ports": ["http"],
+  "ports": {"http": 0},
   "tags": {
     "loadbalancer_domain": "*.example.com",
     "service": "api"

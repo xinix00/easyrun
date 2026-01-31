@@ -43,7 +43,7 @@ Ports can be dynamic (assigned at runtime) or fixed:
 
 ```go
 type Artifact struct {
-    URL     string            // Download URL (http://, https://, s3://, file://)
+    URL     string            // Download URL (http://, https://, s3://)
     Headers map[string]string // HTTP headers (Authorization, X-API-Key, etc.)
     Auth    map[string]string // Other credentials (S3, helpers)
 }

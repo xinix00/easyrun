@@ -133,7 +133,6 @@ URL scheme → downloader:
   - Or `auth.username`/`auth.password` → generates Basic Auth header
 - `s3://bucket/key` → S3 downloader
   - Uses `auth.access_key`, `auth.secret_key`, `auth.region`
-- `file://path` → Local file copier
 
 Response:
 ```json

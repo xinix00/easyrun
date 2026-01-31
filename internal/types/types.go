@@ -13,7 +13,7 @@ const (
 
 // Artifact describes where to download the application binary/assets
 type Artifact struct {
-	URL     string            `json:"url"`               // http://, https://, s3://, file://
+	URL     string            `json:"url"`               // http://, https://, s3://
 	Headers map[string]string `json:"headers,omitempty"` // HTTP headers (Authorization, X-API-Key, etc.)
 	Auth    map[string]string `json:"auth,omitempty"`    // other credentials (S3: access_key/secret_key/region)
 }
