@@ -80,7 +80,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	)
 
 	// Create agent (always runs)
-	ag := agent.New(cfg, nodeID)
+	ag := agent.New(cfg, nodeID, nil)
 
 	// Cleanup old task directories (fresh start)
 	if err := ag.Init(); err != nil {
@@ -190,7 +190,7 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 
 	// Start leader - it shares the agent's job store directly!
 	// No bootstrapping needed - the agent already has all our jobs
-	*l = leader.New(ag.ID(), ag)
+	*l = leader.New(ag.ID(), ag, nil)
 
 	log.Printf("Leader initialized with %d jobs from local agent", len(ag.GetJobs()))
 

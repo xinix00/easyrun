@@ -215,18 +215,12 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 	taskID := parts[0]
 	stream := parts[1]
 
-	pr, ok := a.runner.(*runner.ProcessRunner)
-	if !ok {
-		http.Error(w, "logs not available", http.StatusInternalServerError)
-		return
-	}
-
 	var broadcaster *runner.LogBroadcaster
 	switch stream {
 	case "stdout":
-		broadcaster = pr.GetStdout(taskID)
+		broadcaster = a.runner.GetStdout(taskID)
 	case "stderr":
-		broadcaster = pr.GetStderr(taskID)
+		broadcaster = a.runner.GetStderr(taskID)
 	default:
 		http.Error(w, "stream must be stdout or stderr", http.StatusBadRequest)
 		return

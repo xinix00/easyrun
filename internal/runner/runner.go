@@ -14,6 +14,15 @@ type Runner interface {
 
 	// Status returns the current state of a task
 	Status(task *types.Task) (types.TaskState, error)
+
+	// GetStdout returns the stdout log broadcaster for a task (nil if not available)
+	GetStdout(taskID string) *LogBroadcaster
+
+	// GetStderr returns the stderr log broadcaster for a task (nil if not available)
+	GetStderr(taskID string) *LogBroadcaster
+
+	// Cleanup removes all task directories (called at startup)
+	Cleanup() error
 }
 
 // Config holds configuration for the runner

@@ -43,16 +43,17 @@ type Leader struct {
 	agentTimeout time.Duration
 }
 
-// New creates a new leader that shares job storage with the agent
-func New(localAgentID string, jobStore JobStore) *Leader {
+// New creates a new leader with optional HTTP client (nil uses default)
+func New(localAgentID string, jobStore JobStore, client *http.Client) *Leader {
+	if client == nil {
+		client = &http.Client{Timeout: httpClientTimeout}
+	}
 	return &Leader{
 		localAgentID: localAgentID,
 		jobStore:     jobStore,
 		ops:          make(chan func(*leaderState), stateChannelBufferSize),
 		agentTimeout: defaultAgentTimeout,
-		httpClient: &http.Client{
-			Timeout: httpClientTimeout,
-		},
+		httpClient:   client,
 	}
 }
 

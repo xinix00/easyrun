@@ -387,8 +387,8 @@ func (r *ProcessRunner) GetStderr(taskID string) *LogBroadcaster {
 	return r.stderrLog[taskID]
 }
 
-// CleanupAll removes all task directories (called at startup)
-func (r *ProcessRunner) CleanupAll() error {
+// Cleanup removes all task directories (called at startup)
+func (r *ProcessRunner) Cleanup() error {
 	base := r.config.RootfsBase
 	if base == "" {
 		base = "/tmp/easyrun"

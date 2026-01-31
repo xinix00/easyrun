@@ -49,13 +49,16 @@ type Agent struct {
 	server *http.Server
 }
 
-// New creates a new agent
-func New(cfg *config.Config, id string) *Agent {
-	runnerCfg := &runner.Config{
-		RootfsBase:   cfg.Paths.RootfsBase,
-		ArtifactsDir: cfg.Paths.Artifacts,
-		MaxCPUShares: cfg.Capacity.CPUShares,
-		Chroot:       cfg.Runner.Chroot,
+// New creates a new agent with optional runner (nil uses default ProcessRunner)
+func New(cfg *config.Config, id string, r runner.Runner) *Agent {
+	if r == nil {
+		runnerCfg := &runner.Config{
+			RootfsBase:   cfg.Paths.RootfsBase,
+			ArtifactsDir: cfg.Paths.Artifacts,
+			MaxCPUShares: cfg.Capacity.CPUShares,
+			Chroot:       cfg.Runner.Chroot,
+		}
+		r = runner.NewProcessRunner(runnerCfg)
 	}
 
 	endpoint := fmt.Sprintf("http://%s:%d", cfg.Node.IP, cfg.Node.Port)
@@ -64,7 +67,7 @@ func New(cfg *config.Config, id string) *Agent {
 		id:       id,
 		endpoint: endpoint,
 		config:   cfg,
-		runner:   runner.NewProcessRunner(runnerCfg),
+		runner:   r,
 		ops:      make(chan func(*agentState), stateChannelBufferSize),
 	}
 }
@@ -81,10 +84,7 @@ func (a *Agent) Endpoint() string {
 
 // Init performs startup cleanup (removes old task directories)
 func (a *Agent) Init() error {
-	if pr, ok := a.runner.(*runner.ProcessRunner); ok {
-		return pr.CleanupAll()
-	}
-	return nil
+	return a.runner.Cleanup()
 }
 
 // stateLoop is the single goroutine that owns all mutable state
