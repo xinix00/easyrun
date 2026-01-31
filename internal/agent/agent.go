@@ -27,6 +27,7 @@ const (
 	taskMonitorInterval    = 5 * time.Second
 	defaultHealthTimeout   = 5 * time.Second
 	shutdownTimeout        = 5 * time.Second
+	proxyTimeout           = 10 * time.Second
 	stateChannelBufferSize = 64
 )
 
@@ -46,7 +47,9 @@ type Agent struct {
 
 	ops chan func(*agentState) // all state access goes through here
 
-	server *http.Server
+	server     *http.Server
+	getLeader  func() string // returns current leader address (for proxying)
+	httpClient *http.Client
 }
 
 // New creates a new agent with optional runner (nil uses default ProcessRunner)
@@ -64,12 +67,18 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 	endpoint := fmt.Sprintf("http://%s:%d", cfg.Node.IP, cfg.Node.Port)
 
 	return &Agent{
-		id:       id,
-		endpoint: endpoint,
-		config:   cfg,
-		runner:   r,
-		ops:      make(chan func(*agentState), stateChannelBufferSize),
+		id:         id,
+		endpoint:   endpoint,
+		config:     cfg,
+		runner:     r,
+		ops:        make(chan func(*agentState), stateChannelBufferSize),
+		httpClient: &http.Client{Timeout: proxyTimeout},
 	}
+}
+
+// SetLeaderFunc sets the function to get the current leader address (for proxying cluster requests)
+func (a *Agent) SetLeaderFunc(fn func() string) {
+	a.getLeader = fn
 }
 
 // ID returns the agent ID
@@ -129,6 +138,12 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/run", a.handleRun)
 	mux.HandleFunc("/stop/", a.handleStop)
 	mux.HandleFunc("/logs/", a.handleLogs)
+
+	// Proxy endpoints - forward to leader for cluster-wide operations
+	mux.HandleFunc("/v1/agents", a.proxyToLeader)
+	mux.HandleFunc("/v1/jobs", a.proxyToLeader)
+	mux.HandleFunc("/v1/jobs/", a.proxyToLeader) // DELETE /v1/jobs/{id}
+	mux.HandleFunc("/v1/status", a.proxyToLeader)
 
 	addr := fmt.Sprintf("%s:%d", a.config.Node.IP, a.config.Node.Port)
 	a.server = &http.Server{

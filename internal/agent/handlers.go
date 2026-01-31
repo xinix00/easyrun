@@ -3,6 +3,7 @@ package agent
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -12,6 +13,41 @@ import (
 	"easyrun/internal/types"
 	"easyrun/pkg/httputil"
 )
+
+// proxyToLeader forwards requests to the current leader
+func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
+	if a.getLeader == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "leader discovery not configured")
+		return
+	}
+
+	leaderAddr := a.getLeader()
+	if leaderAddr == "" {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "no leader available")
+		return
+	}
+
+	// Forward request to leader (preserve method and body)
+	url := fmt.Sprintf("http://%s%s", leaderAddr, r.URL.Path)
+	req, err := http.NewRequest(r.Method, url, r.Body)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to create request")
+		return
+	}
+	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+
+	resp, err := a.httpClient.Do(req)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadGateway, "failed to contact leader")
+		return
+	}
+	defer resp.Body.Close()
+
+	// Copy response headers and status
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
 
 // handleHealth returns health status
 func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {

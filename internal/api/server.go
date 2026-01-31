@@ -38,6 +38,7 @@ func NewServer(l *leader.Leader, addr string) *Server {
 	mux.HandleFunc("DELETE /v1/agents/", s.handleUnregisterAgent)
 
 	// Jobs
+	mux.HandleFunc("GET /v1/jobs", s.handleGetJobs)
 	mux.HandleFunc("POST /v1/jobs", s.handleRunJob)
 	mux.HandleFunc("DELETE /v1/jobs/", s.handleStopJob)
 
@@ -120,6 +121,12 @@ func (s *Server) handleUnregisterAgent(w http.ResponseWriter, r *http.Request) {
 
 	s.leader.UnregisterAgent(id)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleGetJobs returns all jobs
+func (s *Server) handleGetJobs(w http.ResponseWriter, r *http.Request) {
+	jobs := s.leader.GetJobs()
+	httputil.WriteJSON(w, http.StatusOK, jobs)
 }
 
 // handleRunJob dispatches a job to an agent

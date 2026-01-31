@@ -82,6 +82,9 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	// Create agent (always runs)
 	ag := agent.New(cfg, nodeID, nil)
 
+	// Set leader discovery for proxy endpoints
+	ag.SetLeaderFunc(disc.GetLeader)
+
 	// Cleanup old task directories (fresh start)
 	if err := ag.Init(); err != nil {
 		log.Fatalf("Failed to initialize agent: %v", err)
