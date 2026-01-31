@@ -71,6 +71,15 @@ func (a *Agent) Endpoint() string {
 	return a.endpoint
 }
 
+// Init performs startup cleanup (removes old task directories)
+func (a *Agent) Init() error {
+	// Clean all old task directories for fresh start
+	if pr, ok := a.runner.(*runner.ProcessRunner); ok {
+		return pr.CleanupAll()
+	}
+	return nil
+}
+
 // Run starts the agent HTTP server
 func (a *Agent) Run(ctx context.Context) error {
 	mux := http.NewServeMux()

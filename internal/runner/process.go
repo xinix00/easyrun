@@ -333,6 +333,18 @@ func (r *ProcessRunner) cleanupTaskDir(taskID string) {
 	}
 }
 
+// CleanupAll removes all task directories (called at startup)
+func (r *ProcessRunner) CleanupAll() error {
+	base := r.config.RootfsBase
+	if base == "" {
+		base = "/tmp/easyrun"
+	}
+
+	// Remove everything and recreate
+	os.RemoveAll(base)
+	return os.MkdirAll(base, 0755)
+}
+
 // copyFile copies a file from src to dst
 func (r *ProcessRunner) copyFile(src, dst string) error {
 	srcFile, err := os.Open(src)
