@@ -124,63 +124,6 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	return result
 }
 
-// ServiceEndpoint represents a running task's network endpoint
-type ServiceEndpoint struct {
-	IP    string         `json:"ip"`
-	Ports map[string]int `json:"ports"` // port name -> port number
-}
-
-// ResolveJob returns endpoints (IP + ports) of running tasks for the given job name
-func (l *Leader) ResolveJob(jobName string) []ServiceEndpoint {
-	agents := l.GetAgents()
-	agentEndpoints := make(map[string]string) // agentID -> endpoint
-	for _, a := range agents {
-		agentEndpoints[a.ID] = a.Endpoint
-	}
-
-	status := l.GetClusterStatus()
-
-	var endpoints []ServiceEndpoint
-
-	for agentID, tasks := range status {
-		for _, task := range tasks {
-			if task.JobName != jobName || task.State != types.TaskRunning {
-				continue
-			}
-
-			endpoint := agentEndpoints[agentID]
-			ip := extractIPFromEndpoint(endpoint)
-			if ip != "" {
-				endpoints = append(endpoints, ServiceEndpoint{
-					IP:    ip,
-					Ports: task.Ports,
-				})
-			}
-		}
-	}
-
-	return endpoints
-}
-
-// extractIPFromEndpoint extracts IP from endpoint (http://ip:port -> ip)
-func extractIPFromEndpoint(endpoint string) string {
-	// Remove http:// or https://
-	s := endpoint
-	if len(s) > 7 && s[:7] == "http://" {
-		s = s[7:]
-	} else if len(s) > 8 && s[:8] == "https://" {
-		s = s[8:]
-	}
-
-	// Find the colon for port
-	for i := 0; i < len(s); i++ {
-		if s[i] == ':' {
-			return s[:i]
-		}
-	}
-	return s
-}
-
 // fetchAgentTasks gets the task list from an agent
 func (l *Leader) fetchAgentTasks(agent *types.Agent) ([]*types.Task, error) {
 	url := fmt.Sprintf("%s/tasks", agent.Endpoint)

@@ -43,9 +43,6 @@ func NewServer(l *leader.Leader, addr string) *Server {
 	// Status
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
 
-	// DNS resolution
-	mux.HandleFunc("GET /v1/resolve/", s.handleResolve)
-
 	s.server = &http.Server{
 		Addr:    addr,
 		Handler: mux,
@@ -185,21 +182,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"total_tasks":   totalTasks,
 		"running_tasks": running,
 		"tasks_by_agent": tasks,
-	})
-}
-
-// handleResolve returns endpoints (IP + ports) for a job name
-func (s *Server) handleResolve(w http.ResponseWriter, r *http.Request) {
-	jobName := strings.TrimPrefix(r.URL.Path, "/v1/resolve/")
-	if jobName == "" {
-		writeError(w, http.StatusBadRequest, "job name required")
-		return
-	}
-
-	endpoints := s.leader.ResolveJob(jobName)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"job":       jobName,
-		"endpoints": endpoints,
 	})
 }
 
