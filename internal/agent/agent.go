@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"easyrun/internal/runner"
@@ -25,6 +24,13 @@ type State struct {
 
 const defaultMaxRestarts = 5
 
+// agentState holds all mutable state (owned by single goroutine)
+type agentState struct {
+	jobs      map[string]*types.Job
+	tasks     map[string]*types.Task
+	stateTime time.Time
+}
+
 // Agent runs jobs and reports status
 type Agent struct {
 	id       string
@@ -32,10 +38,7 @@ type Agent struct {
 	config   *config.Config
 	runner   runner.Runner
 
-	jobs      map[string]*types.Job  // jobID -> job (for restarts)
-	tasks     map[string]*types.Task // taskID -> task
-	stateTime time.Time              // when state was last updated
-	tasksMu   sync.RWMutex
+	ops chan func(*agentState) // all state access goes through here
 
 	server *http.Server
 }
@@ -56,8 +59,7 @@ func New(cfg *config.Config, id string) *Agent {
 		endpoint: endpoint,
 		config:   cfg,
 		runner:   runner.NewProcessRunner(runnerCfg),
-		jobs:     make(map[string]*types.Job),
-		tasks:    make(map[string]*types.Task),
+		ops:      make(chan func(*agentState), 64),
 	}
 }
 
@@ -73,15 +75,48 @@ func (a *Agent) Endpoint() string {
 
 // Init performs startup cleanup (removes old task directories)
 func (a *Agent) Init() error {
-	// Clean all old task directories for fresh start
 	if pr, ok := a.runner.(*runner.ProcessRunner); ok {
 		return pr.CleanupAll()
 	}
 	return nil
 }
 
-// Run starts the agent HTTP server
+// stateLoop is the single goroutine that owns all mutable state
+func (a *Agent) stateLoop(ctx context.Context) {
+	state := &agentState{
+		jobs:  make(map[string]*types.Job),
+		tasks: make(map[string]*types.Task),
+	}
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case op := <-a.ops:
+			op(state)
+		}
+	}
+}
+
+// do executes an operation on state (fire-and-forget)
+func (a *Agent) do(op func(*agentState)) {
+	a.ops <- op
+}
+
+// query executes an operation and waits for result
+func query[T any](a *Agent, fn func(*agentState) T) T {
+	result := make(chan T, 1)
+	a.ops <- func(s *agentState) {
+		result <- fn(s)
+	}
+	return <-result
+}
+
+// Run starts the agent HTTP server and state loop
 func (a *Agent) Run(ctx context.Context) error {
+	// Start the state loop
+	go a.stateLoop(ctx)
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", a.handleHealth)
 	mux.HandleFunc("/tasks", a.handleTasks)
@@ -111,17 +146,28 @@ func (a *Agent) Run(ctx context.Context) error {
 
 // StopAllTasks stops all running tasks (used when agent is isolated)
 func (a *Agent) StopAllTasks() {
-	a.tasksMu.Lock()
-	defer a.tasksMu.Unlock()
-
-	for id, task := range a.tasks {
-		if task.State == types.TaskRunning {
-			log.Printf("Stopping task %s (isolation mode)", id)
-			if err := a.runner.Stop(task); err != nil {
-				log.Printf("Failed to stop task %s: %v", id, err)
-			} else {
-				task.State = types.TaskStopped
+	// Get tasks to stop
+	tasks := query(a, func(s *agentState) []*types.Task {
+		var running []*types.Task
+		for _, task := range s.tasks {
+			if task.State == types.TaskRunning {
+				running = append(running, task)
 			}
+		}
+		return running
+	})
+
+	// Stop them outside of state loop (runner.Stop can block)
+	for _, task := range tasks {
+		log.Printf("Stopping task %s (isolation mode)", task.ID)
+		if err := a.runner.Stop(task); err != nil {
+			log.Printf("Failed to stop task %s: %v", task.ID, err)
+		} else {
+			a.do(func(s *agentState) {
+				if t := s.tasks[task.ID]; t != nil {
+					t.State = types.TaskStopped
+				}
+			})
 		}
 	}
 }
@@ -134,67 +180,72 @@ func (a *Agent) shutdown() {
 	defer cancel()
 	a.server.Shutdown(ctx)
 
-	a.tasksMu.Lock()
-	defer a.tasksMu.Unlock()
-
-	for _, task := range a.tasks {
-		if task.State == types.TaskRunning {
-			if err := a.runner.Stop(task); err != nil {
-				log.Printf("Failed to stop task %s: %v", task.ID, err)
+	// Get running tasks
+	tasks := query(a, func(s *agentState) []*types.Task {
+		var running []*types.Task
+		for _, task := range s.tasks {
+			if task.State == types.TaskRunning {
+				running = append(running, task)
 			}
+		}
+		return running
+	})
+
+	// Stop them
+	for _, task := range tasks {
+		if err := a.runner.Stop(task); err != nil {
+			log.Printf("Failed to stop task %s: %v", task.ID, err)
 		}
 	}
 }
 
 // getJob returns the job for a task
 func (a *Agent) getJob(jobID string) *types.Job {
-	a.tasksMu.RLock()
-	defer a.tasksMu.RUnlock()
-	return a.jobs[jobID]
+	return query(a, func(s *agentState) *types.Job {
+		return s.jobs[jobID]
+	})
 }
 
 // GetJobs returns all jobs this agent knows about
 func (a *Agent) GetJobs() []*types.Job {
-	a.tasksMu.RLock()
-	defer a.tasksMu.RUnlock()
-
-	jobs := make([]*types.Job, 0, len(a.jobs))
-	for _, j := range a.jobs {
-		jobs = append(jobs, j)
-	}
-	return jobs
+	return query(a, func(s *agentState) []*types.Job {
+		jobs := make([]*types.Job, 0, len(s.jobs))
+		for _, j := range s.jobs {
+			jobs = append(jobs, j)
+		}
+		return jobs
+	})
 }
 
 // GetJob returns a specific job by ID
 func (a *Agent) GetJob(id string) *types.Job {
-	a.tasksMu.RLock()
-	defer a.tasksMu.RUnlock()
-	return a.jobs[id]
+	return query(a, func(s *agentState) *types.Job {
+		return s.jobs[id]
+	})
 }
 
 // StoreJob stores a job (used by leader when it learns about remote jobs)
 func (a *Agent) StoreJob(job *types.Job) {
-	a.tasksMu.Lock()
-	defer a.tasksMu.Unlock()
-	a.jobs[job.ID] = job
+	a.do(func(s *agentState) {
+		s.jobs[job.ID] = job
+	})
 }
 
 // GetStateTime returns when state was last updated
 func (a *Agent) GetStateTime() time.Time {
-	a.tasksMu.RLock()
-	defer a.tasksMu.RUnlock()
-	return a.stateTime
+	return query(a, func(s *agentState) time.Time {
+		return s.stateTime
+	})
 }
 
 // SyncJobs updates local jobs from leader and persists to disk
 func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
-	a.tasksMu.Lock()
-	for _, job := range jobs {
-		a.jobs[job.ID] = job
-	}
-	a.stateTime = updated
-	a.tasksMu.Unlock()
-
+	a.do(func(s *agentState) {
+		for _, job := range jobs {
+			s.jobs[job.ID] = job
+		}
+		s.stateTime = updated
+	})
 	a.SaveState()
 }
 
@@ -215,12 +266,12 @@ func (a *Agent) LoadState() error {
 		return err
 	}
 
-	a.tasksMu.Lock()
-	for _, job := range state.Jobs {
-		a.jobs[job.ID] = job
-	}
-	a.stateTime = state.Updated
-	a.tasksMu.Unlock()
+	a.do(func(s *agentState) {
+		for _, job := range state.Jobs {
+			s.jobs[job.ID] = job
+		}
+		s.stateTime = state.Updated
+	})
 
 	log.Printf("Loaded %d jobs from %s (updated %s)", len(state.Jobs), path, state.Updated.Format(time.RFC3339))
 	return nil
@@ -228,19 +279,23 @@ func (a *Agent) LoadState() error {
 
 // SaveState persists jobs to state.json
 func (a *Agent) SaveState() {
-	a.tasksMu.Lock()
-	jobs := make([]*types.Job, 0, len(a.jobs))
-	for _, j := range a.jobs {
-		jobs = append(jobs, j)
+	// Get state snapshot
+	type snapshot struct {
+		jobs    []*types.Job
+		updated time.Time
 	}
-	// Update stateTime when saving
-	a.stateTime = time.Now()
-	updated := a.stateTime
-	a.tasksMu.Unlock()
+	snap := query(a, func(s *agentState) snapshot {
+		jobs := make([]*types.Job, 0, len(s.jobs))
+		for _, j := range s.jobs {
+			jobs = append(jobs, j)
+		}
+		s.stateTime = time.Now()
+		return snapshot{jobs, s.stateTime}
+	})
 
 	state := State{
-		Jobs:    jobs,
-		Updated: updated,
+		Jobs:    snap.jobs,
+		Updated: snap.updated,
 	}
 
 	data, err := json.MarshalIndent(state, "", "  ")
@@ -258,47 +313,42 @@ func (a *Agent) SaveState() {
 
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		log.Printf("Failed to save state: %v", err)
-		return
 	}
 }
 
 // hasCapacity checks if the agent has capacity for a new job
 func (a *Agent) hasCapacity(job *types.Job) bool {
-	a.tasksMu.RLock()
-	defer a.tasksMu.RUnlock()
+	return query(a, func(s *agentState) bool {
+		usedCPU := 0
+		usedMem := uint64(0)
 
-	// Calculate current resource usage
-	usedCPU := 0
-	usedMem := uint64(0)
-
-	for _, task := range a.tasks {
-		if task.State == types.TaskRunning {
-			if j := a.jobs[task.JobID]; j != nil {
-				usedCPU += j.CPUShares
-				usedMem += j.MemoryLimit
+		for _, task := range s.tasks {
+			if task.State == types.TaskRunning {
+				if j := s.jobs[task.JobID]; j != nil {
+					usedCPU += j.CPUShares
+					usedMem += j.MemoryLimit
+				}
 			}
 		}
-	}
 
-	// Check CPU capacity
-	if job.CPUShares > 0 {
-		maxCPU := a.config.Capacity.CPUShares
-		if maxCPU > 0 && usedCPU+job.CPUShares > maxCPU {
-			log.Printf("Insufficient CPU capacity: used=%d, requested=%d, max=%d", usedCPU, job.CPUShares, maxCPU)
-			return false
+		if job.CPUShares > 0 {
+			maxCPU := a.config.Capacity.CPUShares
+			if maxCPU > 0 && usedCPU+job.CPUShares > maxCPU {
+				log.Printf("Insufficient CPU capacity: used=%d, requested=%d, max=%d", usedCPU, job.CPUShares, maxCPU)
+				return false
+			}
 		}
-	}
 
-	// Check memory capacity
-	if job.MemoryLimit > 0 {
-		maxMem := a.config.Capacity.Memory
-		if maxMem > 0 && usedMem+job.MemoryLimit > maxMem {
-			log.Printf("Insufficient memory capacity: used=%d, requested=%d, max=%d", usedMem, job.MemoryLimit, maxMem)
-			return false
+		if job.MemoryLimit > 0 {
+			maxMem := a.config.Capacity.Memory
+			if maxMem > 0 && usedMem+job.MemoryLimit > maxMem {
+				log.Printf("Insufficient memory capacity: used=%d, requested=%d, max=%d", usedMem, job.MemoryLimit, maxMem)
+				return false
+			}
 		}
-	}
 
-	return true
+		return true
+	})
 }
 
 func getFreePort() (int, error) {

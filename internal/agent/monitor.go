@@ -27,15 +27,30 @@ func (a *Agent) monitorTasks(ctx context.Context) {
 
 // checkTasks checks process states and health, restarts if needed
 func (a *Agent) checkTasks() {
-	a.tasksMu.Lock()
-	defer a.tasksMu.Unlock()
+	// Get snapshot of running tasks and their jobs
+	type taskInfo struct {
+		task *types.Task
+		job  *types.Job
+	}
 
-	for _, task := range a.tasks {
-		if task.State != types.TaskRunning {
-			continue
+	tasks := query(a, func(s *agentState) []taskInfo {
+		var result []taskInfo
+		for _, task := range s.tasks {
+			if task.State == types.TaskRunning {
+				result = append(result, taskInfo{
+					task: task,
+					job:  s.jobs[task.JobID],
+				})
+			}
 		}
+		return result
+	})
 
-		// Check if process is still alive
+	// Check each task outside state loop (runner.Status can be slow)
+	for _, info := range tasks {
+		task := info.task
+		job := info.job
+
 		state, err := a.runner.Status(task)
 		if err != nil {
 			log.Printf("Failed to get status for task %s: %v", task.ID, err)
@@ -44,21 +59,29 @@ func (a *Agent) checkTasks() {
 
 		if state != types.TaskRunning {
 			log.Printf("Task %s crashed (was %s, now %s)", task.ID, task.State, state)
-			task.State = state
 
-			// Try to restart
+			// Update state and restart
+			a.do(func(s *agentState) {
+				if t := s.tasks[task.ID]; t != nil {
+					t.State = state
+				}
+			})
 			go a.restartTask(task)
 			continue
 		}
 
 		// Check health if configured
-		job := a.jobs[task.JobID]
 		if job != nil && job.HealthCheck != nil {
 			if !a.checkHealth(task, job.HealthCheck) {
 				log.Printf("Task %s failed health check", task.ID)
-				// Kill and restart
+
+				// Stop and restart
 				a.runner.Stop(task)
-				task.State = types.TaskFailed
+				a.do(func(s *agentState) {
+					if t := s.tasks[task.ID]; t != nil {
+						t.State = types.TaskFailed
+					}
+				})
 				go a.restartTask(task)
 			}
 		}
@@ -72,10 +95,9 @@ func (a *Agent) checkHealth(task *types.Task, hc *types.HealthCheck) bool {
 		timeout = 5 * time.Second
 	}
 
-	// Determine which port to use
 	portName := hc.Port
 	if portName == "" {
-		portName = "http" // default to http port
+		portName = "http"
 	}
 
 	port, ok := task.Ports[portName]

@@ -18,13 +18,13 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // handleTasks returns all running tasks
 func (a *Agent) handleTasks(w http.ResponseWriter, r *http.Request) {
-	a.tasksMu.RLock()
-	tasks := make([]*types.Task, 0, len(a.tasks))
-	for _, t := range a.tasks {
-		tasks = append(tasks, t)
-	}
-	a.tasksMu.RUnlock()
-
+	tasks := query(a, func(s *agentState) []*types.Task {
+		result := make([]*types.Task, 0, len(s.tasks))
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
 	writeJSON(w, http.StatusOK, tasks)
 }
 
@@ -41,7 +41,6 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if we have capacity for this job
 	if !a.hasCapacity(&job) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "insufficient capacity",
@@ -77,7 +76,6 @@ func (a *Agent) handleStop(w http.ResponseWriter, r *http.Request) {
 
 // startJob starts a job and returns the task
 func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
-	// Allocate ports
 	ports, err := allocatePorts(job.Ports)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate ports: %w", err)
@@ -88,10 +86,11 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 		return nil, fmt.Errorf("failed to start: %w", err)
 	}
 
-	a.tasksMu.Lock()
-	a.jobs[job.ID] = job
-	a.tasks[task.ID] = task
-	a.tasksMu.Unlock()
+	// Store in state
+	a.do(func(s *agentState) {
+		s.jobs[job.ID] = job
+		s.tasks[task.ID] = task
+	})
 
 	log.Printf("Started task %s (job %s) with ports %v, pid %d", task.ID, job.Name, ports, task.Pid)
 	return task, nil
@@ -100,7 +99,6 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 // allocatePorts allocates free ports for the given port names
 func allocatePorts(portNames []string) (map[string]int, error) {
 	ports := make(map[string]int)
-
 	for _, name := range portNames {
 		port, err := getFreePort()
 		if err != nil {
@@ -108,7 +106,6 @@ func allocatePorts(portNames []string) (map[string]int, error) {
 		}
 		ports[name] = port
 	}
-
 	return ports, nil
 }
 
@@ -125,10 +122,22 @@ func (a *Agent) restartTask(task *types.Task) {
 		maxRestarts = defaultMaxRestarts
 	}
 
+	// Check restart count (read current value)
+	restartCount := query(a, func(s *agentState) int {
+		if t := s.tasks[task.ID]; t != nil {
+			return t.RestartCount
+		}
+		return 0
+	})
+
 	// -1 means unlimited restarts
-	if maxRestarts > 0 && task.RestartCount >= maxRestarts {
+	if maxRestarts > 0 && restartCount >= maxRestarts {
 		log.Printf("Task %s exceeded max restarts (%d), giving up", task.ID, maxRestarts)
-		task.State = types.TaskFailed
+		a.do(func(s *agentState) {
+			if t := s.tasks[task.ID]; t != nil {
+				t.State = types.TaskFailed
+			}
+		})
 		return
 	}
 
@@ -141,39 +150,55 @@ func (a *Agent) restartTask(task *types.Task) {
 	newTask, err := a.runner.Run(job, ports)
 	if err != nil {
 		log.Printf("Failed to restart task %s: %v", task.ID, err)
-		task.RestartCount++
+		a.do(func(s *agentState) {
+			if t := s.tasks[task.ID]; t != nil {
+				t.RestartCount++
+			}
+		})
 		return
 	}
 
 	// Update task with new info
-	a.tasksMu.Lock()
-	task.Pid = newTask.Pid
-	task.Ports = newTask.Ports
-	task.State = types.TaskRunning
-	task.StartedAt = newTask.StartedAt
-	task.RestartCount++
-	a.tasksMu.Unlock()
+	a.do(func(s *agentState) {
+		if t := s.tasks[task.ID]; t != nil {
+			t.Pid = newTask.Pid
+			t.Ports = newTask.Ports
+			t.State = types.TaskRunning
+			t.StartedAt = newTask.StartedAt
+			t.RestartCount++
+		}
+	})
 
-	log.Printf("Restarted task %s (job %s), restart #%d", task.ID, job.Name, task.RestartCount)
+	log.Printf("Restarted task %s (job %s), restart #%d", task.ID, job.Name, restartCount+1)
 }
 
 // stopJob stops all tasks for a job
 func (a *Agent) stopJob(jobID string) int {
-	a.tasksMu.Lock()
-	defer a.tasksMu.Unlock()
+	// Get tasks to stop and remove job from state
+	tasksToStop := query(a, func(s *agentState) []*types.Task {
+		delete(s.jobs, jobID) // Remove job so it won't restart
 
-	// Remove job so it won't restart
-	delete(a.jobs, jobID)
-
-	stopped := 0
-	for id, task := range a.tasks {
-		if task.JobID == jobID && task.State == types.TaskRunning {
-			if err := a.runner.Stop(task); err != nil {
-				log.Printf("Failed to stop task %s: %v", id, err)
-			} else {
-				task.State = types.TaskStopped
-				stopped++
+		var tasks []*types.Task
+		for _, task := range s.tasks {
+			if task.JobID == jobID && task.State == types.TaskRunning {
+				tasks = append(tasks, task)
 			}
+		}
+		return tasks
+	})
+
+	// Stop tasks outside of state loop (runner.Stop can block)
+	stopped := 0
+	for _, task := range tasksToStop {
+		if err := a.runner.Stop(task); err != nil {
+			log.Printf("Failed to stop task %s: %v", task.ID, err)
+		} else {
+			a.do(func(s *agentState) {
+				if t := s.tasks[task.ID]; t != nil {
+					t.State = types.TaskStopped
+				}
+			})
+			stopped++
 		}
 	}
 	return stopped
@@ -181,7 +206,6 @@ func (a *Agent) stopJob(jobID string) int {
 
 // handleLogs streams task logs (stdout or stderr)
 func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
-	// Parse URL: /logs/{taskID}/{stream}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/logs/"), "/")
 	if len(parts) != 2 {
 		http.Error(w, "usage: /logs/{taskID}/stdout or /logs/{taskID}/stderr", http.StatusBadRequest)
@@ -191,14 +215,12 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 	taskID := parts[0]
 	stream := parts[1]
 
-	// Get ProcessRunner
 	pr, ok := a.runner.(*runner.ProcessRunner)
 	if !ok {
 		http.Error(w, "logs not available", http.StatusInternalServerError)
 		return
 	}
 
-	// Get broadcaster
 	var broadcaster *runner.LogBroadcaster
 	switch stream {
 	case "stdout":
@@ -215,12 +237,10 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Setup SSE
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	// Subscribe to log stream
 	logCh := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(logCh)
 
@@ -230,7 +250,6 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Stream logs
 	for {
 		select {
 		case line, ok := <-logCh:
