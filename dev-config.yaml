@@ -1,0 +1,24 @@
+node:
+  id: "dev-node"
+  ip: "127.0.0.1"
+  port: 8080
+
+cluster:
+  name: "dev"
+  rendezvous_url: ""  # Empty = standalone mode
+
+capacity:
+  cpu_shares: 14000
+  memory: 8589934592  # 8GB
+
+paths:
+  state_file: "./data/state.json"
+  rootfs_base: "./data/rootfs"
+  artifacts: "./data/artifacts"
+  cache: "./data/cache"
+
+timeouts:
+  health_check_interval: 10s
+  health_check_timeout: 5s
+  node_dead_threshold: 30s
+  leader_lease: 30s
