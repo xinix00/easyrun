@@ -29,7 +29,7 @@ func TestJobJSONRoundtrip(t *testing.T) {
 		Name:        "my-app",
 		Command:     "echo hello",
 		Count:       3,
-		Ports:       []string{"http", "grpc"},
+		Ports:       map[string]int{"http": 0, "grpc": 0},
 		CPUShares:   100,
 		MemoryLimit: 512 * 1024 * 1024,
 		Env:         map[string]string{"FOO": "bar"},

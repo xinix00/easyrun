@@ -33,7 +33,7 @@ type Job struct {
 	Artifact    *Artifact         `json:"artifact,omitempty"`      // binary/assets to download
 	Command     string            `json:"command"`
 	Count       int               `json:"count,omitempty"`         // number of instances (default 1)
-	Ports       []string          `json:"ports,omitempty"`         // named ports (e.g., ["http", "grpc"])
+	Ports       map[string]int    `json:"ports,omitempty"`         // port name -> fixed port (0 = dynamic)
 	CPUShares   int               `json:"cpu_shares,omitempty"`
 	MemoryLimit uint64            `json:"memory_limit,omitempty"`
 	Env         map[string]string `json:"env,omitempty"`

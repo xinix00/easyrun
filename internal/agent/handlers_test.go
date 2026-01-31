@@ -409,7 +409,7 @@ func TestHandleRunWithPorts(t *testing.T) {
 		ID:      "port-job",
 		Name:    "test",
 		Command: "echo",
-		Ports:   []string{"http", "grpc"},
+		Ports:   map[string]int{"http": 0, "grpc": 0},
 	}
 
 	body, _ := json.Marshal(job)
@@ -435,5 +435,47 @@ func TestHandleRunWithPorts(t *testing.T) {
 	}
 	if _, ok := task.Ports["grpc"]; !ok {
 		t.Error("Should have grpc port")
+	}
+}
+
+func TestHandleRunWithFixedPorts(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	job := types.Job{
+		ID:      "fixed-port-job",
+		Name:    "test",
+		Command: "echo",
+		Ports:   map[string]int{"http": 8080, "grpc": 0}, // http fixed, grpc dynamic
+	}
+
+	body, _ := json.Marshal(job)
+	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	agent.handleRun(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusCreated)
+	}
+
+	var task types.Task
+	json.NewDecoder(w.Body).Decode(&task)
+
+	// http should be fixed at 8080
+	if task.Ports["http"] != 8080 {
+		t.Errorf("http port = %d, want 8080", task.Ports["http"])
+	}
+
+	// grpc should be dynamic (non-zero)
+	if task.Ports["grpc"] == 0 {
+		t.Error("grpc port should be dynamically allocated")
 	}
 }

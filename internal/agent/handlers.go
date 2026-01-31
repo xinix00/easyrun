@@ -96,15 +96,23 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 	return task, nil
 }
 
-// allocatePorts allocates free ports for the given port names
-func allocatePorts(portNames []string) (map[string]int, error) {
+// allocatePorts allocates ports based on job port config
+// If value is 0, allocates a dynamic free port
+// If value > 0, uses that fixed port
+func allocatePorts(portConfig map[string]int) (map[string]int, error) {
 	ports := make(map[string]int)
-	for _, name := range portNames {
-		port, err := getFreePort()
-		if err != nil {
-			return nil, fmt.Errorf("failed to get port for %s: %w", name, err)
+	for name, fixed := range portConfig {
+		if fixed > 0 {
+			// Use fixed port
+			ports[name] = fixed
+		} else {
+			// Allocate dynamic port
+			port, err := getFreePort()
+			if err != nil {
+				return nil, fmt.Errorf("failed to get port for %s: %w", name, err)
+			}
+			ports[name] = port
 		}
-		ports[name] = port
 	}
 	return ports, nil
 }
