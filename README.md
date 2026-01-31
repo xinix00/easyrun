@@ -1,17 +1,17 @@
 # Easyrun
 
-Lightweight cluster orchestrator in Go. Simpel alternatief voor Nomad.
+Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
 ## Features
 
-- **Multi-instance jobs**: Deploy N copies met automatische spreading
-- **Smart scheduling**: Round-robin met capacity-aware placement
-- **Named ports**: Flexibele port allocation per service
-- **Service discovery**: Tags voor externe load balancers
-- **Health checks**: HTTP-based monitoring met auto-restart
-- **Fault tolerance**: Automatic failover bij node crashes
-- **Resource limits**: CPU shares en memory limiting
-- **State persistence**: Jobs overleven agent restarts
+- **Multi-instance jobs**: Deploy N copies with automatic spreading
+- **Smart scheduling**: Round-robin with capacity-aware placement
+- **Named ports**: Flexible port allocation per service
+- **Service discovery**: Tags for external load balancers
+- **Health checks**: HTTP-based monitoring with auto-restart
+- **Fault tolerance**: Automatic failover on node crashes
+- **Resource limits**: CPU shares and memory limiting
+- **State persistence**: Jobs survive agent restarts
 
 ## Quick Start
 
@@ -95,12 +95,12 @@ go build -o bin/orch ./cmd/cli
 - **name**: Job identifier
 - **command**: Command to execute
 - **count**: Number of instances (default: 1)
-- **ports**: Named ports array - krijg ENV vars `ER_PORT_HTTP`, etc.
+- **ports**: Named ports array - generates ENV vars `ER_PORT_HTTP`, etc.
 - **cpu_shares**: CPU priority (higher = more CPU time)
 - **memory_limit**: Memory limit in bytes
 - **env**: Environment variables
 - **tags**: Labels for service discovery / grouping
-- **health_check**: HTTP health check configuration
+- **health_check**: HTTP health check configuration (optional)
   - **port**: Named port to check (e.g., "http")
 - **max_restarts**: Max restart attempts (0 = default 5, -1 = unlimited)
 
@@ -141,7 +141,7 @@ ER_PORT_HTTP=8080
 ER_PORT_METRICS=9091
 ```
 
-**No ports = no ports:** Jobs without `ports` field krijgen geen port ENV vars.
+**No ports = no ports:** Jobs without `ports` field get no port ENV vars.
 
 ## Service Discovery via Tags
 
@@ -166,13 +166,13 @@ curl http://leader:8080/v1/status | jq '.tasks_by_agent'
 
 ### Task Failures
 - Agent detects crash
-- Auto-restart lokaal (up to max_restarts)
+- Auto-restart locally (up to max_restarts)
 - Health check failures → kill + restart
 
 ### Agent Failures
 - Leader detects missing heartbeat (30s timeout)
-- Redispatch alle jobs naar andere agents
-- Count behouden: 3 instances blijven 3 instances
+- Redispatch lost instances to other agents
+- Count preserved: 3 instances stay 3 instances
 
 ## Resource Limits
 
@@ -193,7 +193,7 @@ curl http://leader:8080/v1/status | jq '.tasks_by_agent'
 
 ## Documentation
 
-Zie `/docs` voor details:
+See `/docs` for details:
 
 - [architecture.md](docs/architecture.md) - System design
 - [data-structures.md](docs/data-structures.md) - Core types
@@ -204,11 +204,11 @@ Zie `/docs` voor details:
 
 ## Design Principles
 
-- **Simpliciteit boven features**
+- **Simplicity over features**
 - **KISS**: Keep It Simple, Stupid
-- **Één ProcessRunner** - geen aparte runner types
+- **One ProcessRunner** - no separate runner types
 - **States**: running, stopped, failed (details in logs)
-- **Explicit > implicit**: Geen defaults, WYSIWYG
+- **Explicit > implicit**: No defaults, WYSIWYG
 
 ## License
 

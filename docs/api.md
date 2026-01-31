@@ -1,10 +1,10 @@
 # HTTP API
 
-Er zijn twee APIs: de **Leader API** (port+1000) en de **Agent API** (port).
+There are two APIs: the **Leader API** (port+1000) and the **Agent API** (port).
 
 ## Leader API
 
-Draait op de node die leader is (via easyraft). Default poort: 9080.
+Runs on the node that is leader (via easyraft). Default port: 9080.
 
 ### Health
 
@@ -36,8 +36,8 @@ Returns cluster overview:
 ### Agents
 
 ```
-GET  /v1/agents            # Alle geregistreerde agents
-DELETE /v1/agents/{id}     # Verwijder agent (redispatcht jobs)
+GET  /v1/agents            # All registered agents
+DELETE /v1/agents/{id}     # Delete agent (redispatches jobs)
 ```
 
 ### Heartbeat
@@ -46,7 +46,7 @@ DELETE /v1/agents/{id}     # Verwijder agent (redispatcht jobs)
 POST /v1/heartbeat
 ```
 
-Agents sturen dit elke 10s om zich te registreren/vernieuwen:
+Agents send this every 10s to register/renew themselves:
 ```json
 {
   "id": "agent-1",
@@ -63,7 +63,7 @@ DELETE /v1/jobs/{id}       # Stop job
 
 #### Run Job
 
-**Simpel voorbeeld:**
+**Simple example:**
 ```bash
 curl -X POST http://localhost:9080/v1/jobs \
   -H "Content-Type: application/json" \
@@ -75,7 +75,7 @@ curl -X POST http://localhost:9080/v1/jobs \
   }'
 ```
 
-**Met alle features:**
+**With all features:**
 ```bash
 curl -X POST http://localhost:9080/v1/jobs \
   -H "Content-Type: application/json" \
@@ -108,7 +108,7 @@ curl -X POST http://localhost:9080/v1/jobs \
 **Fields:**
 - `count` (int): Number of instances (default 1)
 - `ports` ([]string): Named ports → ENV vars `ER_PORT_<NAME>`
-- `tags` (map): Labels voor service discovery
+- `tags` (map): Labels for service discovery
 - `health_check`: HTTP health monitoring
   - `port` (string): Named port to check (default "http")
 - `max_restarts` (int): Max restart attempts (0=default 5, -1=unlimited)
@@ -123,11 +123,11 @@ Response:
 
 **Scheduling:**
 - Count=3 → 3 instances via round-robin spreading
-- Agent returns 503 als geen capacity → leader probeert next agent
+- Agent returns 503 if no capacity → leader tries next agent
 
 ## Agent API
 
-Draait op elke node. Default poort: 8080.
+Runs on each node. Default port: 8080.
 
 ### Health
 
@@ -138,16 +138,16 @@ GET /health
 ### Tasks
 
 ```
-GET /tasks                 # Alle tasks op deze agent
+GET /tasks                 # All tasks on this agent
 ```
 
-### Run (intern, aangeroepen door leader)
+### Run (internal, called by leader)
 
 ```
 POST /run
 ```
 
-Start een job:
+Start a job:
 ```json
 {
   "id": "abc123",
@@ -156,10 +156,10 @@ Start een job:
 }
 ```
 
-### Stop (intern, aangeroepen door leader)
+### Stop (internal, called by leader)
 
 ```
 DELETE /stop/{job_id}
 ```
 
-Stopt alle tasks van een job op deze agent.
+Stops all tasks of a job on this agent.

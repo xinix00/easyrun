@@ -1,4 +1,4 @@
-# Architectuur
+# Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -22,7 +22,7 @@
                     job dispatch
 ```
 
-## Node met Leader Rol (Shared State)
+## Node with Leader Role (Shared State)
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -51,48 +51,48 @@
 └─────────────────────────────────────────────┘
 ```
 
-## Leader Failover (geen bootstrap nodig)
+## Leader Failover (no bootstrap needed)
 
 ```
-VOOR:                           NA:
-Node 2 = Leader                 Node 1 = Nieuwe Leader
-                                
+BEFORE:                         AFTER:
+Node 2 = Leader                 Node 1 = New Leader
+
 Node 1 (agent)                  Node 1 (agent + leader)
 ┌──────────────┐                ┌──────────────────────┐
-│ jobs:        │                │ jobs: ◄──────────────┼─── ZELFDE DATA!
+│ jobs:        │                │ jobs: ◄──────────────┼─── SAME DATA!
 │  - job-3     │   ────────►    │  - job-3             │
 └──────────────┘                │                      │
                                 │ Leader:              │
-                                │  - gebruikt jobs     │
-                                │    direct            │
+                                │  - uses jobs         │
+                                │    directly          │
                                 └──────────────────────┘
 
-Geen sync nodig! De agent WORDT leader, niet een aparte entiteit.
+No sync needed! The agent BECOMES leader, not a separate entity.
 ```
 
 ## Job Sync via Heartbeat
 
 ```
-Leader heeft ALLE jobs (single source of truth)
+Leader has ALL jobs (single source of truth)
 
 Agent 1 ──heartbeat──► Leader
-         {mijn jobs: [job-3]}
-         
+         {my jobs: [job-3]}
+
          ◄────────────────────
-         response: {alle jobs: [job-1, job-2, job-3]}
-         
-         Agent 1 slaat job-1, job-2 op via SyncJobs()
+         response: {all jobs: [job-1, job-2, job-3]}
+
+         Agent 1 saves job-1, job-2 via SyncJobs()
 
 
-Elke agent heeft dus een KOPIE van alle jobs.
-Wanneer een agent leader wordt, kent hij ze al!
+Each agent has a COPY of all jobs.
+When an agent becomes leader, it already knows them!
 ```
 
 ## Leader Failover
 
 ```
-VOOR:                              NA:
-Leader op Node 2                   Leader op Node 1
+BEFORE:                            AFTER:
+Leader on Node 2                   Leader on Node 1
 
 Node 1 (agent)                     Node 1 (agent + leader)
 ┌────────────────────┐             ┌────────────────────┐
@@ -101,58 +101,58 @@ Node 1 (agent)                     Node 1 (agent + leader)
 │  - job-2           │             │  - job-2           │
 │  - job-3           │             │  - job-3           │
 └────────────────────┘             │                    │
-                                   │ Leader gebruikt    │
-Kent al ALLE jobs!                 │ zelfde jobs map    │
+                                   │ Leader uses        │
+Already knows ALL jobs!            │ same jobs map      │
                                    └────────────────────┘
 
-Geen bootstrap, geen recovery delay. Direct klaar.
+No bootstrap, no recovery delay. Ready immediately.
 ```
 
-## Componenten
+## Components
 
 ### EasyRaft
-- Aparte service voor leader election
-- Draait op 3+ nodes voor HA
-- Gebruikt UDP voor interne verkiezing (lowest IP wins)
-- HTTP API voor lease management
+- Separate service for leader election
+- Runs on 3+ nodes for HA
+- Uses UDP for internal election (lowest IP wins)
+- HTTP API for lease management
 
 ### Leader
-- Node die lease heeft via EasyRaft
-- Ontvangt heartbeats van agents
-- Dispatcht jobs round-robin naar agents met capacity checking
-- Houdt bij welke job instances op welke agents draaien
-- Bij agent failure: redispatch alleen lost instances naar andere agents
-- Draait op poort+1000 (default 9080)
+- Node that has lease via EasyRaft
+- Receives heartbeats from agents
+- Dispatches jobs round-robin to agents with capacity checking
+- Tracks which job instances run on which agents
+- On agent failure: redispatch only lost instances to other agents
+- Runs on port+1000 (default 9080)
 
 **Multi-instance Scheduling:**
-- Job met Count=3 → dispatcht 3x via round-robin
-- Agent checks capaciteit (CPU/memory) voor accepteren
-- Bij 503 (vol) → leader probeert next agent
+- Job with Count=3 → dispatches 3x via round-robin
+- Agent checks capacity (CPU/memory) before accepting
+- On 503 (full) → leader tries next agent
 - Automatic spreading over agents
 
 ### Agent
-- Draait op elke node (inclusief leader node)
-- Stuurt heartbeat naar leader elke 10s
-- Ontvangt jobs van leader, start processen
-- Bij leader failure: probeer zelf leader te worden
-- Bij isolatie (geen leader, kan niet leader worden): stop alle tasks
-- Draait op poort 8080
+- Runs on each node (including leader node)
+- Sends heartbeat to leader every 10s
+- Receives jobs from leader, starts processes
+- On leader failure: try to become leader itself
+- On isolation (no leader, can't become leader): stop all tasks
+- Runs on port 8080
 
 ### ProcessRunner
-- Start processen met optionele resource limits
-- Elke task krijgt eigen directory met:
-  - `app/` - applicatie bestanden
-  - `tmp/` - tijdelijke bestanden
+- Starts processes with optional resource limits
+- Each task gets its own directory with:
+  - `app/` - application files
+  - `tmp/` - temporary files
   - `resolv.conf` - DNS
-- CPU limiting via nice (als `CPUShares > 0`)
+- CPU limiting via nice (if `CPUShares > 0`)
 - Memory limiting:
   - Linux: cgroups v2
   - macOS: ulimit -v wrapper
-- Optionele chroot isolatie
+- Optional chroot isolation
 
 ## Named Ports
 
-Jobs kunnen multiple named ports aanvragen:
+Jobs can request multiple named ports:
 
 ```json
 {
@@ -162,18 +162,18 @@ Jobs kunnen multiple named ports aanvragen:
 ```
 
 **Per task:**
-1. Agent alloceert free port voor elke named port
-2. Zet ENV vars: `ER_PORT_HTTP=8080`, `ER_PORT_GRPC=9090`, etc.
-3. Task struct heeft `Ports map[string]int`
+1. Agent allocates free port for each named port
+2. Sets ENV vars: `ER_PORT_HTTP=8080`, `ER_PORT_GRPC=9090`, etc.
+3. Task struct has `Ports map[string]int`
 
-**Geen ports = geen ports:**
-- Jobs zonder `ports` field krijgen lege ports map
-- Geen default ports (KISS)
-- Batch jobs / workers hebben vaak geen ports nodig
+**No ports = no ports:**
+- Jobs without `ports` field get empty ports map
+- No default ports (KISS)
+- Batch jobs / workers often don't need ports
 
 ## Service Discovery via Tags
 
-Jobs hebben `tags` field voor external tooling:
+Jobs have `tags` field for external tooling:
 
 ```json
 {
@@ -190,11 +190,11 @@ Jobs hebben `tags` field voor external tooling:
 **External load balancer:**
 ```bash
 curl http://leader:9080/v1/status | jq '.tasks_by_agent'
-# Parse tasks met tag loadbalancer_domain
-# Genereer Nginx/Caddy upstream config
+# Parse tasks with tag loadbalancer_domain
+# Generate Nginx/Caddy upstream config
 ```
 
-Easyrun slaat alleen tags op - externe tooling doet de discovery logica.
+Easyrun only stores tags - external tooling does the discovery logic.
 
 ## Health Checks
 
@@ -210,40 +210,40 @@ Easyrun slaat alleen tags op - externe tooling doet de discovery logica.
 ```
 
 **Agent monitoring loop (5s):**
-1. Check of process nog leeft
-2. Als health_check: HTTP GET naar `http://localhost:{port}{path}`
-3. Bij failure: kill + restart (max_restarts limiet)
+1. Check if process is still alive
+2. If health_check: HTTP GET to `http://localhost:{port}{path}`
+3. On failure: kill + restart (max_restarts limit)
 
-**Named port support:** Health check gebruikt `port` field voor welke port te checken.
+**Named port support:** Health check uses `port` field for which port to check.
 
 ## Failure Scenarios
 
-### Agent faalt
-1. Leader ziet geen heartbeat (30s timeout)
-2. Leader markeert agent als dood
-3. Leader telt hoeveel instances per job op failed agent draaiden
-4. Leader redispatcht alleen die instances via round-robin
+### Agent fails
+1. Leader sees no heartbeat (30s timeout)
+2. Leader marks agent as dead
+3. Leader counts how many instances per job ran on failed agent
+4. Leader redispatches only those instances via round-robin
 
-**Voorbeeld:** Job met Count=5 op [A,B,B,C,C]. Agent B faalt:
-- Leader dispatcht 2 nieuwe instances (lost van B)
-- Result: Job draait nu op [A,C,C,D,E] (nog steeds 5 instances)
+**Example:** Job with Count=5 on [A,B,B,C,C]. Agent B fails:
+- Leader dispatches 2 new instances (lost from B)
+- Result: Job now runs on [A,C,C,D,E] (still 5 instances)
 
-### Leader faalt
-1. Agents krijgen heartbeat timeout
-2. Na 3 failures: agents proberen leader te worden via EasyRaft
-3. Eerste die lease krijgt wordt nieuwe leader
-4. Andere agents sturen heartbeat naar nieuwe leader
+### Leader fails
+1. Agents get heartbeat timeout
+2. After 3 failures: agents try to become leader via EasyRaft
+3. First to get lease becomes new leader
+4. Other agents send heartbeat to new leader
 
-### Task faalt (process crash)
-1. Agent detecteert via monitor loop (5s)
-2. Agent restart task **lokaal** (same agent)
-3. Max restart limiet voorkomt infinite loops
-4. Bij health check failure: kill + restart
+### Task fails (process crash)
+1. Agent detects via monitor loop (5s)
+2. Agent restarts task **locally** (same agent)
+3. Max restart limit prevents infinite loops
+4. On health check failure: kill + restart
 
-**Lokale restart is sneller en behoudt locality.**
+**Local restart is faster and preserves locality.**
 
-### Agent geïsoleerd (network partition)
-1. Agent kan leader niet bereiken
-2. Agent kan niet leader worden (geen EasyRaft quorum)
-3. Na 6 ticks (60s): agent stopt alle tasks
-4. Voorkomt dubbel draaiende tasks
+### Agent isolated (network partition)
+1. Agent can't reach leader
+2. Agent can't become leader (no EasyRaft quorum)
+3. After 6 ticks (60s): agent stops all tasks
+4. Prevents duplicate running tasks

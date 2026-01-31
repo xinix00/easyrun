@@ -1,19 +1,19 @@
 # Easyrun
 
-Lichtgewicht cluster orchestrator in Go. Simpel alternatief voor Nomad.
+Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
-## Documentatie
+## Documentation
 
-Zie `/docs` voor gedetailleerde documentatie:
+See `/docs` for detailed documentation:
 
-- `architecture.md` - Architectuur overzicht
-- `data-structures.md` - Core data types en states
+- `architecture.md` - Architecture overview
+- `data-structures.md` - Core data types and states
 - `api.md` - HTTP API endpoints
-- `cli.md` - CLI commando's
-- `configuration.md` - Config file opties
-- `development.md` - Build en development setup
+- `cli.md` - CLI commands
+- `configuration.md` - Config file options
+- `development.md` - Build and development setup
 
-**Belangrijk:** Houd de docs up-to-date bij wijzigingen aan de architectuur of API.
+**Important:** Keep the docs up-to-date when making changes to the architecture or API.
 
 ## Quick Start
 
@@ -29,9 +29,9 @@ go build -o bin/orch ./cmd/cli
 ./bin/orch job run --name test --command "echo hello"
 ```
 
-## Design Principes
+## Design Principles
 
-- Simpliciteit boven features
-- Één ProcessRunner met optionele limits (geen aparte runner types)
+- Simplicity over features
+- One ProcessRunner with optional limits (no separate runner types)
 - State = `running`, `stopped`, `failed` (details in logs)
-- Limits alleen als ze gezet zijn (`CPUShares > 0`, `MemoryLimit > 0`)
+- Limits only when set (`CPUShares > 0`, `MemoryLimit > 0`)
