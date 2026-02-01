@@ -61,8 +61,7 @@ func TestAgentStartJob(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "test-job",
-		Name:    "test",
+		Name:    "test-job",
 		Command: "echo hello",
 	}
 
@@ -71,8 +70,8 @@ func TestAgentStartJob(t *testing.T) {
 		t.Fatalf("startJob failed: %v", err)
 	}
 
-	if task.JobID != "test-job" {
-		t.Errorf("task.JobID = %q, want %q", task.JobID, "test-job")
+	if task.JobName != "test-job" {
+		t.Errorf("task.JobName = %q, want %q", task.JobName, "test-job")
 	}
 	if task.State != types.TaskRunning {
 		t.Errorf("task.State = %q, want %q", task.State, types.TaskRunning)
@@ -93,8 +92,7 @@ func TestAgentStartJobRunnerError(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "failing-job",
-		Name:    "test",
+		Name:    "failing-job",
 		Command: "echo",
 	}
 
@@ -117,25 +115,25 @@ func TestAgentStopJob(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// Store job and task
-	agent.StoreJob(&types.Job{ID: "job-1", Name: "test", Command: "echo"})
+	agent.StoreJob(&types.Job{Name: "test-job", Command: "echo"})
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
-			ID:    "task-1",
-			JobID: "job-1",
-			State: types.TaskRunning,
+			ID:      "task-1",
+			JobName: "test-job",
+			State:   types.TaskRunning,
 		}
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
-	stopped := agent.stopJob("job-1")
+	stopped := agent.stopJob("test-job")
 
 	if stopped != 1 {
 		t.Errorf("stopJob returned %d, want 1", stopped)
 	}
 
 	// Job should be removed
-	if agent.GetJob("job-1") != nil {
+	if agent.GetJob("test-job") != nil {
 		t.Error("Job should be removed after stop")
 	}
 }
@@ -151,17 +149,17 @@ func TestAgentStopAllTasks(t *testing.T) {
 
 	// Create some running tasks
 	for i := 0; i < 3; i++ {
+		jobName := "job-" + string(rune('a'+i))
 		job := &types.Job{
-			ID:      "job-" + string(rune('a'+i)),
-			Name:    "test",
+			Name:    jobName,
 			Command: "echo",
 		}
 		agent.StoreJob(job)
 		agent.do(func(s *agentState) {
 			s.tasks["task-"+string(rune('a'+i))] = &types.Task{
-				ID:    "task-" + string(rune('a'+i)),
-				JobID: job.ID,
-				State: types.TaskRunning,
+				ID:      "task-" + string(rune('a'+i)),
+				JobName: jobName,
+				State:   types.TaskRunning,
 			}
 		})
 	}
@@ -191,20 +189,20 @@ func TestAgentStopJobWithMultipleTasks(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// One job, multiple tasks
-	agent.StoreJob(&types.Job{ID: "job-1", Name: "test", Command: "echo"})
+	agent.StoreJob(&types.Job{Name: "test-job", Command: "echo"})
 	agent.do(func(s *agentState) {
 		for i := 0; i < 3; i++ {
 			s.tasks["task-"+string(rune('a'+i))] = &types.Task{
-				ID:    "task-" + string(rune('a'+i)),
-				JobID: "job-1",
-				State: types.TaskRunning,
+				ID:      "task-" + string(rune('a'+i)),
+				JobName: "test-job",
+				State:   types.TaskRunning,
 			}
 		}
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
-	stopped := agent.stopJob("job-1")
+	stopped := agent.stopJob("test-job")
 
 	if stopped != 3 {
 		t.Errorf("stopJob returned %d, want 3", stopped)

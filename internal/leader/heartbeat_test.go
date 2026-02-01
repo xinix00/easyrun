@@ -73,8 +73,8 @@ func TestLeaderHeartbeatLearnsJobsFromRemoteAgents(t *testing.T) {
 
 	// Remote agent has jobs
 	remoteJobs := []*types.Job{
-		{ID: "job-1", Name: "remote-job-1", Command: "echo 1"},
-		{ID: "job-2", Name: "remote-job-2", Command: "echo 2"},
+		{Name: "remote-job-1", Command: "echo 1"},
+		{Name: "remote-job-2", Command: "echo 2"},
 	}
 
 	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, time.Time{})
@@ -100,7 +100,7 @@ func TestLeaderHeartbeatSyncsNewerState(t *testing.T) {
 	// Remote agent has newer state
 	newerTime := time.Now()
 	remoteJobs := []*types.Job{
-		{ID: "newer-job", Name: "newer", Command: "echo newer"},
+		{Name: "newer-job", Command: "echo newer"},
 	}
 
 	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, newerTime)

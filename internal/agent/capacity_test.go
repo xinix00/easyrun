@@ -26,7 +26,7 @@ func TestAgentHasCapacity(t *testing.T) {
 
 	// Small job should fit
 	smallJob := &types.Job{
-		ID:          "small",
+		Name:        "small",
 		CPUShares:   500,
 		MemoryLimit: 512,
 	}
@@ -36,7 +36,7 @@ func TestAgentHasCapacity(t *testing.T) {
 
 	// Large job should not fit (exceeds 1024 CPU shares)
 	largeJob := &types.Job{
-		ID:          "large",
+		Name:        "large",
 		CPUShares:   2000,
 		MemoryLimit: 2048,
 	}
@@ -57,7 +57,6 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 
 	// Store a job and create a running task
 	job := &types.Job{
-		ID:          "existing-job",
 		Name:        "existing",
 		Command:     "echo",
 		CPUShares:   600,
@@ -68,9 +67,9 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 	// Add a running task that uses capacity
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
-			ID:    "task-1",
-			JobID: "existing-job",
-			State: types.TaskRunning,
+			ID:      "task-1",
+			JobName: "existing",
+			State:   types.TaskRunning,
 		}
 	})
 
@@ -78,7 +77,7 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 
 	// New job that would fit if alone, but not with existing task
 	newJob := &types.Job{
-		ID:          "new-job",
+		Name:        "new-job",
 		CPUShares:   500,
 		MemoryLimit: 500,
 	}
@@ -101,16 +100,16 @@ func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 
 	// Store a job and create a FAILED task (should not count against capacity)
 	job := &types.Job{
-		ID:        "failed-job",
+		Name:      "failed-job",
 		CPUShares: 800,
 	}
 	agent.StoreJob(job)
 
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
-			ID:    "task-1",
-			JobID: "failed-job",
-			State: types.TaskFailed, // Failed, not running
+			ID:      "task-1",
+			JobName: "failed-job",
+			State:   types.TaskFailed, // Failed, not running
 		}
 	})
 
@@ -118,7 +117,7 @@ func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 
 	// New job should fit because failed tasks don't count
 	newJob := &types.Job{
-		ID:        "new-job",
+		Name:      "new-job",
 		CPUShares: 500,
 	}
 
@@ -138,23 +137,23 @@ func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	job := &types.Job{
-		ID:        "stopped-job",
+		Name:      "stopped-job",
 		CPUShares: 800,
 	}
 	agent.StoreJob(job)
 
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
-			ID:    "task-1",
-			JobID: "stopped-job",
-			State: types.TaskStopped,
+			ID:      "task-1",
+			JobName: "stopped-job",
+			State:   types.TaskStopped,
 		}
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
 	newJob := &types.Job{
-		ID:        "new-job",
+		Name:      "new-job",
 		CPUShares: 500,
 	}
 
@@ -180,8 +179,8 @@ func TestAgentCapacityUsesSystemDefaults(t *testing.T) {
 	// When config=0, system values are used as limits
 	// A job within system capacity should fit
 	smallJob := &types.Job{
-		ID:          "small-job",
-		CPUShares:   100,       // Should fit on any system
+		Name:        "small-job",
+		CPUShares:   100,         // Should fit on any system
 		MemoryLimit: 1024 * 1024, // 1MB - should fit on any system
 	}
 
@@ -191,8 +190,8 @@ func TestAgentCapacityUsesSystemDefaults(t *testing.T) {
 
 	// A job exceeding system capacity should NOT fit
 	hugeJob := &types.Job{
-		ID:          "huge-job",
-		CPUShares:   1000000,        // More than any system has
+		Name:        "huge-job",
+		CPUShares:   1000000,          // More than any system has
 		MemoryLimit: 1000000000000000, // 1PB - more than any system
 	}
 
@@ -215,7 +214,7 @@ func TestAgentCapacityJobWithNoLimits(t *testing.T) {
 
 	// Job with no resource limits (0 means "don't check")
 	noLimitJob := &types.Job{
-		ID:          "no-limit-job",
+		Name:        "no-limit-job",
 		CPUShares:   0,
 		MemoryLimit: 0,
 	}
@@ -240,7 +239,7 @@ func TestAgentCapacityExceedsMemory(t *testing.T) {
 
 	// Job fits in CPU but exceeds memory
 	bigMemJob := &types.Job{
-		ID:          "big-mem",
+		Name:        "big-mem",
 		CPUShares:   100,  // Fits (100 cores * 1024 = 102400 shares)
 		MemoryLimit: 2048, // Exceeds 1024 bytes
 	}
@@ -264,8 +263,8 @@ func TestAgentCapacityExceedsCPU(t *testing.T) {
 
 	// Job fits in memory but exceeds CPU
 	bigCPUJob := &types.Job{
-		ID:          "big-cpu",
-		CPUShares:   2000,       // Exceeds 1024 shares (1 core)
+		Name:        "big-cpu",
+		CPUShares:   2000,         // Exceeds 1024 shares (1 core)
 		MemoryLimit: 1024 * 1024, // Fits in 1GB
 	}
 
@@ -295,7 +294,7 @@ func TestAgentConcurrentCapacityCheck(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			job := &types.Job{
-				ID:        "job-" + string(rune('0'+n%10)),
+				Name:      "job-" + string(rune('0'+n%10)),
 				CPUShares: 100, // Fits in 10 cores * 1024 = 10240 shares
 			}
 			results <- agent.hasCapacity(job)
@@ -327,7 +326,7 @@ func TestAgentCapacityExactLimit(t *testing.T) {
 
 	// Job exactly at limit should fit
 	exactJob := &types.Job{
-		ID:          "exact-job",
+		Name:        "exact-job",
 		CPUShares:   1024,
 		MemoryLimit: 1024,
 	}
@@ -349,16 +348,16 @@ func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 
 	// Add 3 jobs using 300 CPU each (total 900)
 	for i := 0; i < 3; i++ {
-		jobID := "job-" + string(rune('a'+i))
+		jobName := "job-" + string(rune('a'+i))
 		agent.StoreJob(&types.Job{
-			ID:        jobID,
+			Name:      jobName,
 			CPUShares: 300,
 		})
 		agent.do(func(s *agentState) {
 			s.tasks["task-"+string(rune('a'+i))] = &types.Task{
-				ID:    "task-" + string(rune('a'+i)),
-				JobID: jobID,
-				State: types.TaskRunning,
+				ID:      "task-" + string(rune('a'+i)),
+				JobName: jobName,
+				State:   types.TaskRunning,
 			}
 		})
 	}
@@ -366,13 +365,13 @@ func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Used: 900, remaining: 124
-	smallJob := &types.Job{ID: "small", CPUShares: 100}
+	smallJob := &types.Job{Name: "small", CPUShares: 100}
 	if !agent.hasCapacity(smallJob) {
 		t.Error("hasCapacity should fit 100 CPU (900 used, 124 remaining)")
 	}
 
 	// This should not fit
-	mediumJob := &types.Job{ID: "medium", CPUShares: 150}
+	mediumJob := &types.Job{Name: "medium", CPUShares: 150}
 	if agent.hasCapacity(mediumJob) {
 		t.Error("hasCapacity should not fit 150 CPU (900 used, 124 remaining)")
 	}

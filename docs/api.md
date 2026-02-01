@@ -57,11 +57,17 @@ Agents send this every 10s to register/renew themselves:
 ### Jobs
 
 ```
-POST   /v1/jobs            # Run job (fire & forget, round robin)
+POST   /v1/jobs            # Run or update job (upsert based on name)
 DELETE /v1/jobs/{id}       # Stop job
 ```
 
-#### Run Job
+#### Run or Update Job (Upsert)
+
+**POST /v1/jobs performs upsert:**
+- If job with this `name` exists → **UPDATE** (according to `update_policy`)
+- If job doesn't exist → **INSERT** (dispatch new job)
+
+This allows seamless deployments with a single command.
 
 **Simple example:**
 ```bash
@@ -114,16 +120,18 @@ curl -X POST http://localhost:9080/v1/jobs \
 ```
 
 **Fields:**
+- `name` (string, **required**): Job name - **unique key for upsert**
 - `artifact` (object): Binary/assets to download (optional)
   - `url` (string): URL with scheme - determines downloader (http://, s3://, file://)
   - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
   - `auth` (map): Other credentials (S3: access_key/secret_key/region, HTTP helper: username/password)
-- `count` (int): Number of instances (default 1)
+- `count` (int): Number of instances (default 1, -1 = all agents)
 - `ports` (map): Port name → fixed port (0 = dynamic). ENV vars `ER_PORT_<NAME>`
 - `tags` (map): Labels for service discovery
 - `health_check`: HTTP health monitoring
   - `port` (string): Named port to check (default "http")
 - `max_restarts` (int): Max restart attempts (0=default 5, -1=unlimited)
+- `update_policy` (string): How to update when redeployed - `rolling` (default), `recreate`, or `blue-green`
 
 **Artifact Downloaders:**
 
@@ -134,12 +142,46 @@ URL scheme → downloader:
 - `s3://bucket/key` → S3 downloader
   - Uses `auth.access_key`, `auth.secret_key`, `auth.region`
 
-Response:
+**Response (INSERT):**
 ```json
 {
   "id": "abc123",
+  "name": "api",
   "status": "dispatched"
 }
+```
+
+**Response (UPDATE):**
+```json
+{
+  "id": "abc123",
+  "name": "api",
+  "status": "updated",
+  "policy": "rolling"
+}
+```
+
+**Update Policies:**
+
+| Policy | Downtime | Behavior |
+|--------|----------|----------|
+| `rolling` (default) | ❌ None | Replace instances 1 at a time with 2s delay |
+| `recreate` | ✅ Yes | Stop all → start new version (fast but downtime) |
+| `blue-green` | ❌ None | Start new alongside old → wait 5s → stop old (2x resources) |
+
+**Example: Deploy v1, then update to v2**
+```bash
+# Deploy v1
+POST /v1/jobs {"name": "api", "command": "./app-v1", "count": 3}
+→ {"status": "dispatched", "id": "abc123"}
+
+# Update to v2 (rolling - zero downtime)
+POST /v1/jobs {"name": "api", "command": "./app-v2", "count": 3}
+→ {"status": "updated", "id": "abc123", "policy": "rolling"}
+
+# Update to v3 (recreate - with downtime)
+POST /v1/jobs {"name": "api", "command": "./app-v3", "count": 3, "update_policy": "recreate"}
+→ {"status": "updated", "id": "abc123", "policy": "recreate"}
 ```
 
 **Scheduling:**

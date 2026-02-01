@@ -88,9 +88,9 @@ func (l *Leader) redispatchJobsFrom(failedAgentID string) {
 	})
 
 	for _, job := range jobsToRedispatch {
-		log.Printf("Redispatching %d instance(s) of job %s from dead agent %s", job.Count, job.ID, failedAgentID)
+		log.Printf("Redispatching %d instance(s) of job %s from dead agent %s", job.Count, job.Name, failedAgentID)
 		if err := l.DispatchJob(job); err != nil {
-			log.Printf("Failed to redispatch job %s: %v", job.ID, err)
+			log.Printf("Failed to redispatch job %s: %v", job.Name, err)
 		}
 	}
 }

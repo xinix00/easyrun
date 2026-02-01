@@ -34,8 +34,8 @@ func TestLeaderNewWithCustomClient(t *testing.T) {
 
 func TestLeaderGetJobs(t *testing.T) {
 	store := NewMockJobStore()
-	store.StoreJob(&types.Job{ID: "job-1", Name: "job1"})
-	store.StoreJob(&types.Job{ID: "job-2", Name: "job2"})
+	store.StoreJob(&types.Job{Name: "job1"})
+	store.StoreJob(&types.Job{Name: "job2"})
 
 	leader := New("local-agent", store, nil)
 

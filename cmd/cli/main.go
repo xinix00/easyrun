@@ -50,7 +50,7 @@ func main() {
 func runCommand() *cli.Command {
 	return &cli.Command{
 		Name:  "run",
-		Usage: "Run a job",
+		Usage: "Run or update a job (upsert based on name)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Required: true},
 			&cli.StringFlag{Name: "command", Required: true},
@@ -58,6 +58,7 @@ func runCommand() *cli.Command {
 			&cli.IntFlag{Name: "cpu", Usage: "CPU shares"},
 			&cli.StringFlag{Name: "memory", Usage: "Memory limit (e.g., 512M, 1G)"},
 			&cli.StringSliceFlag{Name: "env", Usage: "Environment variables (KEY=VALUE)"},
+			&cli.StringFlag{Name: "update-policy", Usage: "Update policy: rolling (default), recreate, or blue-green", Value: "rolling"},
 		},
 		Action: runJob,
 	}
@@ -91,9 +92,10 @@ func agentsCommand() *cli.Command {
 
 func runJob(c *cli.Context) error {
 	job := types.Job{
-		Name:      c.String("name"),
-		Command:   c.String("command"),
-		CPUShares: c.Int("cpu"),
+		Name:         c.String("name"),
+		Command:      c.String("command"),
+		CPUShares:    c.Int("cpu"),
+		UpdatePolicy: types.UpdatePolicy(c.String("update-policy")),
 	}
 
 	if artifact := c.String("artifact"); artifact != "" {
@@ -132,7 +134,18 @@ func runJob(c *cli.Context) error {
 		return err
 	}
 
-	fmt.Printf("Job '%s' dispatched with ID %s\n", job.Name, result["id"])
+	// Show appropriate message based on operation
+	status := result["status"]
+	if status == "updated" {
+		policy := result["policy"]
+		if policy == "" {
+			policy = "rolling"
+		}
+		fmt.Printf("Job '%s' updated (ID %s, policy=%s)\n", job.Name, result["id"], policy)
+	} else {
+		fmt.Printf("Job '%s' dispatched with ID %s\n", job.Name, result["id"])
+	}
+
 	return nil
 }
 
@@ -188,7 +201,7 @@ func showStatus(c *cli.Context) error {
 	for _, tasks := range status.TasksByAgent {
 		for _, task := range tasks {
 			if task.State == "running" {
-				runningPerJob[task.JobID]++
+				runningPerJob[task.JobName]++
 			}
 		}
 	}
@@ -196,7 +209,7 @@ func showStatus(c *cli.Context) error {
 	// Show jobs with expected vs running
 	if len(jobs) > 0 {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "JOB ID\tNAME\tRUNNING\tSTATUS")
+		fmt.Fprintln(w, "NAME\tRUNNING\tSTATUS")
 		for _, job := range jobs {
 			expected := job.Count
 			if expected == -1 {
@@ -205,7 +218,7 @@ func showStatus(c *cli.Context) error {
 			if expected == 0 {
 				expected = 1
 			}
-			running := runningPerJob[job.ID]
+			running := runningPerJob[job.Name]
 			statusStr := "OK"
 			if running < expected {
 				statusStr = "DEGRADED"
@@ -214,8 +227,8 @@ func showStatus(c *cli.Context) error {
 			if job.Count == -1 {
 				expectedStr = fmt.Sprintf("all(%d)", status.Agents)
 			}
-			fmt.Fprintf(w, "%s\t%s\t%d / %s\t%s\n",
-				job.ID, job.Name, running, expectedStr, statusStr)
+			fmt.Fprintf(w, "%s\t%d / %s\t%s\n",
+				job.Name, running, expectedStr, statusStr)
 		}
 		w.Flush()
 		fmt.Println()
@@ -329,7 +342,7 @@ func showAgentDetails(agent *types.Agent) error {
 
 	jobMap := make(map[string]*types.Job)
 	for _, j := range jobs {
-		jobMap[j.ID] = j
+		jobMap[j.Name] = j
 	}
 
 	// Calculate used resources
@@ -338,7 +351,7 @@ func showAgentDetails(agent *types.Agent) error {
 	if tasks, ok := status.TasksByAgent[agent.ID]; ok {
 		for _, t := range tasks {
 			if t.State == "running" {
-				if job := jobMap[t.JobID]; job != nil {
+				if job := jobMap[t.JobName]; job != nil {
 					usedCPU += job.CPUShares
 					usedMem += job.MemoryLimit
 				}

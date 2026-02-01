@@ -3,6 +3,7 @@ package leader
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -18,8 +19,10 @@ import (
 type mockAgent struct {
 	server   *httptest.Server
 	mu       sync.Mutex
-	jobs     map[string]*types.Job
+	jobs     map[string]*types.Job  // jobID -> job (for backwards compat)
+	tasks    []*types.Task          // all running tasks
 	runCalls int
+	taskSeq  int
 }
 
 func newMockAgent() *mockAgent {
@@ -29,6 +32,8 @@ func newMockAgent() *mockAgent {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/run", ma.handleRun)
+	mux.HandleFunc("/tasks", ma.handleTasks)
+	mux.HandleFunc("/stop/", ma.handleStop)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -50,17 +55,17 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ma.mu.Lock()
-	ma.jobs[job.ID] = &job
+	ma.jobs[job.Name] = &job
 	ma.runCalls++
-	ma.mu.Unlock()
-
-	// Return a fake task
+	ma.taskSeq++
 	task := &types.Task{
-		ID:      "task-" + job.ID,
-		JobID:   job.ID,
+		ID:      fmt.Sprintf("task-%s-%d", job.Name, ma.taskSeq),
 		JobName: job.Name,
 		State:   types.TaskRunning,
 	}
+	ma.tasks = append(ma.tasks, task)
+	ma.mu.Unlock()
+
 	json.NewEncoder(w).Encode(task)
 }
 
@@ -88,6 +93,37 @@ func (ma *mockAgent) RunCallCount() int {
 	return ma.runCalls
 }
 
+func (ma *mockAgent) handleTasks(w http.ResponseWriter, r *http.Request) {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+
+	json.NewEncoder(w).Encode(ma.tasks)
+}
+
+func (ma *mockAgent) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	jobID := r.URL.Path[len("/stop/"):]
+
+	ma.mu.Lock()
+	// Remove ONE task with this jobID
+	stopped := 0
+	for i, task := range ma.tasks {
+		if task.JobName == jobID {
+			ma.tasks = append(ma.tasks[:i], ma.tasks[i+1:]...)
+			stopped = 1
+			break
+		}
+	}
+	delete(ma.jobs, jobID)
+	ma.mu.Unlock()
+
+	json.NewEncoder(w).Encode(map[string]int{"stopped": stopped})
+}
+
 // ============== LEADER FAILOVER TESTS ==============
 // These tests verify that state is correctly transferred when a new leader takes over
 
@@ -104,15 +140,15 @@ func TestFailoverNewLeaderLearnsJobsFromAgents(t *testing.T) {
 
 	// Agent 1 heartbeats with its jobs (from old leader era)
 	agent1Jobs := []*types.Job{
-		{ID: "job-1", Name: "webapp", Command: "./webapp", Count: 2},
-		{ID: "job-2", Name: "api", Command: "./api", Count: 1},
+		{Name: "webapp", Command: "./webapp", Count: 2},
+		{Name: "api", Command: "./api", Count: 1},
 	}
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agent1Jobs, time.Now())
 
 	// Agent 2 heartbeats with its jobs
 	agent2Jobs := []*types.Job{
-		{ID: "job-1", Name: "webapp", Command: "./webapp", Count: 2}, // Same job, running on both
-		{ID: "job-3", Name: "worker", Command: "./worker", Count: 1},
+		{Name: "webapp", Command: "./webapp", Count: 2}, // Same job, running on both
+		{Name: "worker", Command: "./worker", Count: 1},
 	}
 	newLeader.Heartbeat("agent-2", "http://10.0.0.2:8080", agent2Jobs, time.Now())
 
@@ -125,9 +161,9 @@ func TestFailoverNewLeaderLearnsJobsFromAgents(t *testing.T) {
 	}
 
 	// Verify placement is tracked
-	placement := newLeader.GetPlacement("job-1")
+	placement := newLeader.GetPlacement("webapp")
 	if len(placement) != 2 {
-		t.Errorf("job-1 should be placed on 2 agents, got %d", len(placement))
+		t.Errorf("webapp should be placed on 2 agents, got %d", len(placement))
 	}
 }
 
@@ -146,7 +182,7 @@ func TestFailoverStateTimeBasedSync(t *testing.T) {
 	// Agent has newer state (was synced with old leader just before crash)
 	newerStateTime := time.Now()
 	agentJobs := []*types.Job{
-		{ID: "critical-job", Name: "critical", Command: "./critical"},
+		{Name: "critical", Command: "./critical"},
 	}
 
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, newerStateTime)
@@ -158,8 +194,8 @@ func TestFailoverStateTimeBasedSync(t *testing.T) {
 	}
 
 	jobs := newLeaderStore.GetJobs()
-	if len(jobs) != 1 || jobs[0].ID != "critical-job" {
-		t.Error("New leader should have synced critical-job from agent")
+	if len(jobs) != 1 || jobs[0].Name != "critical" {
+		t.Error("New leader should have synced critical from agent")
 	}
 }
 
@@ -182,7 +218,6 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 
 	// Agent 1 heartbeats with a count=-1 job (daemon that runs everywhere)
 	daemonJob := &types.Job{
-		ID:      "daemon-job",
 		Name:    "daemon",
 		Command: "./daemon",
 		Count:   -1,
@@ -200,12 +235,12 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 	}
 
 	agent2Jobs := agent2.GetJobs()
-	if len(agent2Jobs) != 1 || agent2Jobs[0].ID != "daemon-job" {
-		t.Errorf("Agent 2 should have daemon-job, got %v", agent2Jobs)
+	if len(agent2Jobs) != 1 || agent2Jobs[0].Name != "daemon" {
+		t.Errorf("Agent 2 should have daemon job, got %v", agent2Jobs)
 	}
 
 	// Verify placement now includes both agents
-	placement := newLeader.GetPlacement("daemon-job")
+	placement := newLeader.GetPlacement("daemon")
 	if len(placement) != 2 {
 		t.Errorf("daemon-job should be on 2 agents, got %d: %v", len(placement), placement)
 	}
@@ -232,7 +267,6 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	daemonJob := &types.Job{
-		ID:      "monitoring",
 		Name:    "monitoring",
 		Command: "./monitor",
 		Count:   -1,
@@ -281,9 +315,9 @@ func TestFailoverNewAgentGetsAllDaemonJobs(t *testing.T) {
 
 	// Existing agent has 3 daemon jobs
 	daemonJobs := []*types.Job{
-		{ID: "easydns", Name: "easydns", Command: "./easydns", Count: -1},
-		{ID: "easylb", Name: "easylb", Command: "./easylb", Count: -1},
-		{ID: "monitoring", Name: "monitoring", Command: "./monitor", Count: -1},
+		{Name: "easydns", Command: "./easydns", Count: -1},
+		{Name: "easylb", Command: "./easylb", Count: -1},
+		{Name: "monitoring", Command: "./monitor", Count: -1},
 	}
 	newLeader.Heartbeat("existing", existingAgent.URL(), daemonJobs, time.Now())
 	time.Sleep(20 * time.Millisecond)
@@ -314,7 +348,6 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	originalJob := &types.Job{
-		ID:          "complex-job",
 		Name:        "complex",
 		Command:     "./complex",
 		Count:       3,
@@ -329,7 +362,7 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Retrieve and verify
-	recoveredJob := newLeaderStore.GetJob("complex-job")
+	recoveredJob := newLeaderStore.GetJob("complex")
 	if recoveredJob == nil {
 		t.Fatal("Job not recovered")
 	}
@@ -379,7 +412,7 @@ func TestFailoverOlderAgentStateIgnored(t *testing.T) {
 
 	newLeaderStore := NewMockJobStore()
 	newLeaderStore.stateTime = time.Now() // New leader has current state
-	newLeaderStore.StoreJob(&types.Job{ID: "leader-job", Name: "from-leader", Command: "echo"})
+	newLeaderStore.StoreJob(&types.Job{Name: "from-leader", Command: "echo"})
 
 	newLeader := New("new-leader", newLeaderStore, nil)
 
@@ -390,7 +423,7 @@ func TestFailoverOlderAgentStateIgnored(t *testing.T) {
 	// Agent has OLDER state
 	olderTime := time.Now().Add(-1 * time.Hour)
 	agentJobs := []*types.Job{
-		{ID: "old-agent-job", Name: "old", Command: "old"},
+		{Name: "old-job", Command: "old"},
 	}
 
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, olderTime)
@@ -404,10 +437,10 @@ func TestFailoverOlderAgentStateIgnored(t *testing.T) {
 	foundLeaderJob := false
 	foundAgentJob := false
 	for _, j := range jobs {
-		if j.ID == "leader-job" {
+		if j.Name == "from-leader" {
 			foundLeaderJob = true
 		}
-		if j.ID == "old-agent-job" {
+		if j.Name == "old-job" {
 			foundAgentJob = true
 		}
 	}
@@ -443,7 +476,7 @@ func TestFailoverDispatchFailureDoesNotBreakHeartbeat(t *testing.T) {
 	// First agent has daemon job
 	goodAgent := newMockAgent()
 	defer goodAgent.Close()
-	daemonJob := &types.Job{ID: "daemon", Name: "daemon", Command: "./d", Count: -1}
+	daemonJob := &types.Job{Name: "daemon", Command: "./d", Count: -1}
 	newLeader.Heartbeat("good-agent", goodAgent.URL(), []*types.Job{daemonJob}, time.Now())
 	time.Sleep(20 * time.Millisecond)
 

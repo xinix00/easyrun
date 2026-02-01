@@ -11,8 +11,6 @@ import (
 	"easyrun/internal/leader"
 	"easyrun/internal/types"
 	"easyrun/pkg/httputil"
-
-	"github.com/google/uuid"
 )
 
 // Server provides the HTTP API for the leader
@@ -129,11 +127,18 @@ func (s *Server) handleGetJobs(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, jobs)
 }
 
-// handleRunJob dispatches a job to an agent
+// handleRunJob dispatches or updates a job (upsert based on job.Name)
+// If job with this name exists, it's updated according to update_policy
+// If job doesn't exist, it's created and dispatched
 func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	if job.Name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "name required")
 		return
 	}
 
@@ -142,17 +147,32 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if job.ID == "" {
-		job.ID = uuid.New().String()[:8]
+	// Check if job with this name already exists (UPDATE)
+	existingJob := s.leader.FindJobByName(job.Name)
+	if existingJob != nil {
+		log.Printf("Job %s exists, performing update (policy=%s)", job.Name, job.UpdatePolicy)
+
+		if err := s.leader.UpdateJob(&job); err != nil {
+			httputil.WriteError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+
+		httputil.WriteJSON(w, http.StatusOK, map[string]string{
+			"name":   job.Name,
+			"status": "updated",
+			"policy": string(job.UpdatePolicy),
+		})
+		return
 	}
 
+	// New job - INSERT
 	if err := s.leader.DispatchJob(&job); err != nil {
 		httputil.WriteError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
-		"id":     job.ID,
+		"name":   job.Name,
 		"status": "dispatched",
 	})
 }

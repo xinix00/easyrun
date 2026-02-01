@@ -257,7 +257,7 @@ func (a *Agent) GetJob(id string) *types.Job {
 // StoreJob stores a job (used by leader when it learns about remote jobs)
 func (a *Agent) StoreJob(job *types.Job) {
 	a.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 	})
 }
 
@@ -272,7 +272,7 @@ func (a *Agent) GetStateTime() time.Time {
 func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 	a.do(func(s *agentState) {
 		for _, job := range jobs {
-			s.jobs[job.ID] = job
+			s.jobs[job.Name] = job
 		}
 		s.stateTime = updated
 	})
@@ -298,7 +298,7 @@ func (a *Agent) LoadState() error {
 
 	a.do(func(s *agentState) {
 		for _, job := range state.Jobs {
-			s.jobs[job.ID] = job
+			s.jobs[job.Name] = job
 		}
 		s.stateTime = state.Updated
 	})
@@ -354,7 +354,7 @@ func (a *Agent) hasCapacity(job *types.Job) bool {
 
 		for _, task := range s.tasks {
 			if task.State == types.TaskRunning {
-				if j := s.jobs[task.JobID]; j != nil {
+				if j := s.jobs[task.JobName]; j != nil {
 					usedCPU += j.CPUShares
 					usedMem += j.MemoryLimit
 				}

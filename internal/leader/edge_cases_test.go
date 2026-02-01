@@ -2,8 +2,11 @@ package leader
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,17 +47,38 @@ func TestLeaderCheckDeadAgents(t *testing.T) {
 
 func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 	store := NewMockJobStore()
-	store.StoreJob(&types.Job{ID: "job-1", Name: "test-job", Command: "echo", Count: 1})
+	store.StoreJob(&types.Job{
+		Name:    "test-job",
+		Command: "echo",
+		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
+	})
 
-	// Create mock agent that accepts jobs
+	// Create mock agent that accepts jobs and returns tasks
 	acceptCount := 0
+	var tasks []*types.Task
+	var mu sync.Mutex
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/run" {
+		switch r.URL.Path {
+		case "/run":
+			mu.Lock()
 			acceptCount++
+			tasks = append(tasks, &types.Task{
+				ID:    fmt.Sprintf("task-%d", acceptCount),
+				JobName: "test-job",
+				State: types.TaskRunning,
+			})
+			mu.Unlock()
 			w.WriteHeader(http.StatusCreated)
-			return
+		case "/tasks":
+			mu.Lock()
+			json.NewEncoder(w).Encode(tasks)
+			mu.Unlock()
+		default:
+			w.WriteHeader(http.StatusOK)
 		}
-		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer server.Close()
 
@@ -72,7 +96,7 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 
 	// Manually add placement for job on dying agent
 	leader.do(func(s *leaderState) {
-		s.placement["job-1"] = []string{"dying-agent"}
+		s.placement["test-job"] = []string{"dying-agent"}
 	})
 	time.Sleep(10 * time.Millisecond)
 
@@ -163,7 +187,7 @@ func TestLeaderHeartbeatWithOlderState(t *testing.T) {
 	// Remote agent has older state
 	olderTime := time.Now().Add(-1 * time.Hour)
 	remoteJobs := []*types.Job{
-		{ID: "old-job", Name: "old", Command: "echo old"},
+		{Name: "old-job", Command: "echo old"},
 	}
 
 	beforeSync := store.stateTime
@@ -198,10 +222,12 @@ func TestLeaderDispatchWithHTTPTimeout(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "timeout-job",
-		Name:    "test",
+		Name:    "timeout-job",
 		Command: "echo",
 		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
 	}
 
 	err := leader.DispatchJob(job)
@@ -214,15 +240,20 @@ func TestLeaderMultipleAgentsPartialFailure(t *testing.T) {
 	store := NewMockJobStore()
 
 	successCount := 0
+	var tasks []*types.Task
 
-	// First agent succeeds
+	// First agent succeeds and returns tasks
 	successServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/run" {
+		switch r.URL.Path {
+		case "/run":
 			successCount++
+			tasks = append(tasks, &types.Task{ID: "task-1", JobName: "test", State: types.TaskRunning})
 			w.WriteHeader(http.StatusCreated)
-			return
+		case "/tasks":
+			json.NewEncoder(w).Encode(tasks)
+		default:
+			w.WriteHeader(http.StatusOK)
 		}
-		w.WriteHeader(http.StatusNotFound)
 	}))
 	defer successServer.Close()
 
@@ -244,10 +275,12 @@ func TestLeaderMultipleAgentsPartialFailure(t *testing.T) {
 
 	// Dispatch job with 1 instance - should succeed on first agent
 	job := &types.Job{
-		ID:      "partial-job",
 		Name:    "test",
 		Command: "echo",
 		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
 	}
 
 	err := leader.DispatchJob(job)

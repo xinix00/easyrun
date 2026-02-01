@@ -11,10 +11,11 @@ import (
 )
 
 const (
-	defaultAgentTimeout    = 30 * time.Second
-	httpClientTimeout      = 5 * time.Second
-	deadAgentCheckInterval = 10 * time.Second
-	stateChannelBufferSize = 64
+	defaultAgentTimeout      = 30 * time.Second
+	defaultHealthCheckTimeout = 30 * time.Second
+	httpClientTimeout        = 5 * time.Second
+	deadAgentCheckInterval   = 10 * time.Second
+	stateChannelBufferSize   = 64
 )
 
 // JobStore is the interface for accessing jobs (implemented by Agent)
@@ -119,8 +120,8 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 		// Update placement for these jobs
 		l.do(func(s *leaderState) {
 			for _, job := range agentJobs {
-				if !slices.Contains(s.placement[job.ID], id) {
-					s.placement[job.ID] = append(s.placement[job.ID], id)
+				if !slices.Contains(s.placement[job.Name], id) {
+					s.placement[job.Name] = append(s.placement[job.Name], id)
 				}
 			}
 		})
@@ -131,11 +132,11 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 	if id != l.localAgentID && len(agentJobs) > 0 {
 		l.do(func(s *leaderState) {
 			for _, job := range agentJobs {
-				if len(s.placement[job.ID]) == 0 {
+				if len(s.placement[job.Name]) == 0 {
 					l.jobStore.StoreJob(job)
 				}
-				if !slices.Contains(s.placement[job.ID], id) {
-					s.placement[job.ID] = append(s.placement[job.ID], id)
+				if !slices.Contains(s.placement[job.Name], id) {
+					s.placement[job.Name] = append(s.placement[job.Name], id)
 				}
 			}
 		})
@@ -168,6 +169,17 @@ func (l *Leader) GetJobs() []*types.Job {
 	return l.jobStore.GetJobs()
 }
 
+// FindJobByName finds a job by name (returns nil if not found)
+func (l *Leader) FindJobByName(name string) *types.Job {
+	jobs := l.jobStore.GetJobs()
+	for _, job := range jobs {
+		if job.Name == name {
+			return job
+		}
+	}
+	return nil
+}
+
 // GetPlacement returns which agents are running a job (for testing/debugging)
 func (l *Leader) GetPlacement(jobID string) []string {
 	return query(l, func(s *leaderState) []string {
@@ -183,17 +195,17 @@ func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
 			continue
 		}
 		hasJob := query(l, func(s *leaderState) bool {
-			return slices.Contains(s.placement[job.ID], agentID)
+			return slices.Contains(s.placement[job.Name], agentID)
 		})
 		if hasJob {
 			continue
 		}
 		if err := l.sendJobToAgent(agent, job); err != nil {
-			log.Printf("Failed to dispatch job %s to agent %s: %v", job.ID, agentID, err)
+			log.Printf("Failed to dispatch job %s to agent %s: %v", job.Name, agentID, err)
 			continue
 		}
 		l.do(func(s *leaderState) {
-			s.placement[job.ID] = append(s.placement[job.ID], agentID)
+			s.placement[job.Name] = append(s.placement[job.Name], agentID)
 		})
 	}
 }

@@ -20,32 +20,46 @@ type Artifact struct {
 
 // HealthCheck configuration for a job
 type HealthCheck struct {
-	Path     string        `json:"path"`               // e.g., "/health"
-	Port     string        `json:"port,omitempty"`     // named port (default "http")
-	Interval time.Duration `json:"interval,omitempty"` // default 10s
-	Timeout  time.Duration `json:"timeout,omitempty"`  // default 5s
+	Path           string        `json:"path"`                      // e.g., "/health"
+	Port           string        `json:"port,omitempty"`            // named port (default "http")
+	Interval       time.Duration `json:"interval,omitempty"`        // check interval (default 10s)
+	Timeout        time.Duration `json:"timeout,omitempty"`         // per-request timeout (default 5s)
+	InitialTimeout time.Duration `json:"initial_timeout,omitempty"` // max time after start to become healthy (default 30s)
 }
+
+// UpdatePolicy defines how job updates are handled
+type UpdatePolicy string
+
+const (
+	// UpdateRolling replaces instances one at a time (zero downtime)
+	UpdateRolling UpdatePolicy = "rolling"
+
+	// UpdateRecreate stops all instances, then starts new version (downtime but simple)
+	UpdateRecreate UpdatePolicy = "recreate"
+
+	// UpdateBlueGreen starts new version alongside old, then switches (zero downtime, 2x resources)
+	UpdateBlueGreen UpdatePolicy = "blue-green"
+)
 
 // Job defines what the user wants to run
 type Job struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Artifact    *Artifact         `json:"artifact,omitempty"`      // binary/assets to download
-	Command     string            `json:"command"`
-	Count       int               `json:"count,omitempty"`         // number of instances (default 1)
-	Ports       map[string]int    `json:"ports,omitempty"`         // port name -> fixed port (0 = dynamic)
-	CPUShares   int               `json:"cpu_shares,omitempty"`
-	MemoryLimit uint64            `json:"memory_limit,omitempty"`
-	Env         map[string]string `json:"env,omitempty"`
-	Tags        map[string]string `json:"tags,omitempty"`          // labels for discovery/grouping
-	HealthCheck *HealthCheck      `json:"health_check,omitempty"`
-	MaxRestarts int               `json:"max_restarts,omitempty"` // 0 = unlimited
+	Name         string            `json:"name"`                     // unique identifier
+	Artifact     *Artifact         `json:"artifact,omitempty"`       // binary/assets to download
+	Command      string            `json:"command"`
+	Count        int               `json:"count,omitempty"`          // number of instances (default 1)
+	Ports        map[string]int    `json:"ports,omitempty"`          // port name -> fixed port (0 = dynamic)
+	CPUShares    int               `json:"cpu_shares,omitempty"`
+	MemoryLimit  uint64            `json:"memory_limit,omitempty"`
+	Env          map[string]string `json:"env,omitempty"`
+	Tags         map[string]string `json:"tags,omitempty"`           // labels for discovery/grouping
+	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
+	MaxRestarts  int               `json:"max_restarts,omitempty"`  // 0 = unlimited
+	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"` // rolling (default) | recreate | blue-green
 }
 
 // Task represents a running instance of a Job
 type Task struct {
 	ID           string         `json:"id"`
-	JobID        string         `json:"job_id"`
 	JobName      string         `json:"job_name"`
 	Ports        map[string]int `json:"ports"`         // named port -> port number
 	Pid          int            `json:"pid"`

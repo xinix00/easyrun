@@ -28,9 +28,12 @@ agent-2   ghi789    api    54323  running
 
 ## Jobs
 
-### Job starten
+### Job starten of updaten (Upsert)
+
+**Same command for deploy and update** - detects automatically based on job name:
 
 ```bash
+# Deploy initial version
 ./bin/easyrun run \
     --name api \
     --command "./api-binary" \
@@ -38,12 +41,40 @@ agent-2   ghi789    api    54323  running
     --cpu 2000 \
     --memory 512M \
     --env "LOG_LEVEL=info"
+
+# Output (INSERT):
+# Job 'api' dispatched with ID abc123
+
+# Update to new version (rolling by default)
+./bin/easyrun run \
+    --name api \
+    --command "./api-binary-v2" \
+    --count 3
+
+# Output (UPDATE):
+# Job 'api' updated (ID abc123, policy=rolling)
 ```
 
-Output:
+### Update Policies
+
+Control how updates are rolled out:
+
+```bash
+# Rolling update (default) - zero downtime
+./bin/easyrun run --name api --command "./v2" --update-policy rolling
+
+# Recreate - downtime but fast
+./bin/easyrun run --name api --command "./v2" --update-policy recreate
+
+# Blue-green - zero downtime, 2x resources during switch
+./bin/easyrun run --name api --command "./v2" --update-policy blue-green
 ```
-Job 'api' dispatched with ID abc123
-```
+
+| Policy | Downtime | Resources | Behavior |
+|--------|----------|-----------|----------|
+| `rolling` (default) | ❌ | Normal | Replace 1 instance at a time, 2s delay |
+| `recreate` | ✅ | Minimal | Stop all → start new version |
+| `blue-green` | ❌ | 2x during switch | Start new alongside old → switch after 5s |
 
 ### Run op alle nodes
 

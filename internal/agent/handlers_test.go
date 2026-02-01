@@ -54,13 +54,13 @@ func TestHandleTasks(t *testing.T) {
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
 			ID:      "task-1",
-			JobID:   "job-1",
+			JobName: "job-1",
 			State:   types.TaskRunning,
 			Pid:     1234,
 		}
 		s.tasks["task-2"] = &types.Task{
 			ID:      "task-2",
-			JobID:   "job-2",
+			JobName: "job-2",
 			State:   types.TaskStopped,
 			Pid:     5678,
 		}
@@ -99,7 +99,6 @@ func TestHandleRunSuccess(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := types.Job{
-		ID:      "test-job",
 		Name:    "test",
 		Command: "echo hello",
 	}
@@ -119,8 +118,8 @@ func TestHandleRunSuccess(t *testing.T) {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
-	if task.JobID != "test-job" {
-		t.Errorf("Task JobID = %q, want %q", task.JobID, "test-job")
+	if task.JobName != "test" {
+		t.Errorf("Task JobName = %q, want %q", task.JobName, "test")
 	}
 	if task.State != types.TaskRunning {
 		t.Errorf("Task State = %q, want %q", task.State, types.TaskRunning)
@@ -174,7 +173,6 @@ func TestHandleRunInsufficientCapacity(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := types.Job{
-		ID:        "big-job",
 		Name:      "test",
 		Command:   "echo",
 		CPUShares: 2000, // Exceeds 1024 shares
@@ -204,7 +202,6 @@ func TestHandleRunRunnerError(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := types.Job{
-		ID:      "test-job",
 		Name:    "test",
 		Command: "echo",
 	}
@@ -230,18 +227,18 @@ func TestHandleStopSuccess(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// Add a job and running task
-	agent.StoreJob(&types.Job{ID: "job-1", Name: "test", Command: "echo"})
+	agent.StoreJob(&types.Job{Name: "test", Command: "echo"})
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
-			ID:    "task-1",
-			JobID: "job-1",
-			State: types.TaskRunning,
+			ID:      "task-1",
+			JobName: "test",
+			State:   types.TaskRunning,
 		}
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
-	req := httptest.NewRequest(http.MethodDelete, "/stop/job-1", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/stop/test", nil)
 	w := httptest.NewRecorder()
 
 	agent.handleStop(w, req)
@@ -408,7 +405,6 @@ func TestHandleRunWithPorts(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := types.Job{
-		ID:      "port-job",
 		Name:    "test",
 		Command: "echo",
 		Ports:   map[string]int{"http": 0, "grpc": 0},
@@ -452,7 +448,6 @@ func TestHandleRunWithFixedPorts(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := types.Job{
-		ID:      "fixed-port-job",
 		Name:    "test",
 		Command: "echo",
 		Ports:   map[string]int{"http": 8080, "grpc": 0}, // http fixed, grpc dynamic
@@ -501,7 +496,6 @@ func TestHandleRunPortInUse(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := types.Job{
-		ID:      "port-conflict-job",
 		Name:    "test",
 		Command: "echo",
 		Ports:   map[string]int{"http": 19876}, // Port is in use

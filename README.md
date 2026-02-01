@@ -6,6 +6,7 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
 - **Multi-instance jobs**: Deploy N copies with automatic spreading
 - **Smart scheduling**: Round-robin with capacity-aware placement
+- **Job updates**: Rolling, recreate, or blue-green deployments
 - **Named ports**: Flexible port allocation per service
 - **Service discovery**: Tags for external load balancers
 - **Health checks**: HTTP-based monitoring with auto-restart
@@ -34,19 +35,58 @@ go build -o bin/orch ./cmd/cli
 
 ```bash
 # Single instance
-./bin/orch job run --name web --command "python app.py"
+./bin/orch run --name web --command "python app.py"
 
 # Multiple instances with spreading
-./bin/orch job run --name api --command "./server" --count 3
+./bin/orch run --name api --command "./server" --count 3
 
 # With ports and tags
-./bin/orch job run \
+./bin/orch run \
   --name api \
   --command "./server --http=\$ER_PORT_HTTP --grpc=\$ER_PORT_GRPC" \
   --ports http,grpc \
   --tags service=api,env=prod \
   --count 3
 ```
+
+### Update Job (Upsert)
+
+**Same command** - POST with existing job name triggers update:
+
+```bash
+# Update to new version (rolling by default - zero downtime)
+./bin/orch run --name api --command "./server-v2" --count 3
+
+# Update with specific policy
+./bin/orch run --name api --command "./server-v2" --count 3 --update-policy recreate
+
+# Update artifact (blue-green deployment)
+./bin/orch run --name api \
+  --artifact "s3://bucket/app-v2.tar.gz" \
+  --command "./server" \
+  --count 3 \
+  --update-policy blue-green
+```
+
+#### Update Policies
+
+| Policy | Downtime | Resources | Use Case |
+|--------|----------|-----------|----------|
+| **rolling** (default) | ❌ None | Normal | Standard updates, zero downtime |
+| **recreate** | ✅ Yes | Minimal | Database migrations, breaking changes |
+| **blue-green** | ❌ None | 2x during switch | Canary testing, instant rollback |
+
+**rolling**: Replaces instances one at a time with 2s delay
+- Maintains count-1 instances during update
+- Safe for stateless services
+
+**recreate**: Stops all instances, then starts new version
+- Fastest update (no waiting)
+- Use when downtime is acceptable
+
+**blue-green**: Starts new version alongside old, then switches
+- Uses 2x resources temporarily
+- Best for testing before full cutover
 
 ## Architecture
 
@@ -88,19 +128,20 @@ go build -o bin/orch ./cmd/cli
     "interval": "10s",
     "timeout": "5s"
   },
-  "max_restarts": 5
+  "max_restarts": 5,
+  "update_policy": "rolling"
 }
 ```
 
 ### Fields
 
-- **name**: Job identifier
+- **name**: Job identifier (unique key for upsert)
 - **artifact**: Binary/assets to download (optional)
   - **url**: Download URL - scheme determines downloader (http://, https://, s3://)
   - **headers**: HTTP headers map (Authorization, X-API-Key, etc.)
   - **auth**: Other credentials (S3: access_key/secret_key/region, HTTP helper: username/password)
 - **command**: Command to execute
-- **count**: Number of instances (default: 1)
+- **count**: Number of instances (default: 1, -1 = all agents)
 - **ports**: Port name → fixed port (0 = dynamic) - generates ENV vars `ER_PORT_HTTP`, etc.
 - **cpu_shares**: CPU priority (higher = more CPU time)
 - **memory_limit**: Memory limit in bytes
@@ -109,6 +150,7 @@ go build -o bin/orch ./cmd/cli
 - **health_check**: HTTP health check configuration (optional)
   - **port**: Named port to check (e.g., "http")
 - **max_restarts**: Max restart attempts (0 = default 5, -1 = unlimited)
+- **update_policy**: How to update job when redeployed (rolling | recreate | blue-green, default: rolling)
 
 ## Scheduling
 

@@ -149,7 +149,7 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 
 	// Store in state and persist
 	a.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 		s.tasks[task.ID] = task
 	})
 	a.SaveState()
@@ -195,9 +195,9 @@ func isPortAvailable(port int) bool {
 
 // restartTask restarts a failed task
 func (a *Agent) restartTask(task *types.Task) {
-	job := a.getJob(task.JobID)
+	job := a.getJob(task.JobName)
 	if job == nil {
-		log.Printf("Cannot restart task %s: job %s not found", task.ID, task.JobID)
+		log.Printf("Cannot restart task %s: job %s not found", task.ID, task.JobName)
 		return
 	}
 
@@ -257,14 +257,14 @@ func (a *Agent) restartTask(task *types.Task) {
 }
 
 // stopJob stops all tasks for a job
-func (a *Agent) stopJob(jobID string) int {
+func (a *Agent) stopJob(jobName string) int {
 	// Get tasks to stop and remove job from state
 	tasksToStop := query(a, func(s *agentState) []*types.Task {
-		delete(s.jobs, jobID) // Remove job so it won't restart
+		delete(s.jobs, jobName) // Remove job so it won't restart
 
 		var tasks []*types.Task
 		for _, task := range s.tasks {
-			if task.JobID == jobID && task.State == types.TaskRunning {
+			if task.JobName == jobName && task.State == types.TaskRunning {
 				tasks = append(tasks, task)
 			}
 		}

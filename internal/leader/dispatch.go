@@ -7,8 +7,14 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"time"
 
 	"easyrun/internal/types"
+)
+
+const (
+	defaultInitialTimeout = 30 * time.Second
+	verifyInterval        = 500 * time.Millisecond
 )
 
 // DispatchJob sends a job to agents (Count times with round-robin spreading)
@@ -32,7 +38,7 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 	return nil
 }
 
-// dispatchToAvailableAgent tries agents until one accepts the job
+// dispatchToAvailableAgent tries agents until one accepts the job AND task is running
 func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 	agentCount := query(l, func(s *leaderState) int {
 		return len(s.agents)
@@ -51,21 +57,21 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 			return fmt.Errorf("no agents available")
 		}
 
-		err := l.sendJobToAgent(agent, job)
-		if err == nil {
-			// Success! Track placement
-			l.do(func(s *leaderState) {
-				s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
-			})
-			return nil
+		if err := l.sendJobToAgent(agent, job); err != nil {
+			log.Printf("Agent %s rejected job %s: %v, trying next agent", agent.ID, job.Name, err)
+			tried++
+			continue
 		}
 
-		log.Printf("Agent %s rejected job %s: %v, trying next agent", agent.ID, job.ID, err)
-		tried++
+		l.do(func(s *leaderState) {
+			s.placement[job.Name] = append(s.placement[job.Name], agent.ID)
+		})
+		return nil
 	}
 
 	return fmt.Errorf("no agent has capacity after trying %d agents", tried)
 }
+
 
 // StopJob sends stop requests to all agents running instances of this job
 func (l *Leader) StopJob(jobID string) {
@@ -125,7 +131,7 @@ func (l *Leader) nextAgent() *types.Agent {
 	})
 }
 
-// sendJobToAgent sends a job to a specific agent
+// sendJobToAgent sends a job to a specific agent and waits until task is running
 func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	url := fmt.Sprintf("%s/run", agent.Endpoint)
 
@@ -150,6 +156,25 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 		return fmt.Errorf("agent %s returned status %d", agent.ID, resp.StatusCode)
 	}
 
-	log.Printf("Job %s dispatched to agent %s", job.ID, agent.ID)
-	return nil
+	// Wait until task is actually running
+	timeout := defaultInitialTimeout
+	if job.HealthCheck != nil && job.HealthCheck.InitialTimeout > 0 {
+		timeout = job.HealthCheck.InitialTimeout
+	}
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		tasks, err := l.fetchAgentTasks(agent)
+		if err == nil {
+			for _, task := range tasks {
+				if task.JobName == job.Name && task.State == types.TaskRunning {
+					log.Printf("Job %s dispatched to agent %s", job.Name, agent.ID)
+					return nil
+				}
+			}
+		}
+		time.Sleep(verifyInterval)
+	}
+
+	return fmt.Errorf("task didn't start on agent %s", agent.ID)
 }

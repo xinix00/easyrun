@@ -25,7 +25,6 @@ func TestTaskStateConstants(t *testing.T) {
 
 func TestJobJSONRoundtrip(t *testing.T) {
 	job := Job{
-		ID:          "job-123",
 		Name:        "my-app",
 		Command:     "echo hello",
 		Count:       3,
@@ -58,9 +57,6 @@ func TestJobJSONRoundtrip(t *testing.T) {
 	}
 
 	// Verify fields
-	if decoded.ID != job.ID {
-		t.Errorf("ID = %q, want %q", decoded.ID, job.ID)
-	}
 	if decoded.Name != job.Name {
 		t.Errorf("Name = %q, want %q", decoded.Name, job.Name)
 	}
@@ -95,7 +91,6 @@ func TestTaskJSONRoundtrip(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	task := Task{
 		ID:           "task-456",
-		JobID:        "job-123",
 		JobName:      "my-app",
 		Ports:        map[string]int{"http": 8080, "grpc": 9090},
 		Pid:          12345,
@@ -187,7 +182,7 @@ func TestArtifactAuthHelpers(t *testing.T) {
 
 func TestJobDefaults(t *testing.T) {
 	// Test that omitempty fields can be absent
-	jsonStr := `{"id": "test", "name": "test", "command": "echo"}`
+	jsonStr := `{"name": "test", "command": "echo"}`
 
 	var job Job
 	if err := json.Unmarshal([]byte(jsonStr), &job); err != nil {

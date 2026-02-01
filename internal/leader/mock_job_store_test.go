@@ -40,7 +40,7 @@ func (m *MockJobStore) GetJob(id string) *types.Job {
 func (m *MockJobStore) StoreJob(job *types.Job) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs[job.ID] = job
+	m.jobs[job.Name] = job
 }
 
 func (m *MockJobStore) GetStateTime() time.Time {
@@ -53,7 +53,7 @@ func (m *MockJobStore) SyncJobs(jobs []*types.Job, updated time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, job := range jobs {
-		m.jobs[job.ID] = job
+		m.jobs[job.Name] = job
 	}
 	m.stateTime = updated
 }

@@ -6,20 +6,41 @@ What the user wants to run.
 
 ```go
 type Job struct {
-    ID          string            // Unique identifier
-    Name        string            // Human-readable name
-    Artifact    *Artifact         // Binary/assets to download (optional)
-    Command     string            // Command to execute
-    Count       int               // Number of instances (see below)
-    Ports       map[string]int    // Port name -> fixed port (0 = dynamic)
-    CPUShares   int               // Relative CPU priority (0 = no limiting)
-    MemoryLimit uint64            // Bytes (0 = no limiting)
-    Env         map[string]string // Extra environment variables
-    Tags        map[string]string // Labels for service discovery/grouping
-    HealthCheck *HealthCheck      // HTTP health check config (optional)
-    MaxRestarts int               // Max restart attempts (0=default 5, -1=unlimited)
+    ID           string            // Unique identifier (auto-generated if not provided)
+    Name         string            // Human-readable name (UNIQUE KEY for upsert)
+    Artifact     *Artifact         // Binary/assets to download (optional)
+    Command      string            // Command to execute
+    Count        int               // Number of instances (see below)
+    Ports        map[string]int    // Port name → fixed port (0 = dynamic)
+    CPUShares    int               // Relative CPU priority (0 = no limiting)
+    MemoryLimit  uint64            // Bytes (0 = no limiting)
+    Env          map[string]string // Extra environment variables
+    Tags         map[string]string // Labels for service discovery/grouping
+    HealthCheck  *HealthCheck      // HTTP health check config (optional)
+    MaxRestarts  int               // Max restart attempts (0=default 5, -1=unlimited)
+    UpdatePolicy UpdatePolicy      // How to update: rolling | recreate | blue-green
 }
 ```
+
+### UpdatePolicy
+
+How job updates are rolled out when POST /v1/jobs is called with existing job name:
+
+```go
+type UpdatePolicy string
+
+const (
+    UpdateRolling   UpdatePolicy = "rolling"    // Replace 1 at a time (default)
+    UpdateRecreate  UpdatePolicy = "recreate"   // Stop all, then start new
+    UpdateBlueGreen UpdatePolicy = "blue-green" // Start new alongside old
+)
+```
+
+| Policy | Downtime | Resources | Use Case |
+|--------|----------|-----------|----------|
+| `rolling` | ❌ None | Normal | Standard deployments |
+| `recreate` | ✅ Yes | Minimal | Breaking changes, DB migrations |
+| `blue-green` | ❌ None | 2x (temporary) | Canary testing, instant rollback |
 
 ### Count
 
