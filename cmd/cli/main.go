@@ -157,12 +157,23 @@ func showStatus(c *cli.Context) error {
 	}
 
 	var status struct {
-		Agents       int                          `json:"agents"`
-		TotalTasks   int                          `json:"total_tasks"`
-		RunningTasks int                          `json:"running_tasks"`
-		TasksByAgent map[string][]*types.Task     `json:"tasks_by_agent"`
+		Agents       int                      `json:"agents"`
+		TotalTasks   int                      `json:"total_tasks"`
+		RunningTasks int                      `json:"running_tasks"`
+		TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
 	}
 	if err := json.Unmarshal(resp, &status); err != nil {
+		return err
+	}
+
+	// Fetch jobs for expected vs running display
+	jobsResp, err := doRequest("GET", "/v1/jobs", nil)
+	if err != nil {
+		return err
+	}
+
+	var jobs []*types.Job
+	if err := json.Unmarshal(jobsResp, &jobs); err != nil {
 		return err
 	}
 
@@ -170,6 +181,44 @@ func showStatus(c *cli.Context) error {
 	fmt.Printf("Agents:  %d\n", status.Agents)
 	fmt.Printf("Tasks:   %d running / %d total\n", status.RunningTasks, status.TotalTasks)
 	fmt.Println()
+
+	// Count running tasks per job
+	runningPerJob := make(map[string]int)
+	for _, tasks := range status.TasksByAgent {
+		for _, task := range tasks {
+			if task.State == "running" {
+				runningPerJob[task.JobID]++
+			}
+		}
+	}
+
+	// Show jobs with expected vs running
+	if len(jobs) > 0 {
+		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(w, "JOB ID\tNAME\tRUNNING\tSTATUS")
+		for _, job := range jobs {
+			expected := job.Count
+			if expected == -1 {
+				expected = status.Agents
+			}
+			if expected == 0 {
+				expected = 1
+			}
+			running := runningPerJob[job.ID]
+			statusStr := "OK"
+			if running < expected {
+				statusStr = "DEGRADED"
+			}
+			expectedStr := fmt.Sprintf("%d", expected)
+			if job.Count == -1 {
+				expectedStr = fmt.Sprintf("all(%d)", status.Agents)
+			}
+			fmt.Fprintf(w, "%s\t%s\t%d / %s\t%s\n",
+				job.ID, job.Name, running, expectedStr, statusStr)
+		}
+		w.Flush()
+		fmt.Println()
+	}
 
 	if len(status.TasksByAgent) > 0 {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
