@@ -168,6 +168,13 @@ func (l *Leader) GetJobs() []*types.Job {
 	return l.jobStore.GetJobs()
 }
 
+// GetPlacement returns which agents are running a job (for testing/debugging)
+func (l *Leader) GetPlacement(jobID string) []string {
+	return query(l, func(s *leaderState) []string {
+		return s.placement[jobID]
+	})
+}
+
 // ensureAllAgentJobs dispatches count=-1 jobs to agent if missing
 func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
 	agent := &types.Agent{ID: agentID, Endpoint: endpoint}
