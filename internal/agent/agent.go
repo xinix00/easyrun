@@ -44,6 +44,7 @@ type Agent struct {
 	endpoint string
 	config   *config.Config
 	runner   runner.Runner
+	sysInfo  SystemInfo // detected once at startup
 
 	ops chan func(*agentState) // all state access goes through here
 
@@ -71,6 +72,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		endpoint:   endpoint,
 		config:     cfg,
 		runner:     r,
+		sysInfo:    GetSystemInfo(), // detect once at startup
 		ops:        make(chan func(*agentState), stateChannelBufferSize),
 		httpClient: &http.Client{Timeout: proxyTimeout},
 	}
@@ -79,6 +81,11 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 // SetLeaderFunc sets the function to get the current leader address (for proxying cluster requests)
 func (a *Agent) SetLeaderFunc(fn func() string) {
 	a.getLeader = fn
+}
+
+// SetSysInfo overrides detected system info (for testing)
+func (a *Agent) SetSysInfo(info SystemInfo) {
+	a.sysInfo = info
 }
 
 // ID returns the agent ID
@@ -134,6 +141,7 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", a.handleHealth)
+	mux.HandleFunc("/capacity", a.handleCapacity)
 	mux.HandleFunc("/tasks", a.handleTasks)
 	mux.HandleFunc("/run", a.handleRun)
 	mux.HandleFunc("/stop/", a.handleStop)
@@ -354,16 +362,16 @@ func (a *Agent) hasCapacity(job *types.Job) bool {
 		}
 
 		if job.CPUShares > 0 {
-			maxCPU := a.config.Capacity.CPUShares
-			if maxCPU > 0 && usedCPU+job.CPUShares > maxCPU {
+			maxCPU := a.sysInfo.CPUCores * 1024 // 1024 shares per core
+			if usedCPU+job.CPUShares > maxCPU {
 				log.Printf("Insufficient CPU capacity: used=%d, requested=%d, max=%d", usedCPU, job.CPUShares, maxCPU)
 				return false
 			}
 		}
 
 		if job.MemoryLimit > 0 {
-			maxMem := a.config.Capacity.Memory
-			if maxMem > 0 && usedMem+job.MemoryLimit > maxMem {
+			maxMem := a.sysInfo.MemoryBytes
+			if usedMem+job.MemoryLimit > maxMem {
 				log.Printf("Insufficient memory capacity: used=%d, requested=%d, max=%d", usedMem, job.MemoryLimit, maxMem)
 				return false
 			}

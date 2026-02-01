@@ -58,9 +58,23 @@ func (a *Agent) handleLeader(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"leader": leader})
 }
 
-// handleHealth returns health status
+// handleHealth returns basic health status
 func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// CapacityResponse shows system resources and usage
+type CapacityResponse struct {
+	CPUCores    int    `json:"cpu_cores"`
+	MemoryBytes uint64 `json:"memory_bytes"`
+}
+
+// handleCapacity returns detected system capacity
+func (a *Agent) handleCapacity(w http.ResponseWriter, r *http.Request) {
+	httputil.WriteJSON(w, http.StatusOK, CapacityResponse{
+		CPUCores:    a.sysInfo.CPUCores,
+		MemoryBytes: a.sysInfo.MemoryBytes,
+	})
 }
 
 // handleTasks returns all running tasks

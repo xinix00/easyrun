@@ -163,9 +163,9 @@ func TestHandleRunInvalidJSON(t *testing.T) {
 
 func TestHandleRunInsufficientCapacity(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 10
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024}) // 1024 CPU shares
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -177,7 +177,7 @@ func TestHandleRunInsufficientCapacity(t *testing.T) {
 		ID:        "big-job",
 		Name:      "test",
 		Command:   "echo",
-		CPUShares: 100, // Exceeds capacity
+		CPUShares: 2000, // Exceeds 1024 shares
 	}
 
 	body, _ := json.Marshal(job)

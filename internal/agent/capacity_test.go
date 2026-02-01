@@ -13,11 +13,10 @@ import (
 
 func TestAgentHasCapacity(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-	cfg.Capacity.Memory = 1024
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	// Set fake system info for predictable testing
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024}) // 1 core = 1024 shares
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -28,31 +27,29 @@ func TestAgentHasCapacity(t *testing.T) {
 	// Small job should fit
 	smallJob := &types.Job{
 		ID:          "small",
-		CPUShares:   50,
+		CPUShares:   500,
 		MemoryLimit: 512,
 	}
 	if !agent.hasCapacity(smallJob) {
 		t.Error("hasCapacity should return true for small job")
 	}
 
-	// Large job should not fit
+	// Large job should not fit (exceeds 1024 CPU shares)
 	largeJob := &types.Job{
 		ID:          "large",
-		CPUShares:   200,
+		CPUShares:   2000,
 		MemoryLimit: 2048,
 	}
 	if agent.hasCapacity(largeJob) {
-		t.Error("hasCapacity should return false for job exceeding CPU")
+		t.Error("hasCapacity should return false for job exceeding capacity")
 	}
 }
 
 func TestAgentCapacityWithRunningTasks(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-	cfg.Capacity.Memory = 1024
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024}) // 1024 CPU shares, 1024 bytes
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -63,7 +60,7 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 		ID:          "existing-job",
 		Name:        "existing",
 		Command:     "echo",
-		CPUShares:   60,
+		CPUShares:   600,
 		MemoryLimit: 600,
 	}
 	agent.StoreJob(job)
@@ -82,11 +79,11 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 	// New job that would fit if alone, but not with existing task
 	newJob := &types.Job{
 		ID:          "new-job",
-		CPUShares:   50,
+		CPUShares:   500,
 		MemoryLimit: 500,
 	}
 
-	// Should not have capacity (60 + 50 > 100)
+	// Should not have capacity (600 + 500 > 1024)
 	if agent.hasCapacity(newJob) {
 		t.Error("hasCapacity should return false when existing tasks consume capacity")
 	}
@@ -94,10 +91,9 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 
 func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -106,7 +102,7 @@ func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 	// Store a job and create a FAILED task (should not count against capacity)
 	job := &types.Job{
 		ID:        "failed-job",
-		CPUShares: 80,
+		CPUShares: 800,
 	}
 	agent.StoreJob(job)
 
@@ -123,7 +119,7 @@ func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 	// New job should fit because failed tasks don't count
 	newJob := &types.Job{
 		ID:        "new-job",
-		CPUShares: 50,
+		CPUShares: 500,
 	}
 
 	if !agent.hasCapacity(newJob) {
@@ -133,10 +129,9 @@ func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 
 func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -144,7 +139,7 @@ func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
 
 	job := &types.Job{
 		ID:        "stopped-job",
-		CPUShares: 80,
+		CPUShares: 800,
 	}
 	agent.StoreJob(job)
 
@@ -160,7 +155,7 @@ func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
 
 	newJob := &types.Job{
 		ID:        "new-job",
-		CPUShares: 50,
+		CPUShares: 500,
 	}
 
 	if !agent.hasCapacity(newJob) {
@@ -168,10 +163,10 @@ func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
 	}
 }
 
-func TestAgentCapacityNoLimitsConfigured(t *testing.T) {
+func TestAgentCapacityUsesSystemDefaults(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 0 // No limit
-	cfg.Capacity.Memory = 0    // No limit
+	cfg.Capacity.CPUShares = 0 // Not configured - uses system default
+	cfg.Capacity.Memory = 0    // Not configured - uses system default
 
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
@@ -182,25 +177,35 @@ func TestAgentCapacityNoLimitsConfigured(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Any job should fit when no limits configured
-	hugeJob := &types.Job{
-		ID:          "huge-job",
-		CPUShares:   1000000,
-		MemoryLimit: 1000000000000,
+	// When config=0, system values are used as limits
+	// A job within system capacity should fit
+	smallJob := &types.Job{
+		ID:          "small-job",
+		CPUShares:   100,       // Should fit on any system
+		MemoryLimit: 1024 * 1024, // 1MB - should fit on any system
 	}
 
-	if !agent.hasCapacity(hugeJob) {
-		t.Error("hasCapacity should return true when no limits configured")
+	if !agent.hasCapacity(smallJob) {
+		t.Error("hasCapacity should return true for small job within system capacity")
+	}
+
+	// A job exceeding system capacity should NOT fit
+	hugeJob := &types.Job{
+		ID:          "huge-job",
+		CPUShares:   1000000,        // More than any system has
+		MemoryLimit: 1000000000000000, // 1PB - more than any system
+	}
+
+	if agent.hasCapacity(hugeJob) {
+		t.Error("hasCapacity should return false for job exceeding system capacity")
 	}
 }
 
 func TestAgentCapacityJobWithNoLimits(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-	cfg.Capacity.Memory = 1024
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -208,26 +213,24 @@ func TestAgentCapacityJobWithNoLimits(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Job with no resource limits
+	// Job with no resource limits (0 means "don't check")
 	noLimitJob := &types.Job{
 		ID:          "no-limit-job",
 		CPUShares:   0,
 		MemoryLimit: 0,
 	}
 
-	// Should always fit
+	// Should always fit (no limits to check)
 	if !agent.hasCapacity(noLimitJob) {
 		t.Error("hasCapacity should return true for job with no limits")
 	}
 }
 
-func TestAgentCapacityMemoryOnly(t *testing.T) {
+func TestAgentCapacityExceedsMemory(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 0    // No CPU limit
-	cfg.Capacity.Memory = 1024
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 100, MemoryBytes: 1024}) // lots of CPU, little memory
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -235,25 +238,23 @@ func TestAgentCapacityMemoryOnly(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Job exceeding memory should fail
+	// Job fits in CPU but exceeds memory
 	bigMemJob := &types.Job{
 		ID:          "big-mem",
-		CPUShares:   10000, // Should be ignored (no CPU limit)
-		MemoryLimit: 2048,  // Exceeds limit
+		CPUShares:   100,  // Fits (100 cores * 1024 = 102400 shares)
+		MemoryLimit: 2048, // Exceeds 1024 bytes
 	}
 
 	if agent.hasCapacity(bigMemJob) {
-		t.Error("hasCapacity should fail on memory limit")
+		t.Error("hasCapacity should fail when memory exceeds system limit")
 	}
 }
 
-func TestAgentCapacityCPUOnly(t *testing.T) {
+func TestAgentCapacityExceedsCPU(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-	cfg.Capacity.Memory = 0    // No memory limit
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024 * 1024 * 1024}) // little CPU, lots of memory
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -261,24 +262,23 @@ func TestAgentCapacityCPUOnly(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Job exceeding CPU should fail
+	// Job fits in memory but exceeds CPU
 	bigCPUJob := &types.Job{
 		ID:          "big-cpu",
-		CPUShares:   200,
-		MemoryLimit: 9999999999, // Should be ignored (no memory limit)
+		CPUShares:   2000,       // Exceeds 1024 shares (1 core)
+		MemoryLimit: 1024 * 1024, // Fits in 1GB
 	}
 
 	if agent.hasCapacity(bigCPUJob) {
-		t.Error("hasCapacity should fail on CPU limit")
+		t.Error("hasCapacity should fail when CPU exceeds system limit")
 	}
 }
 
 func TestAgentConcurrentCapacityCheck(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 10, MemoryBytes: 1024 * 1024})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -296,7 +296,7 @@ func TestAgentConcurrentCapacityCheck(t *testing.T) {
 			defer wg.Done()
 			job := &types.Job{
 				ID:        "job-" + string(rune('0'+n%10)),
-				CPUShares: 10,
+				CPUShares: 100, // Fits in 10 cores * 1024 = 10240 shares
 			}
 			results <- agent.hasCapacity(job)
 		}(i)
@@ -315,11 +315,9 @@ func TestAgentConcurrentCapacityCheck(t *testing.T) {
 
 func TestAgentCapacityExactLimit(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-	cfg.Capacity.Memory = 1024
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024}) // 1024 CPU shares, 1024 bytes
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -330,7 +328,7 @@ func TestAgentCapacityExactLimit(t *testing.T) {
 	// Job exactly at limit should fit
 	exactJob := &types.Job{
 		ID:          "exact-job",
-		CPUShares:   100,
+		CPUShares:   1024,
 		MemoryLimit: 1024,
 	}
 
@@ -341,21 +339,20 @@ func TestAgentCapacityExactLimit(t *testing.T) {
 
 func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 	cfg := testConfig()
-	cfg.Capacity.CPUShares = 100
-
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024 * 1024}) // 1024 CPU shares
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go agent.stateLoop(ctx)
 
-	// Add 3 jobs using 30 CPU each
+	// Add 3 jobs using 300 CPU each (total 900)
 	for i := 0; i < 3; i++ {
 		jobID := "job-" + string(rune('a'+i))
 		agent.StoreJob(&types.Job{
 			ID:        jobID,
-			CPUShares: 30,
+			CPUShares: 300,
 		})
 		agent.do(func(s *agentState) {
 			s.tasks["task-"+string(rune('a'+i))] = &types.Task{
@@ -368,15 +365,15 @@ func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Used: 90, remaining: 10
-	smallJob := &types.Job{ID: "small", CPUShares: 10}
+	// Used: 900, remaining: 124
+	smallJob := &types.Job{ID: "small", CPUShares: 100}
 	if !agent.hasCapacity(smallJob) {
-		t.Error("hasCapacity should fit 10 CPU (90 used, 10 remaining)")
+		t.Error("hasCapacity should fit 100 CPU (900 used, 124 remaining)")
 	}
 
 	// This should not fit
-	mediumJob := &types.Job{ID: "medium", CPUShares: 15}
+	mediumJob := &types.Job{ID: "medium", CPUShares: 150}
 	if agent.hasCapacity(mediumJob) {
-		t.Error("hasCapacity should not fit 15 CPU (90 used, 10 remaining)")
+		t.Error("hasCapacity should not fit 150 CPU (900 used, 124 remaining)")
 	}
 }
