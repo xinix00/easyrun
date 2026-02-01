@@ -82,9 +82,10 @@ func statusCommand() *cli.Command {
 
 func agentsCommand() *cli.Command {
 	return &cli.Command{
-		Name:   "agents",
-		Usage:  "List agents",
-		Action: listAgents,
+		Name:      "agents",
+		Usage:     "List agents or show agent details",
+		ArgsUsage: "[agent-id]",
+		Action:    listAgents,
 	}
 }
 
@@ -253,6 +254,23 @@ func listAgents(c *cli.Context) error {
 		return err
 	}
 
+	// If agent ID provided, show details for that agent
+	if c.NArg() > 0 {
+		agentID := c.Args().First()
+		var agent *types.Agent
+		for _, a := range agents {
+			if a.ID == agentID {
+				agent = a
+				break
+			}
+		}
+		if agent == nil {
+			return fmt.Errorf("agent %s not found", agentID)
+		}
+		return showAgentDetails(agent)
+	}
+
+	// List all agents
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tENDPOINT\tLAST SEEN")
 	for _, agent := range agents {
@@ -260,6 +278,82 @@ func listAgents(c *cli.Context) error {
 			agent.ID, agent.Endpoint, agent.LastSeen.Format("15:04:05"))
 	}
 	w.Flush()
+	return nil
+}
+
+func showAgentDetails(agent *types.Agent) error {
+	fmt.Printf("Agent:    %s\n", agent.ID)
+	fmt.Printf("Endpoint: %s\n", agent.Endpoint)
+	fmt.Printf("LastSeen: %s\n", agent.LastSeen.Format("15:04:05"))
+	fmt.Println()
+
+	// Fetch capacity from agent directly
+	capResp, err := http.Get(agent.Endpoint + "/capacity")
+	if err != nil {
+		fmt.Printf("Capacity: (unavailable - %v)\n", err)
+		return nil
+	}
+	defer capResp.Body.Close()
+
+	if capResp.StatusCode != http.StatusOK {
+		fmt.Printf("Capacity: (unavailable - status %d)\n", capResp.StatusCode)
+		return nil
+	}
+
+	var cap struct {
+		CPUCores    int    `json:"cpu_cores"`
+		MemoryBytes uint64 `json:"memory_bytes"`
+	}
+	if err := json.NewDecoder(capResp.Body).Decode(&cap); err != nil {
+		fmt.Printf("Capacity: (unavailable - %v)\n", err)
+		return nil
+	}
+
+	// Fetch status to calculate used resources
+	statusResp, err := doRequest("GET", "/v1/status", nil)
+	if err != nil {
+		fmt.Printf("CPU:      %d cores\n", cap.CPUCores)
+		fmt.Printf("Memory:   %.1f GB\n", float64(cap.MemoryBytes)/(1024*1024*1024))
+		return nil
+	}
+
+	var status struct {
+		TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
+	}
+	json.Unmarshal(statusResp, &status)
+
+	// Fetch jobs for resource info
+	jobsResp, _ := doRequest("GET", "/v1/jobs", nil)
+	var jobs []*types.Job
+	json.Unmarshal(jobsResp, &jobs)
+
+	jobMap := make(map[string]*types.Job)
+	for _, j := range jobs {
+		jobMap[j.ID] = j
+	}
+
+	// Calculate used resources
+	var usedCPU int
+	var usedMem uint64
+	if tasks, ok := status.TasksByAgent[agent.ID]; ok {
+		for _, t := range tasks {
+			if t.State == "running" {
+				if job := jobMap[t.JobID]; job != nil {
+					usedCPU += job.CPUShares
+					usedMem += job.MemoryLimit
+				}
+			}
+		}
+	}
+
+	totalShares := cap.CPUCores * 1024
+	usedCores := float64(usedCPU) / 1024
+	totalGB := float64(cap.MemoryBytes) / (1024 * 1024 * 1024)
+	usedGB := float64(usedMem) / (1024 * 1024 * 1024)
+
+	fmt.Printf("CPU:      %.1f / %d cores (%.0f / %d shares)\n", usedCores, cap.CPUCores, float64(usedCPU), totalShares)
+	fmt.Printf("Memory:   %.1f / %.0f GB\n", usedGB, totalGB)
+
 	return nil
 }
 
