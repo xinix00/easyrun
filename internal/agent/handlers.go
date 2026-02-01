@@ -133,11 +133,12 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 		return nil, fmt.Errorf("failed to start: %w", err)
 	}
 
-	// Store in state
+	// Store in state and persist
 	a.do(func(s *agentState) {
 		s.jobs[job.ID] = job
 		s.tasks[task.ID] = task
 	})
+	a.SaveState()
 
 	log.Printf("Started task %s (job %s) with ports %v, pid %d", task.ID, job.Name, ports, task.Pid)
 	return task, nil
@@ -269,6 +270,11 @@ func (a *Agent) stopJob(jobID string) int {
 			})
 			stopped++
 		}
+	}
+
+	// Persist state after job removal
+	if stopped > 0 {
+		a.SaveState()
 	}
 	return stopped
 }
