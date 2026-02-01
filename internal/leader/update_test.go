@@ -185,6 +185,140 @@ func TestUpdateJobBlueGreen(t *testing.T) {
 	}
 }
 
+func TestUpdateJobRollingFailureKeepsOld(t *testing.T) {
+	agent := newMockAgent()
+	defer agent.Close()
+
+	store := NewMockJobStore()
+	leader := New("local", store, nil)
+
+	ctx, cancel := newTestContext()
+	defer cancel()
+	go leader.Run(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{})
+
+	// Deploy initial version
+	oldJob := &types.Job{
+		Name:    "my-app",
+		Command: "./app-v1",
+		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
+	}
+
+	if err := leader.DispatchJob(oldJob); err != nil {
+		t.Fatalf("Failed to dispatch initial job: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify 1 instance running
+	if agent.TaskCount() != 1 {
+		t.Fatalf("Expected 1 task, got %d", agent.TaskCount())
+	}
+
+	// Make agent fail next dispatch
+	agent.SetFailRuns(true)
+
+	// Try rolling update - should fail
+	newJob := &types.Job{
+		Name:         "my-app",
+		Command:      "./app-v2",
+		Count:        1,
+		UpdatePolicy: types.UpdateRolling,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 500 * time.Millisecond,
+		},
+	}
+
+	err := leader.UpdateJob(newJob)
+	if err == nil {
+		t.Fatal("UpdateJob should have failed")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// OLD INSTANCE SHOULD STILL BE RUNNING (this is the key assertion)
+	if agent.TaskCount() != 1 {
+		t.Errorf("Old instance should still be running, got %d tasks", agent.TaskCount())
+	}
+
+	// Job definition should NOT be updated
+	storedJob := store.GetJob("my-app")
+	if storedJob.Command != "./app-v1" {
+		t.Errorf("Job should still be v1, got %s", storedJob.Command)
+	}
+}
+
+func TestUpdateJobBlueGreenFailureKeepsOld(t *testing.T) {
+	agent := newMockAgent()
+	defer agent.Close()
+
+	store := NewMockJobStore()
+	leader := New("local", store, nil)
+
+	ctx, cancel := newTestContext()
+	defer cancel()
+	go leader.Run(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{})
+
+	// Deploy initial version
+	oldJob := &types.Job{
+		Name:    "my-app",
+		Command: "./app-v1",
+		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
+	}
+
+	if err := leader.DispatchJob(oldJob); err != nil {
+		t.Fatalf("Failed to dispatch initial job: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify 1 instance running
+	if agent.TaskCount() != 1 {
+		t.Fatalf("Expected 1 task, got %d", agent.TaskCount())
+	}
+
+	// Make agent fail next dispatch
+	agent.SetFailRuns(true)
+
+	// Try blue-green update - should fail
+	newJob := &types.Job{
+		Name:         "my-app",
+		Command:      "./app-v2",
+		Count:        1,
+		UpdatePolicy: types.UpdateBlueGreen,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 500 * time.Millisecond,
+		},
+	}
+
+	err := leader.UpdateJob(newJob)
+	if err == nil {
+		t.Fatal("UpdateJob should have failed")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	// OLD INSTANCE SHOULD STILL BE RUNNING
+	if agent.TaskCount() != 1 {
+		t.Errorf("Old instance should still be running, got %d tasks", agent.TaskCount())
+	}
+
+	// Job definition should NOT be updated (blue-green only updates after success)
+	storedJob := store.GetJob("my-app")
+	if storedJob.Command != "./app-v1" {
+		t.Errorf("Job should still be v1, got %s", storedJob.Command)
+	}
+}
+
 func TestUpdateJobNotFound(t *testing.T) {
 	store := NewMockJobStore()
 	leader := New("local", store, nil)

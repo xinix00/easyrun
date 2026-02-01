@@ -52,9 +52,10 @@ type Job struct {
 	MemoryLimit  uint64            `json:"memory_limit,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
 	Tags         map[string]string `json:"tags,omitempty"`           // labels for discovery/grouping
+	Volumes      map[string]string `json:"volumes,omitempty"`        // host_path -> task_path (symlinked)
 	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
-	MaxRestarts  int               `json:"max_restarts,omitempty"`  // 0 = unlimited
-	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"` // rolling (default) | recreate | blue-green
+	MaxRestarts  int               `json:"max_restarts,omitempty"`   // 0 = unlimited
+	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"`  // rolling (default) | recreate | blue-green
 }
 
 // Task represents a running instance of a Job

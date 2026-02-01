@@ -19,10 +19,11 @@ import (
 type mockAgent struct {
 	server   *httptest.Server
 	mu       sync.Mutex
-	jobs     map[string]*types.Job  // jobID -> job (for backwards compat)
-	tasks    []*types.Task          // all running tasks
+	jobs     map[string]*types.Job // jobID -> job (for backwards compat)
+	tasks    []*types.Task         // all running tasks
 	runCalls int
 	taskSeq  int
+	failRuns bool // if true, all /run requests will fail
 }
 
 func newMockAgent() *mockAgent {
@@ -48,6 +49,14 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ma.mu.Lock()
+	if ma.failRuns {
+		ma.mu.Unlock()
+		http.Error(w, "simulated failure", http.StatusServiceUnavailable)
+		return
+	}
+	ma.mu.Unlock()
+
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
 		http.Error(w, "invalid json", http.StatusBadRequest)
@@ -67,6 +76,13 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Unlock()
 
 	json.NewEncoder(w).Encode(task)
+}
+
+// SetFailRuns makes all /run requests fail when set to true
+func (ma *mockAgent) SetFailRuns(fail bool) {
+	ma.mu.Lock()
+	ma.failRuns = fail
+	ma.mu.Unlock()
 }
 
 func (ma *mockAgent) URL() string {
@@ -91,6 +107,12 @@ func (ma *mockAgent) RunCallCount() int {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()
 	return ma.runCalls
+}
+
+func (ma *mockAgent) TaskCount() int {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	return len(ma.tasks)
 }
 
 func (ma *mockAgent) handleTasks(w http.ResponseWriter, r *http.Request) {

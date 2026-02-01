@@ -39,7 +39,7 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 	}
 }
 
-// updateRolling: KILL → dispatch → delay (per instance)
+// updateRolling: dispatch → KILL → delay (per instance, maintains capacity)
 func (l *Leader) updateRolling(old, new *types.Job) error {
 	count := old.Count
 	if count <= 0 {
@@ -49,11 +49,13 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 	for i := 0; i < count; i++ {
 		log.Printf("Rolling update %d/%d", i+1, count)
 
-		l.stopOneInstance(old.Name)
-
+		// Start new instance first
 		if err := l.dispatchToAvailableAgent(new); err != nil {
 			return fmt.Errorf("failed at instance %d/%d: %w", i+1, count, err)
 		}
+
+		// Only stop old after new is running
+		l.stopOneInstance(old.Name)
 
 		if i < count-1 {
 			time.Sleep(rollingUpdateDelay)
@@ -67,7 +69,6 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 // updateRecreate: KILL all → dispatch all
 func (l *Leader) updateRecreate(old, new *types.Job) error {
 	l.StopJob(old.Name)
-	time.Sleep(1 * time.Second)
 	return l.DispatchJob(new)
 }
 
@@ -77,7 +78,6 @@ func (l *Leader) updateBlueGreen(old, new *types.Job) error {
 	if err := l.DispatchJob(new); err != nil {
 		return err
 	}
-	time.Sleep(1 * time.Second)
 	l.StopJob(old.Name)
 	return nil
 }

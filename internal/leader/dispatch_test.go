@@ -2,8 +2,6 @@ package leader
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -13,54 +11,12 @@ import (
 	"easyrun/internal/types"
 )
 
-// testAgent is a mock agent that tracks jobs and returns tasks
-type testAgent struct {
-	server *httptest.Server
-	mu     sync.Mutex
-	tasks  []*types.Task
-	seq    int
-}
-
-func newTestAgent() *testAgent {
-	ta := &testAgent{}
-	ta.server = httptest.NewServer(http.HandlerFunc(ta.handle))
-	return ta
-}
-
-func (ta *testAgent) handle(w http.ResponseWriter, r *http.Request) {
-	switch {
-	case r.URL.Path == "/run" && r.Method == http.MethodPost:
-		var job types.Job
-		json.NewDecoder(r.Body).Decode(&job)
-		ta.mu.Lock()
-		ta.seq++
-		ta.tasks = append(ta.tasks, &types.Task{
-			ID:    fmt.Sprintf("task-%s-%d", job.Name, ta.seq),
-			JobName: job.Name,
-			State: types.TaskRunning,
-		})
-		ta.mu.Unlock()
-		w.WriteHeader(http.StatusCreated)
-
-	case r.URL.Path == "/tasks" && r.Method == http.MethodGet:
-		ta.mu.Lock()
-		json.NewEncoder(w).Encode(ta.tasks)
-		ta.mu.Unlock()
-
-	default:
-		w.WriteHeader(http.StatusOK)
-	}
-}
-
-func (ta *testAgent) URL() string    { return ta.server.URL }
-func (ta *testAgent) Close()         { ta.server.Close() }
-func (ta *testAgent) JobCount() int  { ta.mu.Lock(); defer ta.mu.Unlock(); return len(ta.tasks) }
-
 // ============== DISPATCH TESTS ==============
+// Uses mockAgent from failover_test.go
 
 func TestLeaderDispatchJobToAgent(t *testing.T) {
 	store := NewMockJobStore()
-	agent := newTestAgent()
+	agent := newMockAgent()
 	defer agent.Close()
 
 	leader := New("local-agent", store, nil)
@@ -136,9 +92,9 @@ func TestLeaderDispatchAllAgentsReject(t *testing.T) {
 func TestLeaderDispatchMultipleInstances(t *testing.T) {
 	store := NewMockJobStore()
 
-	agents := make([]*testAgent, 3)
+	agents := make([]*mockAgent, 3)
 	for i := range agents {
-		agents[i] = newTestAgent()
+		agents[i] = newMockAgent()
 		defer agents[i].Close()
 	}
 
@@ -162,7 +118,7 @@ func TestLeaderDispatchMultipleInstances(t *testing.T) {
 
 	total := 0
 	for _, a := range agents {
-		total += a.JobCount()
+		total += a.TaskCount()
 	}
 	if total != 6 {
 		t.Errorf("Total dispatched = %d, want 6", total)
@@ -213,7 +169,7 @@ func TestLeaderStopJobOnMultipleAgents(t *testing.T) {
 
 func TestLeaderDispatchJobWithZeroCount(t *testing.T) {
 	store := NewMockJobStore()
-	agent := newTestAgent()
+	agent := newMockAgent()
 	defer agent.Close()
 
 	leader := New("local-agent", store, nil)
@@ -232,17 +188,17 @@ func TestLeaderDispatchJobWithZeroCount(t *testing.T) {
 		t.Errorf("DispatchJob failed: %v", err)
 	}
 
-	if agent.JobCount() != 1 {
-		t.Errorf("JobCount = %d, want 1 (default)", agent.JobCount())
+	if agent.TaskCount() != 1 {
+		t.Errorf("JobCount = %d, want 1 (default)", agent.TaskCount())
 	}
 }
 
 func TestLeaderDispatchCountMinusOne(t *testing.T) {
 	store := NewMockJobStore()
 
-	agents := make([]*testAgent, 3)
+	agents := make([]*mockAgent, 3)
 	for i := range agents {
-		agents[i] = newTestAgent()
+		agents[i] = newMockAgent()
 		defer agents[i].Close()
 	}
 
@@ -266,7 +222,7 @@ func TestLeaderDispatchCountMinusOne(t *testing.T) {
 
 	total := 0
 	for _, a := range agents {
-		total += a.JobCount()
+		total += a.TaskCount()
 	}
 	if total != 3 {
 		t.Errorf("Total dispatched = %d, want 3 (all agents)", total)
@@ -275,7 +231,7 @@ func TestLeaderDispatchCountMinusOne(t *testing.T) {
 
 func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	store := NewMockJobStore()
-	agent1 := newTestAgent()
+	agent1 := newMockAgent()
 	defer agent1.Close()
 
 	leader := New("local-agent", store, nil)
@@ -291,24 +247,24 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	leader.DispatchJob(job)
 	time.Sleep(10 * time.Millisecond)
 
-	if agent1.JobCount() != 1 {
-		t.Errorf("Expected 1 dispatch, got %d", agent1.JobCount())
+	if agent1.TaskCount() != 1 {
+		t.Errorf("Expected 1 dispatch, got %d", agent1.TaskCount())
 	}
 
 	// Add new agent - should automatically get the job
-	agent2 := newTestAgent()
+	agent2 := newMockAgent()
 	defer agent2.Close()
 	leader.Heartbeat("agent-b", agent2.URL(), nil, time.Time{})
 	time.Sleep(50 * time.Millisecond)
 
-	if agent2.JobCount() != 1 {
-		t.Errorf("New agent should get job, got %d", agent2.JobCount())
+	if agent2.TaskCount() != 1 {
+		t.Errorf("New agent should get job, got %d", agent2.TaskCount())
 	}
 }
 
 func TestLeaderConcurrentDispatchAndStop(t *testing.T) {
 	store := NewMockJobStore()
-	agent := newTestAgent()
+	agent := newMockAgent()
 	defer agent.Close()
 
 	leader := New("local-agent", store, nil)

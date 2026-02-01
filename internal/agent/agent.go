@@ -60,7 +60,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 			RootfsBase:   cfg.Paths.RootfsBase,
 			ArtifactsDir: cfg.Paths.Artifacts,
 			MaxCPUShares: cfg.Capacity.CPUShares,
-			Chroot:       cfg.Runner.Chroot,
+			Isolate:      cfg.Runner.Isolate,
 		}
 		r = runner.NewProcessRunner(runnerCfg)
 	}

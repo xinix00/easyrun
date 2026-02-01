@@ -46,7 +46,7 @@ type PathsConfig struct {
 
 // RunnerConfig holds runner configuration
 type RunnerConfig struct {
-	Chroot bool `yaml:"chroot"` // Enable chroot isolation (requires static binaries)
+	Isolate bool `yaml:"isolate"` // Enable process isolation (chroot on Linux, sandbox on macOS). Default: true
 }
 
 // TimeoutsConfig holds timeout configuration
@@ -78,6 +78,9 @@ func DefaultConfig() *Config {
 			RootfsBase: "./data/rootfs",
 			Artifacts:  "./data/artifacts",
 			Cache:      "./data/cache",
+		},
+		Runner: RunnerConfig{
+			Isolate: true, // Security by default
 		},
 		Timeouts: TimeoutsConfig{
 			HealthCheckInterval: 10 * time.Second,

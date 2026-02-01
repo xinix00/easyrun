@@ -68,43 +68,11 @@ func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, 
 		}
 	}
 
-	// Wrap command with memory limit (ulimit)
-	command := r.wrapCommand(job.Command, job.MemoryLimit)
-	cmd := exec.Command("/bin/sh", "-c", command)
-
 	// Build port environment variables
 	portEnvVars := r.buildPortEnvVars(ports)
 
-	if r.config.Chroot {
-		// Chroot mode: run inside chroot jail
-		cmd.Dir = "/"
-		cmd.Env = []string{
-			"HOME=/",
-			"TMPDIR=/tmp",
-			"PATH=/bin:/usr/bin",
-		}
-		cmd.Env = append(cmd.Env, portEnvVars...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Chroot:  taskDir,
-			Setpgid: true,
-		}
-	} else {
-		// Non-chroot mode
-		cmd.Dir = taskDir
-		cmd.Env = []string{
-			fmt.Sprintf("HOME=%s", taskDir),
-			fmt.Sprintf("TMPDIR=%s/tmp", taskDir),
-			"PATH=/usr/local/bin:/usr/bin:/bin",
-		}
-		cmd.Env = append(cmd.Env, portEnvVars...)
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setpgid: true,
-		}
-	}
-
-	for k, v := range job.Env {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
-	}
+	// Setup command with platform-specific isolation
+	cmd := r.setupCommand(job, taskDir, portEnvVars)
 
 	// Setup log broadcasting
 	stdoutBroadcaster := NewLogBroadcaster()
@@ -324,16 +292,36 @@ func (r *ProcessRunner) setupTaskDir(taskID string, job *types.Job) (string, err
 	// Copy /etc/resolv.conf for DNS resolution
 	r.copyFile("/etc/resolv.conf", filepath.Join(taskDir, "resolv.conf"))
 
-	// Setup minimal shell environment for chroot
-	if r.config.Chroot {
-		r.setupChrootEnv(taskDir)
+	// Setup volume mounts (symlinks from host to task dir)
+	for hostPath, taskPath := range job.Volumes {
+		// Ensure host path exists
+		if _, err := os.Stat(hostPath); err != nil {
+			return "", fmt.Errorf("volume host path %s does not exist: %w", hostPath, err)
+		}
+
+		// Create target path inside task dir
+		target := filepath.Join(taskDir, taskPath)
+		targetDir := filepath.Dir(target)
+		if err := os.MkdirAll(targetDir, 0755); err != nil {
+			return "", fmt.Errorf("failed to create volume target dir %s: %w", targetDir, err)
+		}
+
+		// Mount host path to task path
+		if err := r.mountVolume(hostPath, target); err != nil {
+			return "", fmt.Errorf("failed to mount volume %s -> %s: %w", hostPath, target, err)
+		}
+	}
+
+	// Setup environment for isolation (platform-specific)
+	if r.config.Isolate {
+		r.setupIsolationEnv(taskDir)
 	}
 
 	return taskDir, nil
 }
 
-// setupChrootEnv creates symlinks for minimal shell environment in chroot
-func (r *ProcessRunner) setupChrootEnv(taskDir string) {
+// setupIsolationEnv creates symlinks for minimal shell environment (Linux chroot)
+func (r *ProcessRunner) setupIsolationEnv(taskDir string) {
 	// Create directories
 	dirs := []string{
 		filepath.Join(taskDir, "bin"),
@@ -368,6 +356,13 @@ func (r *ProcessRunner) cleanupTaskDir(taskID string) {
 	r.mu.Unlock()
 
 	if taskDir != "" {
+		// Unmount any volumes before removing
+		filepath.Walk(taskDir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() && path != taskDir {
+				r.unmountVolume(path) // ignore errors, may not be a mount
+			}
+			return nil
+		})
 		os.RemoveAll(taskDir)
 	}
 }

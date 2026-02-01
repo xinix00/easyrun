@@ -36,6 +36,7 @@ type Config struct {
 	// MaxCPUShares is the total CPU shares for nice calculation
 	MaxCPUShares int
 
-	// Chroot enables chroot isolation (requires static binaries)
-	Chroot bool
+	// Isolate enables process isolation (chroot on Linux, sandbox on macOS)
+	// Default: true for security
+	Isolate bool
 }
