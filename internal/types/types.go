@@ -43,7 +43,8 @@ const (
 
 // Job defines what the user wants to run
 type Job struct {
-	Name         string            `json:"name"`                     // unique identifier
+	ID           string            `json:"id,omitempty"`             // unique ID (generated)
+	Name         string            `json:"name"`                     // user-facing name (for upsert)
 	Artifact     *Artifact         `json:"artifact,omitempty"`       // binary/assets to download
 	Command      string            `json:"command"`
 	Count        int               `json:"count,omitempty"`          // number of instances (default 1)

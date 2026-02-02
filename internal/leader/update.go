@@ -47,15 +47,15 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 	}
 
 	for i := 0; i < count; i++ {
-		log.Printf("Rolling update %d/%d", i+1, count)
+		log.Printf("Rolling update %d/%d (old ID %s → new ID %s)", i+1, count, old.ID, new.ID)
 
-		// Start new instance first
+		// Start new instance first (tracked under new.ID)
 		if err := l.dispatchToAvailableAgent(new); err != nil {
 			return fmt.Errorf("failed at instance %d/%d: %w", i+1, count, err)
 		}
 
-		// Only stop old after new is running
-		l.stopOneInstance(old.Name)
+		// Only stop old after new is running (tracked under old.ID)
+		l.stopOneInstance(old)
 
 		if i < count-1 {
 			time.Sleep(rollingUpdateDelay)
@@ -68,7 +68,7 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 
 // updateRecreate: KILL all → dispatch all
 func (l *Leader) updateRecreate(old, new *types.Job) error {
-	l.StopJob(old.Name)
+	l.DeleteJobByID(old)
 	return l.DispatchJob(new)
 }
 
@@ -78,18 +78,18 @@ func (l *Leader) updateBlueGreen(old, new *types.Job) error {
 	if err := l.DispatchJob(new); err != nil {
 		return err
 	}
-	l.StopJob(old.Name)
+	l.DeleteJobByID(old)
 	return nil
 }
 
-// stopOneInstance stops one instance of a job
-func (l *Leader) stopOneInstance(jobName string) {
+// stopOneInstance stops one instance of a job (uses job.ID for placement, job.Name for agent)
+func (l *Leader) stopOneInstance(job *types.Job) {
 	agentID := query(l, func(s *leaderState) string {
-		if len(s.placement[jobName]) == 0 {
+		if len(s.placement[job.ID]) == 0 {
 			return ""
 		}
-		id := s.placement[jobName][0]
-		s.placement[jobName] = s.placement[jobName][1:]
+		id := s.placement[job.ID][0]
+		s.placement[job.ID] = s.placement[job.ID][1:]
 		return id
 	})
 
@@ -102,17 +102,17 @@ func (l *Leader) stopOneInstance(jobName string) {
 	})
 
 	if agent != nil {
-		l.stopTaskOnAgent(agent, jobName)
+		l.deleteTaskOnAgent(agent, job.Name)
 	}
 }
 
-// stopTaskOnAgent stops a job on specific agent
-func (l *Leader) stopTaskOnAgent(agent *types.Agent, jobName string) {
-	url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobName)
+// deleteTaskOnAgent deletes a job on specific agent
+func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobName string) {
+	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobName)
 	req, _ := http.NewRequest(http.MethodDelete, url, nil)
 	resp, err := l.httpClient.Do(req)
 	if err != nil {
-		log.Printf("Failed to stop %s on %s: %v", jobName, agent.ID, err)
+		log.Printf("Failed to delete %s on %s: %v", jobName, agent.ID, err)
 		return
 	}
 	resp.Body.Close()

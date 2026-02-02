@@ -144,7 +144,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/capacity", a.handleCapacity)
 	mux.HandleFunc("/tasks", a.handleTasks)
 	mux.HandleFunc("/run", a.handleRun)
-	mux.HandleFunc("/stop/", a.handleStop)
+	mux.HandleFunc("/delete/", a.handleDelete)
 	mux.HandleFunc("/logs/", a.handleLogs)
 	mux.HandleFunc("/leader", a.handleLeader)
 

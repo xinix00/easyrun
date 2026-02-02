@@ -64,7 +64,7 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 		}
 
 		l.do(func(s *leaderState) {
-			s.placement[job.Name] = append(s.placement[job.Name], agent.ID)
+			s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
 		})
 		return nil
 	}
@@ -73,12 +73,13 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 }
 
 
-// StopJob sends stop requests to all agents running instances of this job
-func (l *Leader) StopJob(jobID string) {
-	// Get agents and clear placement
+// DeleteJobByID sends delete requests to all agents running instances of this job
+// Uses job.ID for placement tracking, job.Name for agent communication
+func (l *Leader) DeleteJobByID(job *types.Job) {
+	// Get agents and clear placement (by ID)
 	agentIDs := query(l, func(s *leaderState) []string {
-		ids := s.placement[jobID]
-		delete(s.placement, jobID)
+		ids := s.placement[job.ID]
+		delete(s.placement, job.ID)
 		return ids
 	})
 
@@ -97,19 +98,31 @@ func (l *Leader) StopJob(jobID string) {
 		return result
 	})
 
-	// Stop on all agents (outside state loop - HTTP can block)
+	// Delete on all agents (uses Name for agent endpoint)
 	ctx := context.Background()
 	for _, agent := range agents {
-		url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobID)
+		url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, job.Name)
 		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 		if err != nil {
-			log.Printf("Failed to create stop request for agent %s: %v", agent.ID, err)
+			log.Printf("Failed to create delete request for agent %s: %v", agent.ID, err)
 			continue
 		}
 		if _, err := l.httpClient.Do(req); err != nil {
-			log.Printf("Failed to stop job %s on agent %s: %v", jobID, agent.ID, err)
+			log.Printf("Failed to delete job %s on agent %s: %v", job.Name, agent.ID, err)
 		}
 	}
+
+	log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(agents))
+}
+
+// DeleteJob finds a job by name and deletes it (for API compatibility)
+func (l *Leader) DeleteJob(jobName string) {
+	job := l.FindJobByName(jobName)
+	if job == nil {
+		log.Printf("Job %s not found for deletion", jobName)
+		return
+	}
+	l.DeleteJobByID(job)
 }
 
 // nextAgent returns the next agent in round-robin order

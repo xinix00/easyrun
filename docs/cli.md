@@ -89,11 +89,13 @@ Use `--count -1` to run on every agent:
 
 New agents automatically receive the job on registration.
 
-### Job stoppen
+### Job verwijderen
 
 ```bash
-./bin/easyrun stop <job-id>
+./bin/easyrun delete <job-name>
 ```
+
+Verwijdert de job en stopt alle bijbehorende tasks.
 
 ## Agents
 

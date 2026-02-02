@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -12,6 +14,13 @@ import (
 	"easyrun/internal/types"
 	"easyrun/pkg/httputil"
 )
+
+// generateID creates a random hex ID
+func generateID() string {
+	b := make([]byte, 8)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
 
 // Server provides the HTTP API for the leader
 type Server struct {
@@ -38,7 +47,7 @@ func NewServer(l *leader.Leader, addr string) *Server {
 	// Jobs
 	mux.HandleFunc("GET /v1/jobs", s.handleGetJobs)
 	mux.HandleFunc("POST /v1/jobs", s.handleRunJob)
-	mux.HandleFunc("DELETE /v1/jobs/", s.handleStopJob)
+	mux.HandleFunc("DELETE /v1/jobs/", s.handleDeleteJob)
 
 	// Status
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
@@ -147,10 +156,14 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Always generate new ID (during updates, old and new job coexist temporarily)
+	job.ID = generateID()
+
 	// Check if job with this name already exists (UPDATE)
 	existingJob := s.leader.FindJobByName(job.Name)
 	if existingJob != nil {
-		log.Printf("Job %s exists, performing update (policy=%s)", job.Name, job.UpdatePolicy)
+		log.Printf("Job %s exists (old ID %s), updating to new ID %s (policy=%s)",
+			job.Name, existingJob.ID, job.ID, job.UpdatePolicy)
 
 		if err := s.leader.UpdateJob(&job); err != nil {
 			httputil.WriteError(w, http.StatusServiceUnavailable, err.Error())
@@ -158,6 +171,7 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		}
 
 		httputil.WriteJSON(w, http.StatusOK, map[string]string{
+			"id":     job.ID,
 			"name":   job.Name,
 			"status": "updated",
 			"policy": string(job.UpdatePolicy),
@@ -165,27 +179,27 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// New job - INSERT
 	if err := s.leader.DispatchJob(&job); err != nil {
 		httputil.WriteError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
+		"id":     job.ID,
 		"name":   job.Name,
 		"status": "dispatched",
 	})
 }
 
-// handleStopJob stops a job on all agents
-func (s *Server) handleStopJob(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
-	if id == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job id required")
+// handleDeleteJob deletes a job and cleans up all its tasks
+func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
+	name := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job name required")
 		return
 	}
 
-	s.leader.StopJob(id)
+	s.leader.DeleteJob(name)
 	w.WriteHeader(http.StatusNoContent)
 }
 

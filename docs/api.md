@@ -58,7 +58,7 @@ Agents send this every 10s to register/renew themselves:
 
 ```
 POST   /v1/jobs            # Run or update job (upsert based on name)
-DELETE /v1/jobs/{id}       # Stop job
+DELETE /v1/jobs/{name}     # Delete job and all its tasks
 ```
 
 #### Run or Update Job (Upsert)
@@ -219,13 +219,13 @@ Start a job:
 }
 ```
 
-### Stop (internal, called by leader)
+### Delete (internal, called by leader)
 
 ```
-DELETE /stop/{job_id}
+DELETE /delete/{job_name}
 ```
 
-Stops all tasks of a job on this agent.
+Deletes a job and cleans up all its tasks on this agent.
 
 ### Logs (streaming)
 

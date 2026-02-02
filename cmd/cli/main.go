@@ -34,7 +34,7 @@ func main() {
 		},
 		Commands: []*cli.Command{
 			runCommand(),
-			stopCommand(),
+			deleteCommand(),
 			statusCommand(),
 			agentsCommand(),
 			logsCommand(),
@@ -64,12 +64,12 @@ func runCommand() *cli.Command {
 	}
 }
 
-func stopCommand() *cli.Command {
+func deleteCommand() *cli.Command {
 	return &cli.Command{
-		Name:      "stop",
-		Usage:     "Stop a job",
-		ArgsUsage: "<job-id>",
-		Action:    stopJob,
+		Name:      "delete",
+		Usage:     "Delete a job and all its tasks",
+		ArgsUsage: "<job-name>",
+		Action:    deleteJob,
 	}
 }
 
@@ -149,18 +149,18 @@ func runJob(c *cli.Context) error {
 	return nil
 }
 
-func stopJob(c *cli.Context) error {
+func deleteJob(c *cli.Context) error {
 	if c.NArg() < 1 {
-		return fmt.Errorf("job id required")
+		return fmt.Errorf("job name required")
 	}
-	jobID := c.Args().First()
+	jobName := c.Args().First()
 
-	_, err := doRequest("DELETE", "/v1/jobs/"+jobID, nil)
+	_, err := doRequest("DELETE", "/v1/jobs/"+jobName, nil)
 	if err != nil {
 		return err
 	}
 
-	fmt.Printf("Job '%s' stop requested\n", jobID)
+	fmt.Printf("Job '%s' deleted\n", jobName)
 	return nil
 }
 

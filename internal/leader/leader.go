@@ -117,11 +117,14 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 		log.Printf("Agent %s has newer state, syncing", id)
 		l.jobStore.SyncJobs(agentJobs, agentStateTime)
 
-		// Update placement for these jobs
+		// Update placement for these jobs (by ID)
 		l.do(func(s *leaderState) {
 			for _, job := range agentJobs {
-				if !slices.Contains(s.placement[job.Name], id) {
-					s.placement[job.Name] = append(s.placement[job.Name], id)
+				if job.ID == "" {
+					continue // Skip jobs without ID (legacy)
+				}
+				if !slices.Contains(s.placement[job.ID], id) {
+					s.placement[job.ID] = append(s.placement[job.ID], id)
 				}
 			}
 		})
@@ -132,11 +135,14 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 	if id != l.localAgentID && len(agentJobs) > 0 {
 		l.do(func(s *leaderState) {
 			for _, job := range agentJobs {
-				if len(s.placement[job.Name]) == 0 {
+				if job.ID == "" {
+					continue // Skip jobs without ID (legacy)
+				}
+				if len(s.placement[job.ID]) == 0 {
 					l.jobStore.StoreJob(job)
 				}
-				if !slices.Contains(s.placement[job.Name], id) {
-					s.placement[job.Name] = append(s.placement[job.Name], id)
+				if !slices.Contains(s.placement[job.ID], id) {
+					s.placement[job.ID] = append(s.placement[job.ID], id)
 				}
 			}
 		})
@@ -191,11 +197,11 @@ func (l *Leader) GetPlacement(jobID string) []string {
 func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
 	agent := &types.Agent{ID: agentID, Endpoint: endpoint}
 	for _, job := range l.jobStore.GetJobs() {
-		if job.Count != -1 {
+		if job.Count != -1 || job.ID == "" {
 			continue
 		}
 		hasJob := query(l, func(s *leaderState) bool {
-			return slices.Contains(s.placement[job.Name], agentID)
+			return slices.Contains(s.placement[job.ID], agentID)
 		})
 		if hasJob {
 			continue
@@ -205,7 +211,7 @@ func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
 			continue
 		}
 		l.do(func(s *leaderState) {
-			s.placement[job.Name] = append(s.placement[job.Name], agentID)
+			s.placement[job.ID] = append(s.placement[job.ID], agentID)
 		})
 	}
 }

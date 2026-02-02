@@ -28,7 +28,7 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 ```bash
 ./bin/easyrun --leader localhost:9080 status
 ./bin/easyrun --leader localhost:9080 run --name test --command "sleep 60"
-./bin/easyrun --leader localhost:9080 stop <job-id>
+./bin/easyrun --leader localhost:9080 delete <job-name>
 ```
 
 ## Project Structuur

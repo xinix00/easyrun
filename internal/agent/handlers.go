@@ -118,21 +118,21 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusCreated, task)
 }
 
-// handleStop stops a job
-func (a *Agent) handleStop(w http.ResponseWriter, r *http.Request) {
+// handleDelete deletes a job and cleans up all its tasks
+func (a *Agent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	jobID := strings.TrimPrefix(r.URL.Path, "/stop/")
-	if jobID == "" {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job_id required"})
+	jobName := strings.TrimPrefix(r.URL.Path, "/delete/")
+	if jobName == "" {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job name required"})
 		return
 	}
 
-	stopped := a.stopJob(jobID)
-	httputil.WriteJSON(w, http.StatusOK, map[string]int{"stopped": stopped})
+	deleted := a.deleteJob(jobName)
+	httputil.WriteJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
 }
 
 // startJob starts a job and returns the task
@@ -256,12 +256,10 @@ func (a *Agent) restartTask(task *types.Task) {
 	log.Printf("Restarted task %s (job %s), restart #%d", task.ID, job.Name, restartCount+1)
 }
 
-// stopJob stops all tasks for a job
-func (a *Agent) stopJob(jobName string) int {
-	// Get tasks to stop and remove job from state
+// deleteJob removes job definition AND cleans up all tasks (stops running, removes all)
+func (a *Agent) deleteJob(jobName string) int {
+	// Get running tasks to stop
 	tasksToStop := query(a, func(s *agentState) []*types.Task {
-		delete(s.jobs, jobName) // Remove job so it won't restart
-
 		var tasks []*types.Task
 		for _, task := range s.tasks {
 			if task.JobName == jobName && task.State == types.TaskRunning {
@@ -271,26 +269,30 @@ func (a *Agent) stopJob(jobName string) int {
 		return tasks
 	})
 
-	// Stop tasks outside of state loop (runner.Stop can block)
-	stopped := 0
+	// Stop running tasks outside of state loop (runner.Stop can block)
 	for _, task := range tasksToStop {
 		if err := a.runner.Stop(task); err != nil {
 			log.Printf("Failed to stop task %s: %v", task.ID, err)
-		} else {
-			a.do(func(s *agentState) {
-				if t := s.tasks[task.ID]; t != nil {
-					t.State = types.TaskStopped
-				}
-			})
-			stopped++
 		}
 	}
 
-	// Persist state after job removal
-	if stopped > 0 {
-		a.SaveState()
-	}
-	return stopped
+	// Remove job and ALL its tasks from state
+	deleted := query(a, func(s *agentState) int {
+		delete(s.jobs, jobName)
+
+		count := 0
+		for id, task := range s.tasks {
+			if task.JobName == jobName {
+				delete(s.tasks, id)
+				count++
+			}
+		}
+		return count
+	})
+
+	a.SaveState()
+	log.Printf("Deleted job %s: %d tasks cleaned up", jobName, deleted)
+	return deleted
 }
 
 // handleLogs streams task logs (stdout or stderr)
