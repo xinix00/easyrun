@@ -51,13 +51,13 @@ func (r *ProcessRunner) unmountVolume(targetPath string) error {
 	return syscall.Unmount(targetPath, 0)
 }
 
-// setupCommand configures the command with optional chroot isolation
+// setupCommand configures the command with optional namespace isolation
 func (r *ProcessRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []string) *exec.Cmd {
 	command := r.wrapCommand(job.Command, job.MemoryLimit)
 	cmd := exec.Command("/bin/sh", "-c", command)
 
 	if r.config.Isolate {
-		// Chroot mode: run inside chroot jail
+		// Full isolation: chroot + namespaces (container-like)
 		cmd.Dir = "/"
 		cmd.Env = []string{
 			"HOME=/",
@@ -68,6 +68,11 @@ func (r *ProcessRunner) setupCommand(job *types.Job, taskDir string, portEnvVars
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Chroot:  taskDir,
 			Setpgid: true,
+			Cloneflags: syscall.CLONE_NEWPID | // Own PID namespace (PID 1 inside)
+				syscall.CLONE_NEWNS | // Own mount namespace
+				syscall.CLONE_NEWUTS | // Own hostname
+				syscall.CLONE_NEWIPC, // Own IPC namespace
+			// Note: CLONE_NEWNET omitted - requires veth setup
 		}
 	} else {
 		// Non-isolated mode
