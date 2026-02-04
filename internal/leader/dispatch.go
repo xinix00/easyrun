@@ -175,19 +175,26 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 		timeout = job.HealthCheck.InitialTimeout
 	}
 
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
-		tasks, err := l.fetchAgentTasks(agent)
-		if err == nil {
-			for _, task := range tasks {
-				if task.JobName == job.Name && task.State == types.TaskRunning {
-					log.Printf("Job %s dispatched to agent %s", job.Name, agent.ID)
-					return nil
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(verifyInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("task didn't start on agent %s (timeout)", agent.ID)
+		case <-ticker.C:
+			tasks, err := l.fetchAgentTasks(ctx, agent)
+			if err == nil {
+				for _, task := range tasks {
+					if task.JobName == job.Name && task.State == types.TaskRunning {
+						log.Printf("Job %s dispatched to agent %s", job.Name, agent.ID)
+						return nil
+					}
 				}
 			}
 		}
-		time.Sleep(verifyInterval)
 	}
-
-	return fmt.Errorf("task didn't start on agent %s", agent.ID)
 }

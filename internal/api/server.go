@@ -2,8 +2,6 @@ package api
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -13,13 +11,13 @@ import (
 	"easyrun/internal/leader"
 	"easyrun/internal/types"
 	"easyrun/pkg/httputil"
+
+	"github.com/google/uuid"
 )
 
-// generateID creates a random hex ID
+// generateID creates a random UUID (reuses existing dependency)
 func generateID() string {
-	b := make([]byte, 8)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	return uuid.New().String()
 }
 
 // Server provides the HTTP API for the leader

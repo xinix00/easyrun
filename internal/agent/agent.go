@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"easyrun/internal/runner"
@@ -51,6 +52,8 @@ type Agent struct {
 	server     *http.Server
 	getLeader  func() string // returns current leader address (for proxying)
 	httpClient *http.Client
+
+	needsSave atomic.Bool // flag for debounced persistence
 }
 
 // New creates a new agent with optional runner (nil uses default ProcessRunner)
@@ -75,6 +78,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		sysInfo:    GetSystemInfo(), // detect once at startup
 		ops:        make(chan func(*agentState), stateChannelBufferSize),
 		httpClient: &http.Client{Timeout: proxyTimeout},
+		// needsSave is zero-initialized (false)
 	}
 }
 
@@ -276,7 +280,12 @@ func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 		}
 		s.stateTime = updated
 	})
-	a.SaveState()
+	a.scheduleSave()
+}
+
+// scheduleSave signals that state should be persisted (debounced by monitor loop)
+func (a *Agent) scheduleSave() {
+	a.needsSave.Store(true)
 }
 
 // LoadState loads jobs from state.json on startup

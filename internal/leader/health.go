@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"easyrun/internal/types"
@@ -95,40 +94,55 @@ func (l *Leader) redispatchJobsFrom(failedAgentID string) {
 	}
 }
 
-// GetClusterStatus fetches status from all agents
+// GetClusterStatus fetches status from all agents (parallel, no goroutine leaks!)
 func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	agents := l.GetAgents()
-
 	result := make(map[string][]*types.Task)
-	var wg sync.WaitGroup
-	var mu sync.Mutex
 
+	// Context with timeout - cancels all goroutines when done
+	ctx, cancel := context.WithTimeout(context.Background(), httpClientTimeout)
+	defer cancel()
+
+	// Channel-based concurrency - no mutexes needed!
+	type agentResult struct {
+		agentID string
+		tasks   []*types.Task
+	}
+	resultCh := make(chan agentResult, len(agents))
+
+	// Fetch from all agents in parallel
 	for _, agent := range agents {
-		wg.Add(1)
 		go func(a *types.Agent) {
-			defer wg.Done()
-
-			tasks, err := l.fetchAgentTasks(a)
+			tasks, err := l.fetchAgentTasks(ctx, a)
 			if err != nil {
 				log.Printf("Failed to fetch tasks from %s: %v", a.ID, err)
 				return
 			}
-
-			mu.Lock()
-			result[a.ID] = tasks
-			mu.Unlock()
+			resultCh <- agentResult{agentID: a.ID, tasks: tasks}
 		}(agent)
 	}
 
-	wg.Wait()
+	// Collect results (context cancellation stops all goroutines)
+	collected := 0
+	for collected < len(agents) {
+		select {
+		case res := <-resultCh:
+			result[res.agentID] = res.tasks
+			collected++
+		case <-ctx.Done():
+			log.Printf("GetClusterStatus timeout after collecting %d/%d agents", collected, len(agents))
+			return result
+		}
+	}
+
 	return result
 }
 
 // fetchAgentTasks gets the task list from an agent
-func (l *Leader) fetchAgentTasks(agent *types.Agent) ([]*types.Task, error) {
+func (l *Leader) fetchAgentTasks(ctx context.Context, agent *types.Agent) ([]*types.Task, error) {
 	url := fmt.Sprintf("%s/tasks", agent.Endpoint)
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}

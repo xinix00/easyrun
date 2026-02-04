@@ -18,9 +18,18 @@ func (a *Agent) monitorTasks(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			// Final save on shutdown
+			if a.needsSave.Load() {
+				a.SaveState()
+			}
 			return
 		case <-ticker.C:
 			a.checkTasks()
+
+			// Piggyback state persistence (debounced)
+			if a.needsSave.CompareAndSwap(true, false) {
+				a.SaveState()
+			}
 		}
 	}
 }

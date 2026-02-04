@@ -152,7 +152,7 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 		s.jobs[job.Name] = job
 		s.tasks[task.ID] = task
 	})
-	a.SaveState()
+	a.scheduleSave()
 
 	log.Printf("Started task %s (job %s) with ports %v, pid %d", task.ID, job.Name, ports, task.Pid)
 	return task, nil
@@ -290,7 +290,7 @@ func (a *Agent) deleteJob(jobName string) int {
 		return count
 	})
 
-	a.SaveState()
+	a.scheduleSave()
 	log.Printf("Deleted job %s: %d tasks cleaned up", jobName, deleted)
 	return deleted
 }
