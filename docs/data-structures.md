@@ -144,8 +144,7 @@ A running instance of a Job.
 ```go
 type Task struct {
     ID           string         // Unique identifier
-    JobID        string         // Which job this is
-    JobName      string         // Job name (for display)
+    JobName      string         // Job name (which job this task belongs to)
     Ports        map[string]int // Named port -> port number
     Pid          int            // Process ID
     State        TaskState      // running, stopped, failed
@@ -153,6 +152,8 @@ type Task struct {
     RestartCount int            // Number of times restarted
 }
 ```
+
+**Note:** Task has `JobName` (not `JobID`). Use `task.JobName` to look up the job.
 
 **Ports:** Task gets ENV vars `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all allocated ports.
 

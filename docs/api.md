@@ -154,12 +154,14 @@ URL scheme → downloader:
 **Response (UPDATE):**
 ```json
 {
-  "id": "abc123",
+  "id": "def456",
   "name": "api",
   "status": "updated",
   "policy": "rolling"
 }
 ```
+
+**Note:** When updating, a **new Job ID is generated** (old and new version coexist temporarily during update). Job **name** is the unique key for upsert.
 
 **Update Policies:**
 
@@ -175,13 +177,13 @@ URL scheme → downloader:
 POST /v1/jobs {"name": "api", "command": "./app-v1", "count": 3}
 → {"status": "dispatched", "id": "abc123"}
 
-# Update to v2 (rolling - zero downtime)
+# Update to v2 (rolling - zero downtime, NEW ID generated)
 POST /v1/jobs {"name": "api", "command": "./app-v2", "count": 3}
-→ {"status": "updated", "id": "abc123", "policy": "rolling"}
+→ {"status": "updated", "id": "def456", "policy": "rolling"}
 
-# Update to v3 (recreate - with downtime)
+# Update to v3 (recreate - with downtime, NEW ID again)
 POST /v1/jobs {"name": "api", "command": "./app-v3", "count": 3, "update_policy": "recreate"}
-→ {"status": "updated", "id": "abc123", "policy": "recreate"}
+→ {"status": "updated", "id": "ghi789", "policy": "recreate"}
 ```
 
 **Scheduling:**
