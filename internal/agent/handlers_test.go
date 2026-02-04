@@ -217,7 +217,7 @@ func TestHandleRunRunnerError(t *testing.T) {
 	}
 }
 
-func TestHandleStopSuccess(t *testing.T) {
+func TestHandleDeleteSuccess(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
@@ -238,10 +238,10 @@ func TestHandleStopSuccess(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	req := httptest.NewRequest(http.MethodDelete, "/stop/test", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/delete/test", nil)
 	w := httptest.NewRecorder()
 
-	agent.handleStop(w, req)
+	agent.handleDelete(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("Status code = %d, want %d", w.Code, http.StatusOK)
@@ -252,42 +252,42 @@ func TestHandleStopSuccess(t *testing.T) {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
-	if resp["stopped"] != 1 {
-		t.Errorf("stopped = %d, want 1", resp["stopped"])
+	if resp["deleted"] != 1 {
+		t.Errorf("deleted = %d, want 1", resp["deleted"])
 	}
 }
 
-func TestHandleStopMethodNotAllowed(t *testing.T) {
+func TestHandleDeleteMethodNotAllowed(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := httptest.NewRequest(http.MethodPost, "/stop/job-1", nil)
+	req := httptest.NewRequest(http.MethodPost, "/delete/job-1", nil)
 	w := httptest.NewRecorder()
 
-	agent.handleStop(w, req)
+	agent.handleDelete(w, req)
 
 	if w.Code != http.StatusMethodNotAllowed {
 		t.Errorf("Status code = %d, want %d", w.Code, http.StatusMethodNotAllowed)
 	}
 }
 
-func TestHandleStopMissingJobID(t *testing.T) {
+func TestHandleDeleteMissingJobName(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := httptest.NewRequest(http.MethodDelete, "/stop/", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/delete/", nil)
 	w := httptest.NewRecorder()
 
-	agent.handleStop(w, req)
+	agent.handleDelete(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("Status code = %d, want %d", w.Code, http.StatusBadRequest)
 	}
 }
 
-func TestHandleStopNonExistentJob(t *testing.T) {
+func TestHandleDeleteNonExistentJob(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
@@ -298,12 +298,12 @@ func TestHandleStopNonExistentJob(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	req := httptest.NewRequest(http.MethodDelete, "/stop/nonexistent", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/delete/nonexistent", nil)
 	w := httptest.NewRecorder()
 
-	agent.handleStop(w, req)
+	agent.handleDelete(w, req)
 
-	// Should succeed with 0 stopped
+	// Should succeed with 0 deleted
 	if w.Code != http.StatusOK {
 		t.Errorf("Status code = %d, want %d", w.Code, http.StatusOK)
 	}
@@ -311,8 +311,8 @@ func TestHandleStopNonExistentJob(t *testing.T) {
 	var resp map[string]int
 	json.NewDecoder(w.Body).Decode(&resp)
 
-	if resp["stopped"] != 0 {
-		t.Errorf("stopped = %d, want 0", resp["stopped"])
+	if resp["deleted"] != 0 {
+		t.Errorf("deleted = %d, want 0", resp["deleted"])
 	}
 }
 

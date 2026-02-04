@@ -97,19 +97,10 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 // DeleteJobByID sends delete requests to all agents running instances of this job
 // Uses job.ID for placement tracking, job.Name for agent communication
 func (l *Leader) DeleteJobByID(job *types.Job) {
-	// Get agents and clear placement (by ID)
-	agentIDs := query(l, func(s *leaderState) []string {
-		ids := s.placement[job.ID]
-		delete(s.placement, job.ID)
-		return ids
-	})
-
-	if len(agentIDs) == 0 {
-		return
-	}
-
-	// Get agent endpoints
 	agents := query(l, func(s *leaderState) []*types.Agent {
+		agentIDs := s.placement[job.ID]
+		delete(s.placement, job.ID)
+
 		var result []*types.Agent
 		for _, id := range agentIDs {
 			if a := s.agents[id]; a != nil {
@@ -119,7 +110,11 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 		return result
 	})
 
-	// Delete on all agents (uses Name for agent endpoint)
+	if len(agents) == 0 {
+		return
+	}
+
+	// Delete on all agents
 	ctx := context.Background()
 	for _, agent := range agents {
 		url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, job.Name)

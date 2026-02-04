@@ -1,6 +1,7 @@
 package leader
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -12,9 +13,14 @@ func TestVolumeAffinity(t *testing.T) {
 	store := NewMockJobStore()
 	l := New("agent-1", store, nil)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
 	// Register two agents
 	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, time.Time{})
 	l.Heartbeat("agent-2", "http://10.0.0.2:8080", nil, time.Time{})
+	time.Sleep(10 * time.Millisecond)
 
 	agents := l.GetAgents()
 	if len(agents) != 2 {
@@ -31,6 +37,10 @@ func TestRescheduleUnderscheduled(t *testing.T) {
 	store := NewMockJobStore()
 	l := New("agent-1", store, nil)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
 	// Add a job with count=3
 	job := &types.Job{
 		ID:      "job-1",
@@ -44,6 +54,7 @@ func TestRescheduleUnderscheduled(t *testing.T) {
 	l.do(func(s *leaderState) {
 		s.placement[job.ID] = []string{"agent-1"}
 	})
+	time.Sleep(10 * time.Millisecond)
 
 	// Verify under-scheduled
 	placement := l.GetPlacement(job.ID)
@@ -61,6 +72,10 @@ func TestNodeRecovery(t *testing.T) {
 	store := NewMockJobStore()
 	l := New("local", store, nil)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
 	// Job with count=1
 	job := &types.Job{
 		ID:      "job-1",
@@ -73,9 +88,11 @@ func TestNodeRecovery(t *testing.T) {
 
 	// Register node A and dispatch job
 	l.Heartbeat("node-a", "http://10.0.0.1:8080", nil, time.Time{})
+	time.Sleep(10 * time.Millisecond)
 	l.do(func(s *leaderState) {
 		s.placement[job.ID] = []string{"node-a"}
 	})
+	time.Sleep(10 * time.Millisecond)
 
 	// Verify placement
 	if len(l.GetPlacement(job.ID)) != 1 {

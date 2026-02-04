@@ -32,6 +32,7 @@ func TestUpdateJobRolling(t *testing.T) {
 
 	// Deploy initial version
 	oldJob := &types.Job{
+		ID:      "my-app-id",
 		Name:    "my-app",
 		Command: "./app-v1",
 		Count:   3,
@@ -46,14 +47,15 @@ func TestUpdateJobRolling(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify 3 instances running
-	placement := leader.GetPlacement("my-app")
+	// Verify 3 instances running (by ID)
+	placement := leader.GetPlacement("my-app-id")
 	if len(placement) != 3 {
 		t.Fatalf("Expected 3 instances, got %d", len(placement))
 	}
 
-	// Update to new version with rolling policy
+	// Update to new version with rolling policy (new ID will be assigned)
 	newJob := &types.Job{
+		ID:           "my-app-id-v2",
 		Name:         "my-app",
 		Command:      "./app-v2",
 		Count:        3,
@@ -69,8 +71,8 @@ func TestUpdateJobRolling(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify still 3 instances (but with new version)
-	newPlacement := leader.GetPlacement("my-app")
+	// Verify still 3 instances (but with new ID after rolling update)
+	newPlacement := leader.GetPlacement("my-app-id-v2")
 	if len(newPlacement) != 3 {
 		t.Errorf("Expected 3 instances after update, got %d", len(newPlacement))
 	}

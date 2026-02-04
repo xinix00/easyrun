@@ -293,7 +293,7 @@ func TestLeaderMultipleAgentsPartialFailure(t *testing.T) {
 	}
 }
 
-func TestLeaderStopJobNotFound(t *testing.T) {
+func TestLeaderDeleteJobNotFound(t *testing.T) {
 	store := NewMockJobStore()
 	leader := New("local-agent", store, nil)
 
@@ -303,8 +303,8 @@ func TestLeaderStopJobNotFound(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Stopping non-existent job should not panic
-	leader.StopJob("nonexistent-job")
+	// Deleting non-existent job should not panic
+	leader.DeleteJob("nonexistent-job")
 	// If we get here without panic, test passes
 }
 

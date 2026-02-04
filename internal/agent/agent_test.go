@@ -105,7 +105,7 @@ func TestAgentStartJobRunnerError(t *testing.T) {
 	}
 }
 
-func TestAgentStopJob(t *testing.T) {
+func TestAgentDeleteJob(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
@@ -126,15 +126,15 @@ func TestAgentStopJob(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	stopped := agent.stopJob("test-job")
+	deleted := agent.deleteJob("test-job")
 
-	if stopped != 1 {
-		t.Errorf("stopJob returned %d, want 1", stopped)
+	if deleted != 1 {
+		t.Errorf("deleteJob returned %d, want 1", deleted)
 	}
 
 	// Job should be removed
 	if agent.GetJob("test-job") != nil {
-		t.Error("Job should be removed after stop")
+		t.Error("Job should be removed after delete")
 	}
 }
 
@@ -179,7 +179,7 @@ func TestAgentStopAllTasks(t *testing.T) {
 	}
 }
 
-func TestAgentStopJobWithMultipleTasks(t *testing.T) {
+func TestAgentDeleteJobWithMultipleTasks(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
@@ -202,14 +202,14 @@ func TestAgentStopJobWithMultipleTasks(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	stopped := agent.stopJob("test-job")
+	deleted := agent.deleteJob("test-job")
 
-	if stopped != 3 {
-		t.Errorf("stopJob returned %d, want 3", stopped)
+	if deleted != 3 {
+		t.Errorf("deleteJob returned %d, want 3", deleted)
 	}
 }
 
-func TestAgentStopJobNonExistent(t *testing.T) {
+func TestAgentDeleteJobNonExistent(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
@@ -220,9 +220,9 @@ func TestAgentStopJobNonExistent(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	stopped := agent.stopJob("nonexistent")
+	deleted := agent.deleteJob("nonexistent")
 
-	if stopped != 0 {
-		t.Errorf("stopJob returned %d, want 0", stopped)
+	if deleted != 0 {
+		t.Errorf("deleteJob returned %d, want 0", deleted)
 	}
 }

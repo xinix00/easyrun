@@ -125,17 +125,18 @@ func TestLeaderDispatchMultipleInstances(t *testing.T) {
 	}
 }
 
-func TestLeaderStopJobOnMultipleAgents(t *testing.T) {
+func TestLeaderDeleteJobOnMultipleAgents(t *testing.T) {
 	store := NewMockJobStore()
-	store.StoreJob(&types.Job{Name: "test-job", Command: "echo"})
+	// Store job AFTER agents are registered to avoid tryRescheduleUnderscheduled
+	job := &types.Job{ID: "test-job-id", Name: "test-job", Command: "echo"}
 
-	stopCount := 0
+	deleteCount := 0
 	var mu sync.Mutex
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete && r.URL.Path == "/stop/test-job" {
+		if r.Method == http.MethodDelete && r.URL.Path == "/delete/test-job" {
 			mu.Lock()
-			stopCount++
+			deleteCount++
 			mu.Unlock()
 		}
 		w.WriteHeader(http.StatusOK)
@@ -148,21 +149,24 @@ func TestLeaderStopJobOnMultipleAgents(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	// Register agents first (no jobs in store yet, so no rescheduling triggered)
 	leader.Heartbeat("agent-a", server.URL, nil, time.Time{})
 	leader.Heartbeat("agent-b", server.URL, nil, time.Time{})
 	time.Sleep(10 * time.Millisecond)
 
+	// Now store the job and set up placement manually
+	store.StoreJob(job)
 	leader.do(func(s *leaderState) {
-		s.placement["test-job"] = []string{"agent-a", "agent-b"}
+		s.placement["test-job-id"] = []string{"agent-a", "agent-b"}
 	})
 	time.Sleep(10 * time.Millisecond)
 
-	leader.StopJob("test-job")
+	leader.DeleteJob("test-job")
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()
-	if stopCount != 2 {
-		t.Errorf("Stop requests = %d, want 2", stopCount)
+	if deleteCount != 2 {
+		t.Errorf("Delete requests = %d, want 2", deleteCount)
 	}
 	mu.Unlock()
 }
@@ -243,7 +247,7 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	leader.Heartbeat("agent-a", agent1.URL(), nil, time.Time{})
 	time.Sleep(10 * time.Millisecond)
 
-	job := &types.Job{Name: "easydns", Command: "/usr/bin/easydns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
+	job := &types.Job{ID: "easydns-id", Name: "easydns", Command: "/usr/bin/easydns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
 	leader.DispatchJob(job)
 	time.Sleep(10 * time.Millisecond)
 
@@ -255,14 +259,14 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	agent2 := newMockAgent()
 	defer agent2.Close()
 	leader.Heartbeat("agent-b", agent2.URL(), nil, time.Time{})
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond) // Allow time for ensureAllAgentJobs
 
 	if agent2.TaskCount() != 1 {
 		t.Errorf("New agent should get job, got %d", agent2.TaskCount())
 	}
 }
 
-func TestLeaderConcurrentDispatchAndStop(t *testing.T) {
+func TestLeaderConcurrentDispatchAndDelete(t *testing.T) {
 	store := NewMockJobStore()
 	agent := newMockAgent()
 	defer agent.Close()
@@ -291,7 +295,7 @@ func TestLeaderConcurrentDispatchAndStop(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			leader.StopJob("job-" + string(rune('0'+n)))
+			leader.DeleteJob("job-" + string(rune('0'+n)))
 		}(i)
 	}
 
