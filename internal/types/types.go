@@ -45,6 +45,7 @@ const (
 type Job struct {
 	ID           string            `json:"id,omitempty"`             // unique ID (generated)
 	Name         string            `json:"name"`                     // user-facing name (for upsert)
+	AgentID      string            `json:"agent_id,omitempty"`       // pin to specific agent
 	Artifact     *Artifact         `json:"artifact,omitempty"`       // binary/assets to download
 	Command      string            `json:"command"`
 	Count        int               `json:"count,omitempty"`          // number of instances (default 1)

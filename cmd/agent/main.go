@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -39,11 +40,8 @@ func main() {
 		log.Fatal("raft_endpoints is required in config")
 	}
 
-	// Generate node ID if not set
-	nodeID := cfg.Node.ID
-	if nodeID == "" {
-		nodeID = uuid.New().String()[:8]
-	}
+	// Get or create stable node ID
+	nodeID := getOrCreateNodeID(cfg)
 
 	// Auto-detect IP if not set
 	if cfg.Node.IP == "" {
@@ -243,6 +241,36 @@ func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job,
 	}
 
 	return &result, nil
+}
+
+// getOrCreateNodeID returns a stable node ID (config > persisted > generated)
+func getOrCreateNodeID(cfg *config.Config) string {
+	// 1. Config takes priority (user override)
+	if cfg.Node.ID != "" {
+		return cfg.Node.ID
+	}
+
+	// 2. Check persisted ID
+	stateDir := filepath.Dir(cfg.Paths.StateFile)
+	idFile := filepath.Join(stateDir, "node-id")
+	if data, err := os.ReadFile(idFile); err == nil {
+		id := string(bytes.TrimSpace(data))
+		if id != "" {
+			log.Printf("Using persisted node ID: %s", id)
+			return id
+		}
+	}
+
+	// 3. Generate new ID and persist
+	nodeID := uuid.New().String()[:8]
+	os.MkdirAll(stateDir, 0755)
+	if err := os.WriteFile(idFile, []byte(nodeID), 0644); err != nil {
+		log.Printf("Warning: failed to persist node ID: %v", err)
+	} else {
+		log.Printf("Generated and persisted new node ID: %s", nodeID)
+	}
+
+	return nodeID
 }
 
 func getOutboundIP() string {

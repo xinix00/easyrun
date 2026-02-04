@@ -106,9 +106,10 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 		return true
 	})
 
-	// New agent gets count=-1 jobs
+	// New agent gets count=-1 jobs and we try to reschedule under-scheduled jobs
 	if isNew {
 		l.ensureAllAgentJobs(id, endpoint)
+		l.tryRescheduleUnderscheduled(id, endpoint)
 	}
 
 	// If agent has newer state than us, adopt their state
@@ -213,5 +214,42 @@ func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
 		l.do(func(s *leaderState) {
 			s.placement[job.ID] = append(s.placement[job.ID], agentID)
 		})
+	}
+}
+
+// tryRescheduleUnderscheduled attempts to place under-scheduled jobs on new agent
+func (l *Leader) tryRescheduleUnderscheduled(agentID, endpoint string) {
+	agent := &types.Agent{ID: agentID, Endpoint: endpoint}
+
+	for _, job := range l.jobStore.GetJobs() {
+		if job.Count == -1 || job.ID == "" {
+			continue // Handled by ensureAllAgentJobs
+		}
+
+		desired := job.Count
+		if desired <= 0 {
+			desired = 1
+		}
+
+		actual := len(query(l, func(s *leaderState) []string {
+			return s.placement[job.ID]
+		}))
+
+		if actual < desired {
+			missing := desired - actual
+			log.Printf("Job %s under-scheduled (%d/%d), trying new node %s",
+				job.Name, actual, desired, agentID)
+
+			// Try to dispatch missing instances to this new node
+			for i := 0; i < missing; i++ {
+				if err := l.sendJobToAgent(agent, job); err != nil {
+					log.Printf("New node %s cannot run job %s: %v", agentID, job.Name, err)
+					break // Try next job (volumes might not exist on this node)
+				}
+				l.do(func(s *leaderState) {
+					s.placement[job.ID] = append(s.placement[job.ID], agentID)
+				})
+			}
+		}
 	}
 }
