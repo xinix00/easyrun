@@ -15,7 +15,7 @@ import (
 
 // BenchmarkGetAgentsEndpoint measures /v1/agents endpoint throughput
 func BenchmarkGetAgentsEndpoint(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
+	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
 	server := NewServer(l, ":9080")
 
@@ -41,7 +41,7 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 
 // BenchmarkGetJobsEndpoint measures /v1/jobs endpoint throughput
 func BenchmarkGetJobsEndpoint(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
+	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
 	server := NewServer(l, ":9080")
 
@@ -71,7 +71,7 @@ func BenchmarkGetJobsEndpoint(b *testing.B) {
 
 // BenchmarkPostJobEndpoint measures POST /v1/jobs throughput
 func BenchmarkPostJobEndpoint(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
+	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
 	server := NewServer(l, ":9080")
 
@@ -104,7 +104,7 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 
 // BenchmarkHeartbeatEndpoint measures POST /v1/heartbeat throughput
 func BenchmarkHeartbeatEndpoint(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
+	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
 	server := NewServer(l, ":9080")
 
@@ -130,7 +130,7 @@ func BenchmarkHeartbeatEndpoint(b *testing.B) {
 
 // BenchmarkStatusEndpoint measures /v1/status endpoint throughput
 func BenchmarkStatusEndpoint(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
+	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
 	server := NewServer(l, ":9080")
 
@@ -156,7 +156,7 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 
 // BenchmarkConcurrentRequests measures concurrent API request handling
 func BenchmarkConcurrentRequests(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
+	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
 	server := NewServer(l, ":9080")
 
@@ -236,9 +236,13 @@ func BenchmarkJSONDecoding(b *testing.B) {
 	}
 }
 
-// Mock job store for benchmarks
+// mockJobStore for API benchmarks
 type mockJobStore struct {
 	jobs map[string]*types.Job
+}
+
+func newMockJobStore() *mockJobStore {
+	return &mockJobStore{jobs: make(map[string]*types.Job)}
 }
 
 func (m *mockJobStore) GetJobs() []*types.Job {

@@ -1,6 +1,7 @@
 package leader
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -8,10 +9,19 @@ import (
 	"easyrun/internal/types"
 )
 
+// startLeader creates and starts a leader for benchmarking
+func startLeader(store JobStore) (*Leader, context.CancelFunc) {
+	l := New("local-agent", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	go l.stateLoop(ctx)
+	return l, cancel
+}
+
 // BenchmarkDispatchJob measures dispatch throughput
 func BenchmarkDispatchJob(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
-	leader := New("local-agent", store, nil)
+	store := NewMockJobStore()
+	leader, cancel := startLeader(store)
+	defer cancel()
 
 	// Register 10 agents
 	for i := 0; i < 10; i++ {
@@ -29,15 +39,16 @@ func BenchmarkDispatchJob(b *testing.B) {
 			Command: "echo hello",
 			Count:   1,
 		}
-		store.jobs[job.Name] = job
+		store.StoreJob(job)
 		// Dispatch simulation (without actual HTTP calls)
 	}
 }
 
 // BenchmarkHeartbeat measures heartbeat processing throughput
 func BenchmarkHeartbeat(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
-	leader := New("local-agent", store, nil)
+	store := NewMockJobStore()
+	leader, cancel := startLeader(store)
+	defer cancel()
 
 	// Pre-create a job
 	job := &types.Job{
@@ -46,7 +57,7 @@ func BenchmarkHeartbeat(b *testing.B) {
 		Command: "echo test",
 		Count:   1,
 	}
-	store.jobs[job.Name] = job
+	store.StoreJob(job)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -60,8 +71,9 @@ func BenchmarkHeartbeat(b *testing.B) {
 
 // BenchmarkGetAgents measures agent list retrieval
 func BenchmarkGetAgents(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
-	leader := New("local-agent", store, nil)
+	store := NewMockJobStore()
+	leader, cancel := startLeader(store)
+	defer cancel()
 
 	// Register 1000 agents
 	for i := 0; i < 1000; i++ {
@@ -82,8 +94,9 @@ func BenchmarkGetAgents(b *testing.B) {
 
 // BenchmarkFindJobByName measures job lookup performance
 func BenchmarkFindJobByName(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
-	leader := New("local-agent", store, nil)
+	store := NewMockJobStore()
+	leader, cancel := startLeader(store)
+	defer cancel()
 
 	// Create 10000 jobs
 	for i := 0; i < 10000; i++ {
@@ -92,7 +105,7 @@ func BenchmarkFindJobByName(b *testing.B) {
 			Name:    fmt.Sprintf("job-%d", i),
 			Command: "echo test",
 		}
-		store.jobs[job.Name] = job
+		store.StoreJob(job)
 	}
 
 	b.ResetTimer()
@@ -109,8 +122,9 @@ func BenchmarkFindJobByName(b *testing.B) {
 
 // BenchmarkRoundRobinSelection measures round-robin agent selection
 func BenchmarkRoundRobinSelection(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
-	leader := New("local-agent", store, nil)
+	store := NewMockJobStore()
+	leader, cancel := startLeader(store)
+	defer cancel()
 
 	// Register 100 agents
 	for i := 0; i < 100; i++ {
@@ -131,8 +145,9 @@ func BenchmarkRoundRobinSelection(b *testing.B) {
 
 // BenchmarkConcurrentHeartbeats measures concurrent heartbeat throughput
 func BenchmarkConcurrentHeartbeats(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
-	leader := New("local-agent", store, nil)
+	store := NewMockJobStore()
+	leader, cancel := startLeader(store)
+	defer cancel()
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -150,8 +165,9 @@ func BenchmarkConcurrentHeartbeats(b *testing.B) {
 
 // BenchmarkPlacementUpdate measures placement tracking overhead
 func BenchmarkPlacementUpdate(b *testing.B) {
-	store := &mockJobStore{jobs: make(map[string]*types.Job)}
-	leader := New("local-agent", store, nil)
+	store := NewMockJobStore()
+	leader, cancel := startLeader(store)
+	defer cancel()
 
 	// Register agents
 	for i := 0; i < 10; i++ {

@@ -127,7 +127,7 @@ func BenchmarkCapacityCheck(b *testing.B) {
 	cfg := &config.Config{
 		Node:     config.NodeConfig{IP: "127.0.0.1", Port: 8080},
 		Paths:    config.PathsConfig{RootfsBase: "/tmp/bench", StateFile: "/tmp/bench/state.json"},
-		Capacity: config.CapacityConfig{CPUShares: 8192, MemoryBytes: 16 * 1024 * 1024 * 1024},
+		Capacity: config.CapacityConfig{CPUShares: 8192, Memory: 16 * 1024 * 1024 * 1024},
 	}
 
 	agent := New(cfg, "test-agent", &mockRunner{tasks: make(map[string]*types.Task)})
