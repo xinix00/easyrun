@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -224,6 +225,8 @@ func (r *ProcessRunner) Status(task *types.Task) (types.TaskState, error) {
 		if cmd.ProcessState.Success() {
 			return types.TaskStopped, nil
 		}
+		// Log why it failed
+		log.Printf("Task %s failed: %s (exit code: %d)", task.ID, cmd.ProcessState.String(), cmd.ProcessState.ExitCode())
 		return types.TaskFailed, nil
 	}
 
