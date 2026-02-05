@@ -35,19 +35,26 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 		job.ID = generateID()
 	}
 
-	var count int
+	if err := l.dispatchInstances(job, job.Count); err != nil {
+		return err
+	}
+
+	l.jobStore.StoreJob(job)
+	return nil
+}
+
+// dispatchInstances dispatches N instances of a job to agents WITHOUT storing the job.
+// Used by DispatchJob (for new jobs) and redispatchJobsFrom (for rescheduling).
+// count=-1 means run on ALL agents (exactly once per agent)
+func (l *Leader) dispatchInstances(job *types.Job, count int) error {
 	var targetAgents []*types.Agent
 
-	if job.Count == -1 {
+	if count == -1 {
 		// Dispatch to ALL agents (specific list, no round-robin)
 		targetAgents = l.GetAgents()
 		count = len(targetAgents)
-	} else {
-		// Normal count: use round-robin (agents selected dynamically)
-		count = job.Count
-		if count <= 0 {
-			count = 1
-		}
+	} else if count <= 0 {
+		count = 1
 	}
 
 	// Dispatch to agents
@@ -75,7 +82,6 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 		return fmt.Errorf("all agents rejected job")
 	}
 
-	l.jobStore.StoreJob(job)
 	return nil
 }
 
@@ -109,14 +115,7 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 			return fmt.Errorf("node %s not found (job %s requires this node)", job.AgentID, job.Name)
 		}
 
-		if err := l.sendJobToAgent(agent, job); err != nil {
-			return fmt.Errorf("node %s rejected job %s: %w", job.AgentID, job.Name, err)
-		}
-
-		l.do(func(s *leaderState) {
-			s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
-		})
-		return nil
+		return l.dispatchToAgent(agent, job)
 	}
 
 	// No node constraint, try all agents

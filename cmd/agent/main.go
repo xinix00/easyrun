@@ -25,7 +25,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.4.6" // Agent version
+const version = "v0.4.9" // Agent version - KISS refactor: reconcileJobs via GetClusterStatus
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")

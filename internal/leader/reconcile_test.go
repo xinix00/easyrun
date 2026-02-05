@@ -18,8 +18,8 @@ func TestVolumeAffinity(t *testing.T) {
 	go l.stateLoop(ctx)
 
 	// Register two agents
-	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-2", "http://10.0.0.2:8080", nil, nil, time.Time{}, "")
+	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, time.Time{}, "")
+	l.Heartbeat("agent-2", "http://10.0.0.2:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	agents := l.GetAgents()
@@ -87,7 +87,7 @@ func TestNodeRecovery(t *testing.T) {
 	store.StoreJob(job)
 
 	// Register node A and dispatch job
-	l.Heartbeat("node-a", "http://10.0.0.1:8080", nil, nil, time.Time{}, "")
+	l.Heartbeat("node-a", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 	l.do(func(s *leaderState) {
 		s.placement[job.ID] = []string{"node-a"}
@@ -112,7 +112,7 @@ func TestNodeRecovery(t *testing.T) {
 
 	// Node comes back (with STABLE ID!)
 	// isNew = true because it was deleted from agents map
-	l.Heartbeat("node-a", "http://10.0.0.1:8080", nil, nil, time.Time{}, "")
+	l.Heartbeat("node-a", "http://10.0.0.1:8080", nil, time.Time{}, "")
 
 	// tryRescheduleUnderscheduled should have been called
 	// But we can't test actual dispatch without mocking HTTP

@@ -34,7 +34,7 @@ type JobStore interface {
 // leaderState holds all mutable state (owned by single goroutine)
 type leaderState struct {
 	agents     map[string]*types.Agent
-	placement  map[string][]string // jobID -> []agentID
+	placement  map[string][]string // jobID -> []agentID (for round-robin and delete)
 	roundRobin int
 }
 
@@ -94,10 +94,9 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 	return <-result
 }
 
-// Heartbeat updates agent's LastSeen, syncs jobs, and learns placement
+// Heartbeat updates agent's LastSeen and syncs jobs
 // - jobs: all job definitions (for state sync if agent has newer state)
-// - runningTaskCounts: map of jobID -> number of running tasks (for correct placement tracking)
-func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, runningTaskCounts map[string]int, stateTime time.Time, version string) []*types.Job {
+func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime time.Time, version string) []*types.Job {
 	// Register or update agent
 	isNew := query(l, func(s *leaderState) bool {
 		if agent, ok := s.agents[id]; ok {
@@ -121,57 +120,35 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, runningTaskCo
 		l.jobStore.SyncJobs(jobs, stateTime)
 	}
 
-	// Learn placement from task counts (creates correct number of entries per agent)
-	if len(runningTaskCounts) > 0 {
-		query(l, func(s *leaderState) struct{} {
-			for jobID, reportedCount := range runningTaskCounts {
-				// Count current placement entries for this agent
-				currentCount := 0
-				for _, agentID := range s.placement[jobID] {
-					if agentID == id {
-						currentCount++
-					}
-				}
-
-				// Adjust placement to match reported count
-				if reportedCount > currentCount {
-					// Need to ADD entries
-					for i := 0; i < reportedCount-currentCount; i++ {
-						s.placement[jobID] = append(s.placement[jobID], id)
-					}
-				} else if reportedCount < currentCount {
-					// Need to REMOVE entries (agent reports fewer tasks)
-					toRemove := currentCount - reportedCount
-					newPlacement := make([]string, 0, len(s.placement[jobID])-toRemove)
-					for _, agentID := range s.placement[jobID] {
-						if agentID == id && toRemove > 0 {
-							toRemove--
-							continue // Skip this entry
-						}
-						newPlacement = append(newPlacement, agentID)
-					}
-					s.placement[jobID] = newPlacement
-				}
-			}
-			return struct{}{}
-		})
-	}
-
-	// New agent gets count=-1 jobs and we try to reschedule under-scheduled jobs
+	// New agent: reconcile all jobs (handles both count=-1 and regular jobs)
+	// reconcileJobs uses GetClusterStatus to check what's actually running
 	if isNew {
-		l.ensureAllAgentJobs(id, endpoint)
-		l.tryRescheduleUnderscheduled(id, endpoint)
+		l.reconcileJobs()
 	}
 
 	return l.jobStore.GetJobs()
 }
 
-// UnregisterAgent removes an agent and redispatches its jobs
+// UnregisterAgent removes an agent and reconciles jobs
 func (l *Leader) UnregisterAgent(id string) {
 	l.do(func(s *leaderState) {
 		delete(s.agents, id)
+		// Clean up placement entries for this agent
+		for jobID, agents := range s.placement {
+			newPlacement := make([]string, 0, len(agents))
+			for _, agentID := range agents {
+				if agentID != id {
+					newPlacement = append(newPlacement, agentID)
+				}
+			}
+			if len(newPlacement) > 0 {
+				s.placement[jobID] = newPlacement
+			} else {
+				delete(s.placement, jobID)
+			}
+		}
 	})
-	l.redispatchJobsFrom(id)
+	l.reconcileJobs()
 }
 
 // GetAgents returns all registered agents
@@ -213,79 +190,3 @@ func (l *Leader) GetStateTime() time.Time {
 	return l.jobStore.GetStateTime()
 }
 
-// ensureAllAgentJobs dispatches count=-1 jobs to agent if missing
-func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
-	agent := &types.Agent{ID: agentID, Endpoint: endpoint}
-	for _, job := range l.jobStore.GetJobs() {
-		if job.Count != -1 || job.ID == "" {
-			continue
-		}
-		// Skip if agent already has this job (placement learned from heartbeat)
-		if query(l, func(s *leaderState) bool {
-			for _, a := range s.placement[job.ID] {
-				if a == agentID {
-					return true
-				}
-			}
-			return false
-		}) {
-			continue
-		}
-		if err := l.sendJobToAgent(agent, job); err != nil {
-			log.Printf("Failed to dispatch job %s to agent %s: %v", job.Name, agentID, err)
-			continue
-		}
-		l.do(func(s *leaderState) {
-			s.placement[job.ID] = append(s.placement[job.ID], agentID)
-		})
-	}
-}
-
-// tryRescheduleUnderscheduled attempts to place under-scheduled jobs on new agent
-func (l *Leader) tryRescheduleUnderscheduled(agentID, endpoint string) {
-	agent := &types.Agent{ID: agentID, Endpoint: endpoint}
-
-	for _, job := range l.jobStore.GetJobs() {
-		if job.Count == -1 || job.ID == "" {
-			continue // Handled by ensureAllAgentJobs
-		}
-
-		// Skip if agent already has this job (placement learned from heartbeat)
-		if query(l, func(s *leaderState) bool {
-			for _, a := range s.placement[job.ID] {
-				if a == agentID {
-					return true
-				}
-			}
-			return false
-		}) {
-			continue
-		}
-
-		desired := job.Count
-		if desired <= 0 {
-			desired = 1
-		}
-
-		actual := len(query(l, func(s *leaderState) []string {
-			return s.placement[job.ID]
-		}))
-
-		if actual < desired {
-			missing := desired - actual
-			log.Printf("Job %s under-scheduled (%d/%d), trying new node %s",
-				job.Name, actual, desired, agentID)
-
-			// Try to dispatch missing instances to this new node
-			for i := 0; i < missing; i++ {
-				if err := l.sendJobToAgent(agent, job); err != nil {
-					log.Printf("New node %s cannot run job %s: %v", agentID, job.Name, err)
-					break // Try next job (volumes might not exist on this node)
-				}
-				l.do(func(s *leaderState) {
-					s.placement[job.ID] = append(s.placement[job.ID], agentID)
-				})
-			}
-		}
-	}
-}

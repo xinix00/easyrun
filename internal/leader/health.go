@@ -29,67 +29,100 @@ func (l *Leader) Run(ctx context.Context) {
 	}
 }
 
-// checkDeadAgents removes agents that haven't sent heartbeat and redispatches their jobs
+// checkDeadAgents removes agents that haven't sent heartbeat and reconciles jobs
 func (l *Leader) checkDeadAgents() {
-	dead := query(l, func(s *leaderState) []string {
-		var deadAgents []string
+	hadDead := query(l, func(s *leaderState) bool {
+		hadDead := false
 		for id, agent := range s.agents {
 			if time.Since(agent.LastSeen) > l.agentTimeout {
 				log.Printf("Agent %s is dead (no heartbeat for %v)", id, time.Since(agent.LastSeen))
-				deadAgents = append(deadAgents, id)
 				delete(s.agents, id)
+				hadDead = true
 			}
 		}
-		return deadAgents
+		return hadDead
 	})
 
-	for _, agentID := range dead {
-		l.redispatchJobsFrom(agentID)
+	// If any agents died, reconcile all jobs
+	if hadDead {
+		l.reconcileJobs()
 	}
 }
 
-// redispatchJobsFrom moves instances from a failed agent to other agents
-func (l *Leader) redispatchJobsFrom(failedAgentID string) {
-	// Get jobs to redispatch and update placement
-	jobsToRedispatch := query(l, func(s *leaderState) []*types.Job {
-		var jobs []*types.Job
+// reconcileJobs ensures all jobs have the correct number of running instances.
+// It queries the actual cluster state and dispatches missing instances.
+// This is KISS: compare desired vs actual, dispatch the difference.
+// Handles both count=-1 (daemon) and regular jobs.
+func (l *Leader) reconcileJobs() {
+	jobs := l.jobStore.GetJobs()
+	if len(jobs) == 0 {
+		return // Nothing to reconcile
+	}
 
-		for jobID, agentIDs := range s.placement {
-			instancesOnFailedAgent := 0
-			var newAgentList []string
+	agents := l.GetAgents()
+	if len(agents) == 0 {
+		return // No agents to dispatch to
+	}
 
-			for _, agentID := range agentIDs {
-				if agentID == failedAgentID {
-					instancesOnFailedAgent++
-				} else {
-					newAgentList = append(newAgentList, agentID)
-				}
-			}
+	// Get actual running tasks from all agents
+	status := l.GetClusterStatus()
 
-			// Update placement
-			if len(newAgentList) > 0 {
-				s.placement[jobID] = newAgentList
-			} else {
-				delete(s.placement, jobID)
-			}
-
-			// Queue redispatch for lost instances
-			if instancesOnFailedAgent > 0 {
-				if job := l.jobStore.GetJob(jobID); job != nil {
-					jobCopy := *job
-					jobCopy.Count = instancesOnFailedAgent
-					jobs = append(jobs, &jobCopy)
-				}
+	// Build lookup: which agents have which jobs running
+	agentHasJob := make(map[string]map[string]bool) // agentID -> jobName -> running
+	runningPerJob := make(map[string]int)
+	for agentID, tasks := range status {
+		agentHasJob[agentID] = make(map[string]bool)
+		for _, task := range tasks {
+			if task.State == types.TaskRunning {
+				agentHasJob[agentID][task.JobName] = true
+				runningPerJob[task.JobName]++
 			}
 		}
+	}
 
-		return jobs
-	})
+	// Reconcile each job
+	for _, job := range jobs {
+		if job.ID == "" {
+			continue
+		}
 
-	for _, job := range jobsToRedispatch {
-		log.Printf("Redispatching %d instance(s) of job %s from dead agent %s", job.Count, job.Name, failedAgentID)
-		if err := l.DispatchJob(job); err != nil {
-			log.Printf("Failed to redispatch job %s: %v", job.Name, err)
+		if job.Count == -1 {
+			// Daemon job: must run on ALL agents
+			// Rebuild placement from actual state
+			var newPlacement []string
+			for _, agent := range agents {
+				if agentHasJob[agent.ID][job.Name] {
+					newPlacement = append(newPlacement, agent.ID)
+					continue // Already running
+				}
+				log.Printf("Reconciling daemon %s: dispatching to %s", job.Name, agent.ID)
+				if err := l.sendJobToAgent(agent, job); err != nil {
+					log.Printf("Failed to dispatch daemon %s to %s: %v", job.Name, agent.ID, err)
+				} else {
+					newPlacement = append(newPlacement, agent.ID)
+				}
+			}
+			// Update placement atomically
+			jobID := job.ID
+			l.do(func(s *leaderState) {
+				s.placement[jobID] = newPlacement
+			})
+		} else {
+			// Regular job: must have Count instances running
+			desired := job.Count
+			if desired <= 0 {
+				desired = 1
+			}
+
+			running := runningPerJob[job.Name]
+			missing := desired - running
+
+			if missing > 0 {
+				log.Printf("Reconciling job %s: %d/%d running, dispatching %d", job.Name, running, desired, missing)
+				if err := l.dispatchInstances(job, missing); err != nil {
+					log.Printf("Failed to reconcile job %s: %v", job.Name, err)
+				}
+			}
 		}
 	}
 }
@@ -98,6 +131,10 @@ func (l *Leader) redispatchJobsFrom(failedAgentID string) {
 func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	agents := l.GetAgents()
 	result := make(map[string][]*types.Task)
+
+	if len(agents) == 0 {
+		return result
+	}
 
 	// Context with timeout - cancels all goroutines when done
 	ctx, cancel := context.WithTimeout(context.Background(), HTTPClientTimeout)
@@ -116,6 +153,7 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 			tasks, err := l.fetchAgentTasks(ctx, a)
 			if err != nil {
 				log.Printf("Failed to fetch tasks from %s: %v", a.ID, err)
+				resultCh <- agentResult{agentID: a.ID, tasks: nil}
 				return
 			}
 			resultCh <- agentResult{agentID: a.ID, tasks: tasks}
@@ -123,14 +161,14 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	}
 
 	// Collect results (context cancellation stops all goroutines)
-	collected := 0
-	for collected < len(agents) {
+	for i := 0; i < len(agents); i++ {
 		select {
 		case res := <-resultCh:
-			result[res.agentID] = res.tasks
-			collected++
+			if res.tasks != nil {
+				result[res.agentID] = res.tasks
+			}
 		case <-ctx.Done():
-			log.Printf("GetClusterStatus timeout after collecting %d/%d agents", collected, len(agents))
+			log.Printf("GetClusterStatus timeout after collecting %d/%d agents", len(result), len(agents))
 			return result
 		}
 	}

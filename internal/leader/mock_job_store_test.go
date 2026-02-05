@@ -9,7 +9,7 @@ import (
 
 func init() {
 	// Fast timeouts for tests - no waiting for fake agents
-	HTTPClientTimeout = 100 * time.Millisecond
+	HTTPClientTimeout = 10 * time.Millisecond
 	VerifyInterval = 10 * time.Millisecond
 }
 
