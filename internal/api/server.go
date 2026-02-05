@@ -95,6 +95,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID        string       `json:"id"`
 		Endpoint  string       `json:"endpoint"`
+		Version   string       `json:"version,omitempty"`
 		Jobs      []*types.Job `json:"jobs,omitempty"`
 		StateTime time.Time    `json:"state_time,omitempty"`
 	}
@@ -108,7 +109,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobs := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime)
+	jobs := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime, req.Version)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
 		"jobs":       jobs,

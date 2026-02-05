@@ -25,6 +25,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const version = "v0.2.0" // Agent version
+
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	clusterName := flag.String("cluster", "", "Cluster name (e.g., easyflor-prod)")
@@ -250,6 +252,7 @@ func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job,
 	body, _ := json.Marshal(map[string]any{
 		"id":         agentID,
 		"endpoint":   agentEndpoint,
+		"version":    version,
 		"jobs":       jobs,
 		"state_time": stateTime,
 	})

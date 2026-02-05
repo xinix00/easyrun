@@ -243,6 +243,9 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	timeout := defaultInitialTimeout
 	if job.HealthCheck != nil && job.HealthCheck.InitialTimeout > 0 {
 		timeout = job.HealthCheck.InitialTimeout
+	} else if job.Artifact != nil {
+		// Artifact downloads can take a while - use 10 minute timeout
+		timeout = 10 * time.Minute
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)

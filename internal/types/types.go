@@ -76,5 +76,6 @@ type Task struct {
 type Agent struct {
 	ID       string    `json:"id"`
 	Endpoint string    `json:"endpoint"` // http://ip:port
+	Version  string    `json:"version"`  // Agent version (e.g., "v0.1.0")
 	LastSeen time.Time `json:"last_seen"`
 }

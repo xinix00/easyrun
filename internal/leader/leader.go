@@ -92,16 +92,18 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 }
 
 // Heartbeat updates agent's LastSeen and learns jobs from remote agents
-func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentStateTime time.Time) []*types.Job {
+func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentStateTime time.Time, version string) []*types.Job {
 	// Register or update agent
 	isNew := query(l, func(s *leaderState) bool {
 		if agent, ok := s.agents[id]; ok {
 			agent.LastSeen = time.Now()
+			agent.Version = version
 			return false
 		}
 		s.agents[id] = &types.Agent{
 			ID:       id,
 			Endpoint: endpoint,
+			Version:  version,
 			LastSeen: time.Now(),
 		}
 		return true
