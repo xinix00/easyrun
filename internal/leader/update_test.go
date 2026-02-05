@@ -122,8 +122,18 @@ func TestUpdateJobRecreate(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify job was updated
-	updatedJob := store.GetJob("my-app")
+	// Verify job was updated (GetJob uses name as key in mock)
+	jobs := store.GetJobs()
+	var updatedJob *types.Job
+	for _, j := range jobs {
+		if j.Name == "my-app" {
+			updatedJob = j
+			break
+		}
+	}
+	if updatedJob == nil {
+		t.Fatal("Job my-app should exist in store")
+	}
 	if updatedJob.Command != "./app-v2" {
 		t.Errorf("Job command should be updated to ./app-v2, got %s", updatedJob.Command)
 	}
@@ -180,8 +190,18 @@ func TestUpdateJobBlueGreen(t *testing.T) {
 		t.Error("Blue-green should dispatch new version")
 	}
 
-	// Verify job was updated
-	updatedJob := store.GetJob("my-app")
+	// Verify job was updated (GetJob uses name as key in mock)
+	jobs := store.GetJobs()
+	var updatedJob *types.Job
+	for _, j := range jobs {
+		if j.Name == "my-app" {
+			updatedJob = j
+			break
+		}
+	}
+	if updatedJob == nil {
+		t.Fatal("Job my-app should exist in store")
+	}
 	if updatedJob.Command != "./app-v2" {
 		t.Errorf("Job command should be updated to ./app-v2, got %s", updatedJob.Command)
 	}
