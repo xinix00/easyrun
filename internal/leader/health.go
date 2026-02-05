@@ -100,7 +100,7 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	result := make(map[string][]*types.Task)
 
 	// Context with timeout - cancels all goroutines when done
-	ctx, cancel := context.WithTimeout(context.Background(), httpClientTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), HTTPClientTimeout)
 	defer cancel()
 
 	// Channel-based concurrency - no mutexes needed!

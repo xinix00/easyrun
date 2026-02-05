@@ -8,7 +8,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -109,20 +108,40 @@ func TestHandleRunSuccess(t *testing.T) {
 
 	agent.handleRun(w, req)
 
-	if w.Code != http.StatusCreated {
-		t.Errorf("Status code = %d, want %d", w.Code, http.StatusCreated)
+	// Job is accepted asynchronously
+	if w.Code != http.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusAccepted)
 	}
 
-	var task types.Task
-	if err := json.NewDecoder(w.Body).Decode(&task); err != nil {
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
-	if task.JobName != "test" {
-		t.Errorf("Task JobName = %q, want %q", task.JobName, "test")
+	if resp["status"] != "accepted" {
+		t.Errorf("status = %q, want %q", resp["status"], "accepted")
 	}
-	if task.State != types.TaskRunning {
-		t.Errorf("Task State = %q, want %q", task.State, types.TaskRunning)
+	if resp["job"] != "test" {
+		t.Errorf("job = %q, want %q", resp["job"], "test")
+	}
+
+	// Wait for async job start
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify task was created
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		var result []*types.Task
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
+
+	if len(tasks) != 1 {
+		t.Errorf("Got %d tasks, want 1", len(tasks))
+	}
+	if len(tasks) > 0 && tasks[0].JobName != "test" {
+		t.Errorf("Task JobName = %q, want %q", tasks[0].JobName, "test")
 	}
 }
 
@@ -212,8 +231,25 @@ func TestHandleRunRunnerError(t *testing.T) {
 
 	agent.handleRun(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Status code = %d, want %d", w.Code, http.StatusInternalServerError)
+	// Job is accepted (fire-and-forget), error happens async
+	if w.Code != http.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusAccepted)
+	}
+
+	// Wait for async job attempt
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify no task was created (runner failed)
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		var result []*types.Task
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
+
+	if len(tasks) != 0 {
+		t.Errorf("Got %d tasks, want 0 (runner should have failed)", len(tasks))
 	}
 }
 
@@ -227,7 +263,7 @@ func TestHandleDeleteSuccess(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// Add a job and running task
-	agent.StoreJob(&types.Job{Name: "test", Command: "echo"})
+	agent.StoreJob(&types.Job{ID: "test-id", Name: "test", Command: "echo"})
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
 			ID:      "task-1",
@@ -381,15 +417,31 @@ func TestHandleRunEmptyJSON(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	// Empty JSON object - should fail because command is empty
+	// Empty JSON object - job accepted, but will fail async
 	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader([]byte("{}")))
 	w := httptest.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	// Should fail because command is required in runner
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Status code = %d, want %d (empty command should fail)", w.Code, http.StatusInternalServerError)
+	// Job is accepted (fire-and-forget), validation happens async
+	if w.Code != http.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusAccepted)
+	}
+
+	// Wait for async job attempt
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify no task was created (command validation failed)
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		var result []*types.Task
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
+
+	if len(tasks) != 0 {
+		t.Errorf("Got %d tasks, want 0 (empty command should fail)", len(tasks))
 	}
 }
 
@@ -416,14 +468,27 @@ func TestHandleRunWithPorts(t *testing.T) {
 
 	agent.handleRun(w, req)
 
-	if w.Code != http.StatusCreated {
-		t.Errorf("Status code = %d, want %d", w.Code, http.StatusCreated)
+	if w.Code != http.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusAccepted)
 	}
 
-	var task types.Task
-	json.NewDecoder(w.Body).Decode(&task)
+	// Wait for async job start
+	time.Sleep(50 * time.Millisecond)
 
-	// Should have allocated ports
+	// Check that task has allocated ports
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		var result []*types.Task
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
+
+	if len(tasks) != 1 {
+		t.Fatalf("Got %d tasks, want 1", len(tasks))
+	}
+
+	task := tasks[0]
 	if len(task.Ports) != 2 {
 		t.Errorf("Ports = %d, want 2", len(task.Ports))
 	}
@@ -459,13 +524,27 @@ func TestHandleRunWithFixedPorts(t *testing.T) {
 
 	agent.handleRun(w, req)
 
-	if w.Code != http.StatusCreated {
-		t.Errorf("Status code = %d, want %d", w.Code, http.StatusCreated)
+	if w.Code != http.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusAccepted)
 	}
 
-	var task types.Task
-	json.NewDecoder(w.Body).Decode(&task)
+	// Wait for async job start
+	time.Sleep(50 * time.Millisecond)
 
+	// Check that task has correct ports
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		var result []*types.Task
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
+
+	if len(tasks) != 1 {
+		t.Fatalf("Got %d tasks, want 1", len(tasks))
+	}
+
+	task := tasks[0]
 	// http should be fixed at 8080
 	if task.Ports["http"] != 8080 {
 		t.Errorf("http port = %d, want 8080", task.Ports["http"])
@@ -507,15 +586,24 @@ func TestHandleRunPortInUse(t *testing.T) {
 
 	agent.handleRun(w, req)
 
-	// Should fail because port is in use
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("Status code = %d, want %d", w.Code, http.StatusInternalServerError)
+	// Job is accepted (fire-and-forget), port check happens async
+	if w.Code != http.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusAccepted)
 	}
 
-	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
+	// Wait for async job attempt
+	time.Sleep(50 * time.Millisecond)
 
-	if !strings.Contains(resp["error"], "already in use") {
-		t.Errorf("Error should mention port in use, got: %s", resp["error"])
+	// Verify no task was created (port in use)
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		var result []*types.Task
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
+
+	if len(tasks) != 0 {
+		t.Errorf("Got %d tasks, want 0 (port in use should fail)", len(tasks))
 	}
 }

@@ -348,8 +348,10 @@ func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 
 	// Add 3 jobs using 300 CPU each (total 900)
 	for i := 0; i < 3; i++ {
+		jobID := "job-id-" + string(rune('a'+i))
 		jobName := "job-" + string(rune('a'+i))
 		agent.StoreJob(&types.Job{
+			ID:        jobID,
 			Name:      jobName,
 			CPUShares: 300,
 		})

@@ -48,6 +48,7 @@ func TestLeaderCheckDeadAgents(t *testing.T) {
 func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 	store := NewMockJobStore()
 	store.StoreJob(&types.Job{
+		ID:      "test-job-id",
 		Name:    "test-job",
 		Command: "echo",
 		Count:   1,
@@ -66,9 +67,9 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 			mu.Lock()
 			acceptCount++
 			tasks = append(tasks, &types.Task{
-				ID:    fmt.Sprintf("task-%d", acceptCount),
+				ID:      fmt.Sprintf("task-%d", acceptCount),
 				JobName: "test-job",
-				State: types.TaskRunning,
+				State:   types.TaskRunning,
 			})
 			mu.Unlock()
 			w.WriteHeader(http.StatusCreated)
@@ -94,9 +95,9 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 	leader.Heartbeat("healthy-agent", server.URL, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
-	// Manually add placement for job on dying agent
+	// Manually add placement for job on dying agent (by job ID)
 	leader.do(func(s *leaderState) {
-		s.placement["test-job"] = []string{"dying-agent"}
+		s.placement["test-job-id"] = []string{"dying-agent"}
 	})
 	time.Sleep(10 * time.Millisecond)
 

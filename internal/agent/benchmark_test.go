@@ -226,7 +226,7 @@ func BenchmarkConcurrentStateAccess(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			jobName := fmt.Sprintf("job-%d", i%100)
-			_ = agent.GetJob(jobName)
+			_ = agent.GetJobByName(jobName)
 			i++
 		}
 	})

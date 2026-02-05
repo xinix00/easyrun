@@ -83,7 +83,7 @@ func TestUpdateJobRolling(t *testing.T) {
 	}
 
 	// Verify job definition was updated
-	updatedJob := store.GetJob("my-app")
+	updatedJob := store.GetJobByName("my-app")
 	if updatedJob.Command != "./app-v2" {
 		t.Errorf("Job command should be updated to ./app-v2, got %s", updatedJob.Command)
 	}
@@ -273,7 +273,7 @@ func TestUpdateJobRollingFailureKeepsOld(t *testing.T) {
 	}
 
 	// Job definition should NOT be updated
-	storedJob := store.GetJob("my-app")
+	storedJob := store.GetJobByName("my-app")
 	if storedJob.Command != "./app-v1" {
 		t.Errorf("Job should still be v1, got %s", storedJob.Command)
 	}
@@ -340,7 +340,7 @@ func TestUpdateJobBlueGreenFailureKeepsOld(t *testing.T) {
 	}
 
 	// Job definition should NOT be updated (blue-green only updates after success)
-	storedJob := store.GetJob("my-app")
+	storedJob := store.GetJobByName("my-app")
 	if storedJob.Command != "./app-v1" {
 		t.Errorf("Job should still be v1, got %s", storedJob.Command)
 	}
@@ -376,9 +376,9 @@ func TestFindJobByName(t *testing.T) {
 	go leader.Run(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	// Store jobs
-	store.StoreJob(&types.Job{Name: "app-1", Command: "echo"})
-	store.StoreJob(&types.Job{Name: "app-2", Command: "echo"})
+	// Store jobs with IDs (required for ID-based store)
+	store.StoreJob(&types.Job{ID: "id-1", Name: "app-1", Command: "echo"})
+	store.StoreJob(&types.Job{ID: "id-2", Name: "app-2", Command: "echo"})
 
 	// Find by name
 	job := leader.FindJobByName("app-1")

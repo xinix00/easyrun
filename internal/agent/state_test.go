@@ -40,6 +40,7 @@ func TestAgentStoreAndGetJob(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	job := &types.Job{
+		ID:      "job-123",
 		Name:    "test-job",
 		Command: "echo hello",
 	}
@@ -47,12 +48,19 @@ func TestAgentStoreAndGetJob(t *testing.T) {
 	agent.StoreJob(job)
 	time.Sleep(10 * time.Millisecond)
 
-	got := agent.GetJob("test-job")
+	// GetJob looks up by ID
+	got := agent.GetJob("job-123")
 	if got == nil {
 		t.Fatal("GetJob returned nil")
 	}
 	if got.Name != "test-job" {
 		t.Errorf("GetJob().Name = %q, want %q", got.Name, "test-job")
+	}
+
+	// GetJobByName looks up by name
+	gotByName := agent.GetJobByName("test-job")
+	if gotByName == nil {
+		t.Fatal("GetJobByName returned nil")
 	}
 }
 
@@ -67,6 +75,7 @@ func TestAgentGetJobs(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		agent.StoreJob(&types.Job{
+			ID:      "job-id-" + string(rune('a'+i)),
 			Name:    "job-" + string(rune('a'+i)),
 			Command: "echo",
 		})
@@ -106,7 +115,9 @@ func TestAgentStoreJobOverwrite(t *testing.T) {
 	defer cancel()
 	go agent.stateLoop(ctx)
 
+	// Same ID = overwrite
 	agent.StoreJob(&types.Job{
+		ID:      "job-original",
 		Name:    "original",
 		Command: "echo original",
 	})
@@ -114,13 +125,14 @@ func TestAgentStoreJobOverwrite(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	agent.StoreJob(&types.Job{
+		ID:      "job-original",
 		Name:    "original",
 		Command: "echo updated",
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
-	job := agent.GetJob("original")
+	job := agent.GetJob("job-original")
 	if job.Command != "echo updated" {
 		t.Errorf("Job command = %q, want %q (overwrite failed)", job.Command, "echo updated")
 	}
@@ -143,6 +155,7 @@ func TestAgentSyncJobs(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	agent.StoreJob(&types.Job{
+		ID:      "old-id",
 		Name:    "old",
 		Command: "old",
 	})
@@ -151,8 +164,8 @@ func TestAgentSyncJobs(t *testing.T) {
 	beforeSync := time.Now()
 
 	newJobs := []*types.Job{
-		{Name: "new1", Command: "new1"},
-		{Name: "new2", Command: "new2"},
+		{ID: "new1-id", Name: "new1", Command: "new1"},
+		{ID: "new2-id", Name: "new2", Command: "new2"},
 	}
 
 	agent.SyncJobs(newJobs, beforeSync)
@@ -189,6 +202,63 @@ func TestAgentGetStateTime(t *testing.T) {
 	}
 }
 
+func TestAgentStateTimeUpdatesOnStoreJob(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	// Initial stateTime should be zero
+	initialTime := agent.GetStateTime()
+	if !initialTime.IsZero() {
+		t.Errorf("initial GetStateTime() = %v, want zero", initialTime)
+	}
+
+	// StoreJob should update stateTime
+	agent.StoreJob(&types.Job{ID: "job-1", Name: "test", Command: "echo"})
+	time.Sleep(10 * time.Millisecond)
+
+	afterStore := agent.GetStateTime()
+	if afterStore.IsZero() {
+		t.Error("GetStateTime() should not be zero after StoreJob")
+	}
+}
+
+func TestAgentSaveStateDoesNotChangeStateTime(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	time.Sleep(10 * time.Millisecond)
+
+	// StoreJob to set a stateTime
+	agent.StoreJob(&types.Job{ID: "job-1", Name: "test", Command: "echo"})
+	time.Sleep(10 * time.Millisecond)
+
+	beforeSave := agent.GetStateTime()
+
+	// SaveState should NOT change stateTime (only persist it)
+	time.Sleep(50 * time.Millisecond) // Wait a bit so time.Now() would be different
+	agent.SaveState()
+	time.Sleep(10 * time.Millisecond)
+
+	afterSave := agent.GetStateTime()
+
+	// StateTime should remain the same after SaveState
+	if !afterSave.Equal(beforeSave) {
+		t.Errorf("SaveState changed stateTime from %v to %v", beforeSave, afterSave)
+	}
+}
+
 // ============== CONCURRENT ACCESS TESTS ==============
 
 func TestAgentConcurrentStateAccess(t *testing.T) {
@@ -208,6 +278,7 @@ func TestAgentConcurrentStateAccess(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			agent.StoreJob(&types.Job{
+				ID:      "job-id-" + string(rune('0'+n)),
 				Name:    "job-" + string(rune('0'+n)),
 				Command: "echo",
 			})
@@ -248,13 +319,15 @@ func TestAgentConcurrentJobStoreAndGet(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
+			jobID := "job-id-" + string(rune('a'+n%26))
 			jobName := "job-" + string(rune('a'+n%26))
 			agent.StoreJob(&types.Job{
+				ID:      jobID,
 				Name:    jobName,
 				Command: "echo",
 			})
-			// Immediately try to get it
-			agent.GetJob(jobName)
+			// Immediately try to get it by name
+			agent.GetJobByName(jobName)
 		}(i)
 	}
 

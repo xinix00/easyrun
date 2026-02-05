@@ -42,7 +42,7 @@ func TestLeaderDispatchJobToAgent(t *testing.T) {
 		t.Errorf("DispatchJob failed: %v", err)
 	}
 
-	if store.GetJob("test-job") == nil {
+	if store.GetJobByName("test-job") == nil {
 		t.Error("Job should be stored after dispatch")
 	}
 }
@@ -300,4 +300,167 @@ func TestLeaderConcurrentDispatchAndDelete(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+// ============== HTTP STATUS CODE TESTS ==============
+
+// TestLeaderDispatchAccepts202 tests that 202 Accepted is treated as success
+func TestLeaderDispatchAccepts202(t *testing.T) {
+	store := NewMockJobStore()
+
+	// Create agent that returns 202 Accepted (async job handling)
+	taskReturned := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/run":
+			w.WriteHeader(http.StatusAccepted) // 202
+		case "/tasks":
+			// Return running task after first /run call
+			if taskReturned {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`[{"id":"task-1","job_name":"async-job","state":"running"}]`))
+			} else {
+				taskReturned = true
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`[{"id":"task-1","job_name":"async-job","state":"running"}]`))
+			}
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	leader := New("local-agent", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	leader.Heartbeat("async-agent", server.URL, nil, time.Time{}, "")
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{
+		Name:    "async-job",
+		Command: "echo async",
+		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
+	}
+
+	err := leader.DispatchJob(job)
+	if err != nil {
+		t.Errorf("DispatchJob should accept 202 Accepted, got error: %v", err)
+	}
+
+	if store.GetJobByName("async-job") == nil {
+		t.Error("Job should be stored after 202 response")
+	}
+}
+
+// TestLeaderDispatchAccepts201 tests that 201 Created is treated as success
+func TestLeaderDispatchAccepts201(t *testing.T) {
+	store := NewMockJobStore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/run":
+			w.WriteHeader(http.StatusCreated) // 201
+		case "/tasks":
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(`[{"id":"task-1","job_name":"created-job","state":"running"}]`))
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	}))
+	defer server.Close()
+
+	leader := New("local-agent", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	leader.Heartbeat("create-agent", server.URL, nil, time.Time{}, "")
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{
+		Name:    "created-job",
+		Command: "echo created",
+		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
+	}
+
+	err := leader.DispatchJob(job)
+	if err != nil {
+		t.Errorf("DispatchJob should accept 201 Created, got error: %v", err)
+	}
+}
+
+// TestLeaderDispatchRejects500 tests that 500 errors are rejected
+func TestLeaderDispatchRejects500(t *testing.T) {
+	store := NewMockJobStore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError) // 500
+	}))
+	defer server.Close()
+
+	leader := New("local-agent", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	leader.Heartbeat("error-agent", server.URL, nil, time.Time{}, "")
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{
+		Name:    "error-job",
+		Command: "echo error",
+		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
+	}
+
+	err := leader.DispatchJob(job)
+	if err == nil {
+		t.Error("DispatchJob should reject 500 Internal Server Error")
+	}
+}
+
+// TestLeaderDispatchRejects400 tests that 400 errors are rejected
+func TestLeaderDispatchRejects400(t *testing.T) {
+	store := NewMockJobStore()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest) // 400
+	}))
+	defer server.Close()
+
+	leader := New("local-agent", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	leader.Heartbeat("bad-agent", server.URL, nil, time.Time{}, "")
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{
+		Name:    "bad-job",
+		Command: "echo bad",
+		Count:   1,
+		HealthCheck: &types.HealthCheck{
+			InitialTimeout: 2 * time.Second,
+		},
+	}
+
+	err := leader.DispatchJob(job)
+	if err == nil {
+		t.Error("DispatchJob should reject 400 Bad Request")
+	}
 }

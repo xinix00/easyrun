@@ -12,6 +12,8 @@ import (
 	"easyrun/internal/runner"
 	"easyrun/internal/types"
 	"easyrun/pkg/httputil"
+
+	"github.com/google/uuid"
 )
 
 // proxyToLeader forwards requests to the current leader
@@ -147,6 +149,11 @@ func (a *Agent) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 // startJob starts a job and returns the task
 func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
+	// Ensure job has an ID (for tests or direct calls without leader)
+	if job.ID == "" {
+		job.ID = uuid.New().String()
+	}
+
 	ports, err := allocatePorts(job.Ports)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate ports: %w", err)
@@ -159,7 +166,7 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 
 	// Store in state and persist
 	a.do(func(s *agentState) {
-		s.jobs[job.Name] = job
+		s.jobs[job.ID] = job // Store by ID (consistent with StoreJob, SyncJobs, LoadState)
 		s.tasks[task.ID] = task
 	})
 	a.scheduleSave()
@@ -205,7 +212,7 @@ func isPortAvailable(port int) bool {
 
 // restartTask restarts a failed task
 func (a *Agent) restartTask(task *types.Task) {
-	job := a.getJob(task.JobName)
+	job := a.GetJobByName(task.JobName)
 	if job == nil {
 		log.Printf("Cannot restart task %s: job %s not found", task.ID, task.JobName)
 		return
@@ -287,8 +294,15 @@ func (a *Agent) deleteJob(jobName string) int {
 	}
 
 	// Remove job and ALL its tasks from state
+	// Jobs are stored by ID, so find by name first then delete by ID
 	deleted := query(a, func(s *agentState) int {
-		delete(s.jobs, jobName)
+		// Find and delete job by name (jobs stored by ID)
+		for id, job := range s.jobs {
+			if job.Name == jobName {
+				delete(s.jobs, id)
+				break
+			}
+		}
 
 		count := 0
 		for id, task := range s.tasks {

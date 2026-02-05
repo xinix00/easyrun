@@ -133,7 +133,7 @@ func TestAgentDeleteJob(t *testing.T) {
 	}
 
 	// Job should be removed
-	if agent.GetJob("test-job") != nil {
+	if agent.GetJobByName("test-job") != nil {
 		t.Error("Job should be removed after delete")
 	}
 }

@@ -15,7 +15,11 @@ import (
 
 const (
 	defaultInitialTimeout = 30 * time.Second
-	verifyInterval        = 500 * time.Millisecond
+)
+
+var (
+	// VerifyInterval can be overridden in tests for faster execution
+	VerifyInterval = 500 * time.Millisecond
 )
 
 func generateID() string {
@@ -25,7 +29,8 @@ func generateID() string {
 // DispatchJob sends a job to agents (Count times with round-robin spreading)
 // count=-1 means run on ALL agents (exactly once per agent)
 func (l *Leader) DispatchJob(job *types.Job) error {
-	// Generate ID if not set (for tests or API calls without ID)
+	// Generate ID if not set (API always sets one, but tests may not)
+	// Note: Users cannot set IDs - the API server overwrites any provided ID
 	if job.ID == "" {
 		job.ID = generateID()
 	}
@@ -235,7 +240,8 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	// Accept 200 OK, 201 Created, and 202 Accepted (async job handling)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("agent %s returned status %d", agent.ID, resp.StatusCode)
 	}
 
@@ -251,7 +257,7 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
-	ticker := time.NewTicker(verifyInterval)
+	ticker := time.NewTicker(VerifyInterval)
 	defer ticker.Stop()
 
 	for {

@@ -102,8 +102,8 @@ func TestChaos_TaskExceedsMaxRestarts(t *testing.T) {
 	}
 
 	// After max restarts, should give up
-	finalTask := agent.GetJob(job.Name)
-	if finalTask == nil {
+	finalJob := agent.GetJobByName(job.Name)
+	if finalJob == nil {
 		t.Error("Job should still exist")
 	}
 

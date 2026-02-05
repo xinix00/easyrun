@@ -63,7 +63,9 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 		}
 	}
 
+	// Replace old job with new in store
 	l.jobStore.StoreJob(new)
+	l.jobStore.DeleteJob(old.ID) // Always delete old - IDs are always different (generated UUIDs)
 	return nil
 }
 

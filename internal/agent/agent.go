@@ -250,10 +250,15 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// getJob returns the job for a task
-func (a *Agent) getJob(jobID string) *types.Job {
+// GetJobByName finds a job by name (jobs are stored by ID)
+func (a *Agent) GetJobByName(jobName string) *types.Job {
 	return query(a, func(s *agentState) *types.Job {
-		return s.jobs[jobID]
+		for _, job := range s.jobs {
+			if job.Name == jobName {
+				return job
+			}
+		}
+		return nil
 	})
 }
 
@@ -279,6 +284,7 @@ func (a *Agent) GetJob(id string) *types.Job {
 func (a *Agent) StoreJob(job *types.Job) {
 	a.do(func(s *agentState) {
 		s.jobs[job.ID] = job
+		s.stateTime = time.Now() // Track when state actually changed
 	})
 }
 
@@ -286,6 +292,7 @@ func (a *Agent) StoreJob(job *types.Job) {
 func (a *Agent) DeleteJob(id string) {
 	a.do(func(s *agentState) {
 		delete(s.jobs, id)
+		s.stateTime = time.Now() // Track when state actually changed
 	})
 	a.scheduleSave()
 }
@@ -332,7 +339,7 @@ func (a *Agent) LoadState() error {
 
 	a.do(func(s *agentState) {
 		for _, job := range state.Jobs {
-			s.jobs[job.Name] = job
+			s.jobs[job.ID] = job // Store by ID (consistent with StoreJob, SyncJobs)
 		}
 		s.stateTime = state.Updated
 	})
@@ -353,7 +360,8 @@ func (a *Agent) SaveState() {
 		for _, j := range s.jobs {
 			jobs = append(jobs, j)
 		}
-		s.stateTime = time.Now()
+		// Don't update stateTime here - it's only updated when state actually changes
+		// (StoreJob, DeleteJob, SyncJobs), not when we persist to disk
 		return snapshot{jobs, s.stateTime}
 	})
 
@@ -380,6 +388,16 @@ func (a *Agent) SaveState() {
 	}
 }
 
+// findJobByName is a helper to find job by name within state (jobs stored by ID)
+func findJobByName(s *agentState, jobName string) *types.Job {
+	for _, job := range s.jobs {
+		if job.Name == jobName {
+			return job
+		}
+	}
+	return nil
+}
+
 // hasCapacity checks if the agent has capacity for a new job
 func (a *Agent) hasCapacity(job *types.Job) bool {
 	return query(a, func(s *agentState) bool {
@@ -388,7 +406,7 @@ func (a *Agent) hasCapacity(job *types.Job) bool {
 
 		for _, task := range s.tasks {
 			if task.State == types.TaskRunning {
-				if j := s.jobs[task.JobName]; j != nil {
+				if j := findJobByName(s, task.JobName); j != nil {
 					usedCPU += j.CPUShares
 					usedMem += j.MemoryLimit
 				}

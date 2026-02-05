@@ -113,7 +113,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
 		"jobs":       jobs,
-		"state_time": time.Now(),
+		"state_time": s.leader.GetStateTime(),
 	})
 }
 
