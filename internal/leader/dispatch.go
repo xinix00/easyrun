@@ -18,16 +18,35 @@ const (
 )
 
 // DispatchJob sends a job to agents (Count times with round-robin spreading)
-// count=-1 means run on ALL agents
+// count=-1 means run on ALL agents (exactly once per agent)
 func (l *Leader) DispatchJob(job *types.Job) error {
+	if job.Count == -1 {
+		// Dispatch to ALL agents (exactly once each, no round-robin)
+		agents := l.GetAgents()
+		failed := 0
+		for _, agent := range agents {
+			if err := l.sendJobToAgent(agent, job); err != nil {
+				log.Printf("Failed to dispatch job %s to agent %s: %v", job.Name, agent.ID, err)
+				failed++
+				continue
+			}
+			l.do(func(s *leaderState) {
+				s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
+			})
+		}
+		if failed == len(agents) && len(agents) > 0 {
+			return fmt.Errorf("all %d agents rejected job", len(agents))
+		}
+		l.jobStore.StoreJob(job)
+		return nil
+	}
+
+	// Normal count: round-robin dispatch
 	count := job.Count
-	if count == -1 {
-		count = len(l.GetAgents())
-	} else if count <= 0 {
+	if count <= 0 {
 		count = 1
 	}
 
-	// Dispatch Count instances
 	for i := 0; i < count; i++ {
 		if err := l.dispatchToAvailableAgent(job); err != nil {
 			return fmt.Errorf("failed to dispatch instance %d/%d: %w", i+1, count, err)
