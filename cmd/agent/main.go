@@ -217,13 +217,7 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 
 	log.Printf("Leader initialized with %d jobs from local agent", len(ag.GetJobs()))
 
-	// Register self as agent (leaders need to be in the agents list too!)
-	(*l).Heartbeat(ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
-
-	// Start leader health check loop
-	go (*l).Run(ctx)
-
-	// Start API server on leader port
+	// Start API server on leader port FIRST
 	leaderAddr := fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
 	*srv = api.NewServer(*l, leaderAddr)
 	go func() {
@@ -231,6 +225,12 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 			log.Printf("Leader API error: %v", err)
 		}
 	}()
+
+	// Start leader health check loop
+	go (*l).Run(ctx)
+
+	// Register self as agent (done via normal heartbeat loop every 10s)
+	// First heartbeat happens in tick() after becomeLeader() returns
 }
 
 type heartbeatResponse struct {
