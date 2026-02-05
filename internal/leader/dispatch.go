@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"easyrun/internal/types"
+	"github.com/google/uuid"
 )
 
 const (
@@ -17,9 +18,18 @@ const (
 	verifyInterval        = 500 * time.Millisecond
 )
 
+func generateID() string {
+	return uuid.New().String()
+}
+
 // DispatchJob sends a job to agents (Count times with round-robin spreading)
 // count=-1 means run on ALL agents (exactly once per agent)
 func (l *Leader) DispatchJob(job *types.Job) error {
+	// Generate ID if not set (for tests or API calls without ID)
+	if job.ID == "" {
+		job.ID = generateID()
+	}
+
 	var count int
 	var targetAgents []*types.Agent
 
@@ -171,8 +181,8 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 		log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(agents))
 	}
 
-	// Always remove from job store (even if no agents)
-	l.jobStore.DeleteJob(job.Name)
+	// Remove from store by ID (now consistent!)
+	l.jobStore.DeleteJob(job.ID)
 }
 
 // DeleteJob finds a job by name and deletes it (for API compatibility)

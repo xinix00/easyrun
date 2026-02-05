@@ -278,14 +278,14 @@ func (a *Agent) GetJob(id string) *types.Job {
 // StoreJob stores a job (used by leader when it learns about remote jobs)
 func (a *Agent) StoreJob(job *types.Job) {
 	a.do(func(s *agentState) {
-		s.jobs[job.Name] = job
+		s.jobs[job.ID] = job
 	})
 }
 
-// DeleteJob removes a job from the store (for JobStore interface)
-func (a *Agent) DeleteJob(jobName string) {
+// DeleteJob removes a job from the store by ID (for JobStore interface)
+func (a *Agent) DeleteJob(id string) {
 	a.do(func(s *agentState) {
-		delete(s.jobs, jobName)
+		delete(s.jobs, id)
 	})
 	a.scheduleSave()
 }

@@ -258,11 +258,11 @@ func (m *mockJobStore) GetJob(id string) *types.Job {
 }
 
 func (m *mockJobStore) StoreJob(job *types.Job) {
-	m.jobs[job.Name] = job
+	m.jobs[job.ID] = job
 }
 
-func (m *mockJobStore) DeleteJob(jobName string) {
-	delete(m.jobs, jobName)
+func (m *mockJobStore) DeleteJob(id string) {
+	delete(m.jobs, id)
 }
 
 func (m *mockJobStore) GetStateTime() time.Time {
@@ -271,6 +271,6 @@ func (m *mockJobStore) GetStateTime() time.Time {
 
 func (m *mockJobStore) SyncJobs(jobs []*types.Job, updated time.Time) {
 	for _, job := range jobs {
-		m.jobs[job.Name] = job
+		m.jobs[job.ID] = job
 	}
 }

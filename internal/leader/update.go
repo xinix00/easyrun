@@ -79,9 +79,7 @@ func (l *Leader) updateBlueGreen(old, new *types.Job) error {
 	if err := l.DispatchJob(new); err != nil {
 		return err
 	}
-	l.DeleteJobByID(old)
-	// Re-store new job (DeleteJobByID removes by name, which affects new too!)
-	l.jobStore.StoreJob(new)
+	l.DeleteJobByID(old) // Deletes old by ID, new stays (different ID!)
 	return nil
 }
 
