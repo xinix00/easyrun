@@ -20,40 +20,65 @@ const (
 // DispatchJob sends a job to agents (Count times with round-robin spreading)
 // count=-1 means run on ALL agents (exactly once per agent)
 func (l *Leader) DispatchJob(job *types.Job) error {
+	var count int
+	var targetAgents []*types.Agent
+
 	if job.Count == -1 {
-		// Dispatch to ALL agents (exactly once each, no round-robin)
-		agents := l.GetAgents()
-		failed := 0
-		for _, agent := range agents {
-			if err := l.sendJobToAgent(agent, job); err != nil {
-				log.Printf("Failed to dispatch job %s to agent %s: %v", job.Name, agent.ID, err)
-				failed++
-				continue
-			}
-			l.do(func(s *leaderState) {
-				s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
-			})
+		// Dispatch to ALL agents (specific list, no round-robin)
+		targetAgents = l.GetAgents()
+		count = len(targetAgents)
+	} else {
+		// Normal count: use round-robin (agents selected dynamically)
+		count = job.Count
+		if count <= 0 {
+			count = 1
 		}
-		if failed == len(agents) && len(agents) > 0 {
-			return fmt.Errorf("all %d agents rejected job", len(agents))
-		}
-		l.jobStore.StoreJob(job)
-		return nil
 	}
 
-	// Normal count: round-robin dispatch
-	count := job.Count
-	if count <= 0 {
-		count = 1
-	}
-
+	// Dispatch to agents
+	succeeded := 0
 	for i := 0; i < count; i++ {
-		if err := l.dispatchToAvailableAgent(job); err != nil {
-			return fmt.Errorf("failed to dispatch instance %d/%d: %w", i+1, count, err)
+		var agent *types.Agent
+		if targetAgents != nil {
+			// count=-1: use specific agent from list
+			agent = targetAgents[i]
 		}
+
+		if err := l.dispatchToAgent(agent, job); err != nil {
+			log.Printf("Failed to dispatch instance %d/%d: %v", i+1, count, err)
+			if targetAgents == nil {
+				// Normal count: fail if can't dispatch
+				return fmt.Errorf("failed to dispatch instance %d/%d: %w", i+1, count, err)
+			}
+			// count=-1: skip failed agent, continue
+			continue
+		}
+		succeeded++
+	}
+
+	if succeeded == 0 && count > 0 {
+		return fmt.Errorf("all agents rejected job")
 	}
 
 	l.jobStore.StoreJob(job)
+	return nil
+}
+
+// dispatchToAgent dispatches to specific agent (count=-1) or finds one via round-robin (normal count)
+func (l *Leader) dispatchToAgent(agent *types.Agent, job *types.Job) error {
+	if agent == nil {
+		// No specific agent: find one via round-robin
+		return l.dispatchToAvailableAgent(job)
+	}
+
+	// Specific agent: dispatch directly
+	if err := l.sendJobToAgent(agent, job); err != nil {
+		return err
+	}
+
+	l.do(func(s *leaderState) {
+		s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
+	})
 	return nil
 }
 
