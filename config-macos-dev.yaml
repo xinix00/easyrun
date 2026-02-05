@@ -1,0 +1,21 @@
+# EasyRun macOS Development Config
+# Minimal config - everything else uses smart defaults!
+
+cluster:
+  name: "easyflor-prod"
+
+# Optional: Override raft endpoint (has default)
+# raft_endpoints:
+#   - "https://server-raft.easyflor.net:7080"
+
+# Optional: Override for dev (disable isolation for easier debugging)
+# runner:
+#   isolate: false
+
+# Everything else auto-detected:
+# - node.ip: auto-detected from outbound interface
+# - node.port: 8080 (default)
+# - capacity: auto-detected from system (CPU cores, RAM)
+# - paths: ./data/* (clean defaults)
+# - leader.port: 9080 (port+1000)
+# - timeouts: sensible defaults

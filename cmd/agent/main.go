@@ -27,17 +27,31 @@ import (
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
+	clusterName := flag.String("cluster", "", "Cluster name (e.g., easyflor-prod)")
+	raftEndpoint := flag.String("raft", "https://server-raft.easyflor.net:7080", "EasyRaft endpoint")
+	standalone := flag.Bool("standalone", false, "Run without easyraft (single-node mode)")
 	flag.Parse()
 
-	// Load config
+	// Load config (returns defaults if no file)
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Validate raft endpoints
-	if len(cfg.Cluster.RaftEndpoints) == 0 {
-		log.Fatal("raft_endpoints is required in config")
+	// Override with flags
+	if *clusterName != "" {
+		cfg.Cluster.Name = *clusterName
+	}
+	if *raftEndpoint != "" && !*standalone {
+		cfg.Cluster.RaftEndpoints = []string{*raftEndpoint}
+	}
+
+	// Validate
+	if !*standalone && len(cfg.Cluster.RaftEndpoints) == 0 {
+		log.Fatal("raft endpoint required (use --raft or config file, or --standalone for single-node)")
+	}
+	if cfg.Cluster.Name == "" {
+		log.Fatal("cluster name required (use --cluster or config file)")
 	}
 
 	// Get or create stable node ID
@@ -49,7 +63,12 @@ func main() {
 	}
 
 	log.Printf("Starting node %s on %s:%d", nodeID, cfg.Node.IP, cfg.Node.Port)
-	log.Printf("Using easyraft endpoints: %v", cfg.Cluster.RaftEndpoints)
+	log.Printf("Cluster: %s", cfg.Cluster.Name)
+	if *standalone {
+		log.Println("Running in standalone mode (no raft)")
+	} else {
+		log.Printf("Using easyraft: %v", cfg.Cluster.RaftEndpoints)
+	}
 
 	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
