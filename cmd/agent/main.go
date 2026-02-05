@@ -25,7 +25,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.2.0" // Agent version
+const version = "v0.3.0" // Agent version
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
