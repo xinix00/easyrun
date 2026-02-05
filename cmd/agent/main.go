@@ -69,7 +69,8 @@ func main() {
 		cfg.Node.IP = getOutboundIP()
 	}
 
-	log.Printf("Starting node %s on %s:%d", nodeID, cfg.Node.IP, cfg.Node.Port)
+	log.Printf("Starting easyrun agent %s", version)
+	log.Printf("Node %s on %s:%d", nodeID, cfg.Node.IP, cfg.Node.Port)
 	log.Printf("Cluster: %s", cfg.Cluster.Name)
 	if *standalone {
 		log.Println("Running in standalone mode (no raft)")
