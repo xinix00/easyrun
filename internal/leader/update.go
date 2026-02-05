@@ -9,8 +9,9 @@ import (
 	"easyrun/internal/types"
 )
 
-const (
-	rollingUpdateDelay = 2 * time.Second
+var (
+	// RollingUpdateDelay can be overridden in tests for faster execution
+	RollingUpdateDelay = 2 * time.Second
 )
 
 // UpdateJob updates an existing job with a new version
@@ -58,7 +59,7 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 		l.stopOneInstance(old)
 
 		if i < count-1 {
-			time.Sleep(rollingUpdateDelay)
+			time.Sleep(RollingUpdateDelay)
 		}
 	}
 
@@ -79,6 +80,8 @@ func (l *Leader) updateBlueGreen(old, new *types.Job) error {
 		return err
 	}
 	l.DeleteJobByID(old)
+	// Re-store new job (DeleteJobByID removes by name, which affects new too!)
+	l.jobStore.StoreJob(new)
 	return nil
 }
 

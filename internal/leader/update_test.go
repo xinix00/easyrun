@@ -9,6 +9,11 @@ import (
 )
 
 func TestUpdateJobRolling(t *testing.T) {
+	// Speed up tests by reducing update delay
+	oldDelay := RollingUpdateDelay
+	RollingUpdateDelay = 10 * time.Millisecond
+	defer func() { RollingUpdateDelay = oldDelay }()
+
 	// Create mock agents
 	agents := make([]*mockAgent, 3)
 	for i := range agents {
