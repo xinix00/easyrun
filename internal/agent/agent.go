@@ -282,6 +282,14 @@ func (a *Agent) StoreJob(job *types.Job) {
 	})
 }
 
+// DeleteJob removes a job from the store (for JobStore interface)
+func (a *Agent) DeleteJob(jobName string) {
+	a.do(func(s *agentState) {
+		delete(s.jobs, jobName)
+	})
+	a.scheduleSave()
+}
+
 // GetStateTime returns when state was last updated
 func (a *Agent) GetStateTime() time.Time {
 	return query(a, func(s *agentState) time.Time {

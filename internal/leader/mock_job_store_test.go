@@ -43,6 +43,12 @@ func (m *MockJobStore) StoreJob(job *types.Job) {
 	m.jobs[job.Name] = job
 }
 
+func (m *MockJobStore) DeleteJob(jobName string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.jobs, jobName)
+}
+
 func (m *MockJobStore) GetStateTime() time.Time {
 	m.mu.Lock()
 	defer m.mu.Unlock()

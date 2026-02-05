@@ -110,25 +110,25 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 		return result
 	})
 
-	if len(agents) == 0 {
-		return
+	// Delete on all agents (if any)
+	if len(agents) > 0 {
+		ctx := context.Background()
+		for _, agent := range agents {
+			url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, job.Name)
+			req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+			if err != nil {
+				log.Printf("Failed to create delete request for agent %s: %v", agent.ID, err)
+				continue
+			}
+			if _, err := l.httpClient.Do(req); err != nil {
+				log.Printf("Failed to delete job %s on agent %s: %v", job.Name, agent.ID, err)
+			}
+		}
+		log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(agents))
 	}
 
-	// Delete on all agents
-	ctx := context.Background()
-	for _, agent := range agents {
-		url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, job.Name)
-		req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-		if err != nil {
-			log.Printf("Failed to create delete request for agent %s: %v", agent.ID, err)
-			continue
-		}
-		if _, err := l.httpClient.Do(req); err != nil {
-			log.Printf("Failed to delete job %s on agent %s: %v", job.Name, agent.ID, err)
-		}
-	}
-
-	log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(agents))
+	// Always remove from job store (even if no agents)
+	l.jobStore.DeleteJob(job.Name)
 }
 
 // DeleteJob finds a job by name and deletes it (for API compatibility)

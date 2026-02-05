@@ -23,6 +23,7 @@ type JobStore interface {
 	GetJobs() []*types.Job
 	GetJob(id string) *types.Job
 	StoreJob(job *types.Job)
+	DeleteJob(jobName string) // Remove job from store
 	GetStateTime() time.Time
 	SyncJobs(jobs []*types.Job, updated time.Time)
 }
