@@ -161,7 +161,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	addr := fmt.Sprintf("%s:%d", a.config.Node.IP, a.config.Node.Port)
 	a.server = &http.Server{
 		Addr:    addr,
-		Handler: mux,
+		Handler: corsMiddleware(mux),
 	}
 
 	go a.monitorTasks(ctx)
@@ -231,6 +231,23 @@ func (a *Agent) shutdown() {
 			log.Printf("Failed to stop task %s: %v", task.ID, err)
 		}
 	}
+}
+
+// corsMiddleware adds CORS headers for browser access
+func corsMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		// Handle preflight
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
 }
 
 // getJob returns the job for a task
