@@ -109,14 +109,23 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	task, err := a.startJob(&job)
-	if err != nil {
-		log.Printf("Failed to start job %s: %v", job.Name, err)
-		httputil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	// Accept job immediately (fire-and-forget)
+	// Artifact download and job start happen async
+	httputil.WriteJSON(w, http.StatusAccepted, map[string]string{
+		"status":  "accepted",
+		"job":     job.Name,
+		"message": "job accepted, starting in background",
+	})
 
-	httputil.WriteJSON(w, http.StatusCreated, task)
+	// Start job in background (includes artifact download)
+	go func() {
+		task, err := a.startJob(&job)
+		if err != nil {
+			log.Printf("Failed to start job %s: %v", job.Name, err)
+			return
+		}
+		log.Printf("Job %s started successfully (task %s)", job.Name, task.ID)
+	}()
 }
 
 // handleDelete deletes a job and cleans up all its tasks

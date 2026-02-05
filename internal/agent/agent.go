@@ -301,7 +301,7 @@ func (a *Agent) GetStateTime() time.Time {
 func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 	a.do(func(s *agentState) {
 		for _, job := range jobs {
-			s.jobs[job.Name] = job
+			s.jobs[job.ID] = job
 		}
 		s.stateTime = updated
 	})
