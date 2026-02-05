@@ -124,7 +124,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 			leaderAddr := disc.GetLeader()
 
 			if isLeader {
-				// We are leader, renew lease
+				// We are leader, renew lease AND send heartbeat to ourselves
 				if !disc.RenewLease() {
 					log.Println("Lost leadership")
 					isLeader = false
@@ -135,6 +135,9 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 					l = nil
 				} else {
 					failCount = 0
+					// Send heartbeat to ourselves (register as agent)
+					leaderAddr = fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
+					sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
 				}
 			} else if leaderAddr != "" {
 				// Send heartbeat to leader with our jobs and state time
@@ -213,6 +216,9 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 	*l = leader.New(ag.ID(), ag, nil)
 
 	log.Printf("Leader initialized with %d jobs from local agent", len(ag.GetJobs()))
+
+	// Register self as agent (leaders need to be in the agents list too!)
+	(*l).Heartbeat(ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
 
 	// Start leader health check loop
 	go (*l).Run(ctx)
