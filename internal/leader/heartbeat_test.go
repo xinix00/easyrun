@@ -77,7 +77,7 @@ func TestLeaderHeartbeatLearnsJobsFromRemoteAgents(t *testing.T) {
 		{ID: "job-2-id", Name: "remote-job-2", Command: "echo 2"},
 	}
 
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, time.Now(, ""))
+	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, time.Now(), "")
 	time.Sleep(10 * time.Millisecond)
 
 	// Store should have learned about the jobs

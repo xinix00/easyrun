@@ -18,22 +18,19 @@ func TestDeleteJobByName(t *testing.T) {
 	go leader.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	// Create job with auto-generated ID
+	// Create job with ID
 	job := &types.Job{
+		ID:      "test-id-123",
 		Name:    "test-app",
 		Command: "./test",
 		Count:   1,
 	}
 
-	// Dispatch job (generates ID)
-	store.StoreJob(job)
-	if job.ID == "" {
-		// Manually set ID for test
-		job.ID = "test-id-123"
-		store.StoreJob(job)
-	}
+	// Store via leader's store (not direct store access)
+	leader.jobStore.StoreJob(job)
 
 	t.Logf("Stored job: ID=%s, Name=%s", job.ID, job.Name)
+	t.Logf("Jobs in store via GetJobs: %d", len(store.GetJobs()))
 
 	// Verify it exists via FindJobByName
 	found := leader.FindJobByName("test-app")
@@ -43,15 +40,17 @@ func TestDeleteJobByName(t *testing.T) {
 	if found.Name != "test-app" {
 		t.Errorf("Job name = %s, want test-app", found.Name)
 	}
+	t.Logf("Found job before delete: ID=%s, Name=%s", found.ID, found.Name)
 
 	// Delete by name (like GUI does)
+	t.Log("Calling DeleteJob('test-app')")
 	leader.DeleteJob("test-app")
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify deleted
 	found = leader.FindJobByName("test-app")
 	if found != nil {
-		t.Error("Job should be deleted")
+		t.Errorf("Job should be deleted, but found: ID=%s, Name=%s", found.ID, found.Name)
 	}
 
 	jobs := store.GetJobs()
