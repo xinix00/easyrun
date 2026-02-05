@@ -111,6 +111,7 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	task, err := a.startJob(&job)
 	if err != nil {
+		log.Printf("Failed to start job %s: %v", job.Name, err)
 		httputil.WriteJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

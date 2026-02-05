@@ -2,6 +2,8 @@ package runner
 
 import (
 	"archive/tar"
+	"archive/zip"
+	"compress/bzip2"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -24,9 +26,20 @@ func downloadArtifact(artifact *types.Artifact, destDir string) error {
 		return fmt.Errorf("invalid artifact URL: %w", err)
 	}
 
-	// Download to temp file
-	tempFile := filepath.Join(destDir, ".download.tar.gz")
-	defer os.Remove(tempFile)
+	// Determine if extraction is needed
+	shouldExtract := artifact.Extract != ""
+	var tempFile string
+
+	if shouldExtract {
+		tempFile = filepath.Join(destDir, ".download."+artifact.Extract)
+	} else {
+		// Raw file: use basename from URL
+		tempFile = filepath.Join(destDir, filepath.Base(u.Path))
+	}
+
+	if shouldExtract {
+		defer os.Remove(tempFile)
+	}
 
 	// Route to appropriate downloader based on scheme
 	switch u.Scheme {
@@ -42,9 +55,29 @@ func downloadArtifact(artifact *types.Artifact, destDir string) error {
 		return fmt.Errorf("unsupported URL scheme: %s (use http://, https://, or s3://)", u.Scheme)
 	}
 
-	// Extract tar.gz to destDir
-	if err := extractTarGz(tempFile, destDir); err != nil {
-		return fmt.Errorf("extract failed: %w", err)
+	// Extract if needed
+	if shouldExtract {
+		switch artifact.Extract {
+		case "tar.gz", "tgz":
+			if err := extractTarGz(tempFile, destDir); err != nil {
+				return fmt.Errorf("extract tar.gz failed: %w", err)
+			}
+		case "tar.bz2", "tbz2":
+			if err := extractTarBz2(tempFile, destDir); err != nil {
+				return fmt.Errorf("extract tar.bz2 failed: %w", err)
+			}
+		case "zip":
+			if err := extractZip(tempFile, destDir); err != nil {
+				return fmt.Errorf("extract zip failed: %w", err)
+			}
+		default:
+			return fmt.Errorf("unsupported extract type: %s (use tar.gz, tar.bz2, or zip)", artifact.Extract)
+		}
+	} else {
+		// Raw file: make executable
+		if err := os.Chmod(tempFile, 0755); err != nil {
+			return fmt.Errorf("chmod failed: %w", err)
+		}
 	}
 
 	return nil
@@ -64,7 +97,24 @@ func extractTarGz(tarGzPath, destDir string) error {
 	}
 	defer gzr.Close()
 
-	tr := tar.NewReader(gzr)
+	return extractTar(gzr, destDir)
+}
+
+// extractTarBz2 extracts a .tar.bz2 file to destDir
+func extractTarBz2(tarBz2Path, destDir string) error {
+	file, err := os.Open(tarBz2Path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	bzr := bzip2.NewReader(file)
+	return extractTar(bzr, destDir)
+}
+
+// extractTar extracts a tar archive from reader to destDir
+func extractTar(r io.Reader, destDir string) error {
+	tr := tar.NewReader(r)
 
 	for {
 		header, err := tr.Next()
@@ -102,6 +152,58 @@ func extractTarGz(tarGzPath, destDir string) error {
 				return err
 			}
 			f.Close()
+		}
+	}
+
+	return nil
+}
+
+// extractZip extracts a .zip file to destDir
+func extractZip(zipPath, destDir string) error {
+	r, err := zip.OpenReader(zipPath)
+	if err != nil {
+		return err
+	}
+	defer r.Close()
+
+	for _, f := range r.File {
+		target := filepath.Join(destDir, f.Name)
+
+		// Security: prevent path traversal
+		if !filepath.HasPrefix(target, filepath.Clean(destDir)+string(os.PathSeparator)) {
+			return fmt.Errorf("illegal file path in zip: %s", f.Name)
+		}
+
+		if f.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0755); err != nil {
+				return err
+			}
+			continue
+		}
+
+		// Create file
+		dir := filepath.Dir(target)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+
+		outFile, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR, f.Mode())
+		if err != nil {
+			return err
+		}
+
+		rc, err := f.Open()
+		if err != nil {
+			outFile.Close()
+			return err
+		}
+
+		_, err = io.Copy(outFile, rc)
+		rc.Close()
+		outFile.Close()
+
+		if err != nil {
+			return err
 		}
 	}
 

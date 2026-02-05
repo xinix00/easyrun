@@ -16,6 +16,7 @@ type Artifact struct {
 	URL     string            `json:"url"`               // http://, https://, s3://
 	Headers map[string]string `json:"headers,omitempty"` // HTTP headers (Authorization, X-API-Key, etc.)
 	Auth    map[string]string `json:"auth,omitempty"`    // other credentials (S3: access_key/secret_key/region)
+	Extract string            `json:"extract,omitempty"` // "tar.gz", "zip", "" (empty = raw file, chmod +x, no extraction)
 }
 
 // HealthCheck configuration for a job

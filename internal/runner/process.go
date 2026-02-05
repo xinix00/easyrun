@@ -62,8 +62,8 @@ func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, 
 
 	// Download artifact if specified
 	if job.Artifact != nil {
-		appDir := filepath.Join(taskDir, "app")
-		if err := downloadArtifact(job.Artifact, appDir); err != nil {
+		// Download directly to taskDir so commands like "./binary" work
+		if err := downloadArtifact(job.Artifact, taskDir); err != nil {
 			r.cleanupTaskDir(taskID)
 			return nil, fmt.Errorf("failed to download artifact: %w", err)
 		}
@@ -284,7 +284,6 @@ func (r *ProcessRunner) setupTaskDir(taskID string, job *types.Job) (string, err
 	dirs := []string{
 		taskDir,
 		filepath.Join(taskDir, "tmp"),
-		filepath.Join(taskDir, "app"),
 	}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
