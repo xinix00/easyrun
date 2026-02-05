@@ -109,6 +109,12 @@ func (ma *mockAgent) RunCallCount() int {
 	return ma.runCalls
 }
 
+func (ma *mockAgent) ResetRunCount() {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	ma.runCalls = 0
+}
+
 func (ma *mockAgent) TaskCount() int {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()
@@ -146,6 +152,15 @@ func (ma *mockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
 }
 
+// taskCounts creates a map of jobID -> 1 for each job (1 task per job)
+func taskCounts(jobs []*types.Job) map[string]int {
+	counts := make(map[string]int)
+	for _, j := range jobs {
+		counts[j.ID] = 1
+	}
+	return counts
+}
+
 // ============== LEADER FAILOVER TESTS ==============
 // These tests verify that state is correctly transferred when a new leader takes over
 
@@ -165,14 +180,14 @@ func TestFailoverNewLeaderLearnsJobsFromAgents(t *testing.T) {
 		{ID: "webapp-id", Name: "webapp", Command: "./webapp", Count: 2},
 		{ID: "api-id", Name: "api", Command: "./api", Count: 1},
 	}
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agent1Jobs, time.Now(), "")
+	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agent1Jobs, taskCounts(agent1Jobs), time.Now(), "")
 
 	// Agent 2 heartbeats with its jobs
 	agent2Jobs := []*types.Job{
 		{ID: "webapp-id", Name: "webapp", Command: "./webapp", Count: 2}, // Same job, running on both
 		{ID: "worker-id", Name: "worker", Command: "./worker", Count: 1},
 	}
-	newLeader.Heartbeat("agent-2", "http://10.0.0.2:8080", agent2Jobs, time.Now(), "")
+	newLeader.Heartbeat("agent-2", "http://10.0.0.2:8080", agent2Jobs, taskCounts(agent2Jobs), time.Now(), "")
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -207,7 +222,7 @@ func TestFailoverStateTimeBasedSync(t *testing.T) {
 		{ID: "critical-id", Name: "critical", Command: "./critical"},
 	}
 
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, newerStateTime, "")
+	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, taskCounts(agentJobs), newerStateTime, "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Verify new leader adopted the newer state
@@ -245,11 +260,11 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 		Command: "./daemon",
 		Count:   -1,
 	}
-	newLeader.Heartbeat("agent-1", agent1.URL(), []*types.Job{daemonJob}, time.Now(), "")
+	newLeader.Heartbeat("agent-1", agent1.URL(), []*types.Job{daemonJob}, taskCounts([]*types.Job{daemonJob}), time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Now agent 2 joins - it should receive the count=-1 job via dispatch
-	newLeader.Heartbeat("agent-2", agent2.URL(), nil, time.Time{}, "")
+	newLeader.Heartbeat("agent-2", agent2.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify agent 2 received the job via /run
@@ -298,7 +313,7 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 	// All agents heartbeat saying they ALREADY have the daemon job
 	for i, agent := range agents {
 		agentID := string(rune('a' + i))
-		newLeader.Heartbeat("agent-"+agentID, agent.URL(), []*types.Job{daemonJob}, time.Now(), "")
+		newLeader.Heartbeat("agent-"+agentID, agent.URL(), []*types.Job{daemonJob}, taskCounts([]*types.Job{daemonJob}), time.Now(), "")
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -338,11 +353,11 @@ func TestFailoverNewAgentGetsAllDaemonJobs(t *testing.T) {
 		{ID: "easylb-id", Name: "easylb", Command: "./easylb", Count: -1},
 		{ID: "monitoring-id", Name: "monitoring", Command: "./monitor", Count: -1},
 	}
-	newLeader.Heartbeat("existing", existingAgent.URL(), daemonJobs, time.Now(), "")
+	newLeader.Heartbeat("existing", existingAgent.URL(), daemonJobs, taskCounts(daemonJobs), time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	// New agent joins with no jobs
-	newLeader.Heartbeat("new-agent", newAgent.URL(), nil, time.Time{}, "")
+	newLeader.Heartbeat("new-agent", newAgent.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(100 * time.Millisecond)
 
 	// New agent should have received all 3 daemon jobs
@@ -378,7 +393,7 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 		Tags:        map[string]string{"urlprefix": "api.example.com", "lb": "main"},
 	}
 
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", []*types.Job{originalJob}, time.Now(), "")
+	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", []*types.Job{originalJob}, taskCounts([]*types.Job{originalJob}), time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Retrieve and verify
@@ -415,7 +430,7 @@ func TestFailoverAgentWithEmptyJobsStillRegisters(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	// Agent heartbeats with no jobs
-	newLeader.Heartbeat("fresh-agent", "http://10.0.0.99:8080", nil, time.Time{}, "")
+	newLeader.Heartbeat("fresh-agent", "http://10.0.0.99:8080", nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	agents := newLeader.GetAgents()
@@ -441,12 +456,11 @@ func TestFailoverOlderAgentStateIgnored(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	// Agent has OLDER state
-	olderTime := time.Now().Add(-1 * time.Hour)
 	agentJobs := []*types.Job{
 		{ID: "old-job-id", Name: "old-job", Command: "old"},
 	}
 
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, olderTime, "")
+	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, taskCounts(agentJobs), time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Leader should still learn about placement (agent IS running the job)
@@ -497,11 +511,11 @@ func TestFailoverDispatchFailureDoesNotBreakHeartbeat(t *testing.T) {
 	goodAgent := newMockAgent()
 	defer goodAgent.Close()
 	daemonJob := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./d", Count: -1}
-	newLeader.Heartbeat("good-agent", goodAgent.URL(), []*types.Job{daemonJob}, time.Now(), "")
+	newLeader.Heartbeat("good-agent", goodAgent.URL(), []*types.Job{daemonJob}, taskCounts([]*types.Job{daemonJob}), time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Rejecting agent joins - dispatch will fail but heartbeat should succeed
-	newLeader.Heartbeat("rejecting-agent", rejectingAgent.URL, nil, time.Time{}, "")
+	newLeader.Heartbeat("rejecting-agent", rejectingAgent.URL, nil, nil, time.Time{}, "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Agent should still be registered
@@ -569,7 +583,7 @@ func TestFailoverNewLeaderDoesNotDuplicateOwnTasks(t *testing.T) {
 
 	// LOCAL agent heartbeats to the new leader (itself)
 	// Note: stateTime is SAME as leader's (not newer), so sync path is NOT triggered
-	newLeader.Heartbeat("local-agent-id", localAgent.URL(), []*types.Job{existingJob}, newLeaderStore.stateTime, "")
+	newLeader.Heartbeat("local-agent-id", localAgent.URL(), []*types.Job{existingJob}, taskCounts([]*types.Job{existingJob}), time.Now(), "")
 	time.Sleep(50 * time.Millisecond)
 
 	// BUG: The new leader dispatches instances to itself because:
@@ -643,7 +657,7 @@ func TestFailoverNewLeaderLearnsFromLocalAgent(t *testing.T) {
 	localAgent.mu.Unlock()
 
 	// Local agent heartbeats (same stateTime, not newer)
-	newLeader.Heartbeat("local-agent-id", localAgent.URL(), localJobs, newLeaderStore.stateTime, "")
+	newLeader.Heartbeat("local-agent-id", localAgent.URL(), localJobs, taskCounts(localJobs), time.Now(), "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Jobs should still be in store
@@ -665,5 +679,500 @@ func TestFailoverNewLeaderLearnsFromLocalAgent(t *testing.T) {
 	// But with the bug, tryRescheduleUnderscheduled dispatches because placement is empty
 	if localAgent.RunCallCount() != 0 {
 		t.Errorf("BUG: Local agent should not receive new /run calls, got %d", localAgent.RunCallCount())
+	}
+}
+
+func TestFailoverNewLeaderReschedulesOrphanedJobs(t *testing.T) {
+	// When a new leader takes over and loads jobs from disk,
+	// jobs that were running on the OLD leader (now dead) should be rescheduled.
+
+	localAgent := newMockAgent()
+	defer localAgent.Close()
+
+	// Jobs that were running on the OLD leader (now persisted in state)
+	jobs := []*types.Job{
+		{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1},
+		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1},
+		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1},
+		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1},
+		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
+		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
+		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
+	}
+
+	// New leader loads jobs from persisted state (old leader's state)
+	newLeaderStore := NewMockJobStore()
+	for _, job := range jobs {
+		newLeaderStore.StoreJob(job)
+	}
+	newLeaderStore.stateTime = time.Now().Add(-1 * time.Minute)
+
+	newLeader := New("new-leader-id", newLeaderStore, &http.Client{Timeout: 1 * time.Second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newLeader.stateLoop(ctx)
+
+	// New leader's local agent heartbeats with NO jobs running
+	newLeader.Heartbeat("new-leader-id", localAgent.URL(), nil, nil, time.Time{}, "")
+	time.Sleep(100 * time.Millisecond)
+
+	// All 7 jobs should be dispatched
+	runCalls := localAgent.RunCallCount()
+	if runCalls != 7 {
+		t.Errorf("Expected 7 /run calls (1 daemon + 6 regular), got %d", runCalls)
+	}
+
+	// Verify all jobs are in placement
+	for _, job := range jobs {
+		placement := newLeader.GetPlacement(job.ID)
+		if len(placement) == 0 {
+			t.Errorf("Job %s should be in placement, got empty", job.Name)
+		}
+	}
+}
+
+func TestFailoverNewLeaderWithExistingDaemon(t *testing.T) {
+	// BUG REPRODUCTION: New leader already has daemon running (from before failover),
+	// heartbeats with that daemon, but orphaned jobs from old leader are NOT rescheduled.
+	//
+	// Scenario:
+	// 1. Old leader was running 6 regular jobs
+	// 2. New leader already had the daemon running (count=-1, runs everywhere)
+	// 3. Old leader dies, new leader takes over
+	// 4. New leader heartbeats reporting the daemon it already has
+	// 5. Expected: 6 regular jobs should be dispatched
+	// 6. Actual (bug?): Nothing dispatched because agent "already has jobs"?
+
+	localAgent := newMockAgent()
+	defer localAgent.Close()
+
+	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
+	regularJobs := []*types.Job{
+		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1},
+		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1},
+		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1},
+		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
+		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
+		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
+	}
+
+	// New leader loads ALL jobs from persisted state
+	newLeaderStore := NewMockJobStore()
+	newLeaderStore.StoreJob(daemon)
+	for _, job := range regularJobs {
+		newLeaderStore.StoreJob(job)
+	}
+	newLeaderStore.stateTime = time.Now().Add(-1 * time.Minute)
+
+	newLeader := New("new-leader-id", newLeaderStore, &http.Client{Timeout: 1 * time.Second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newLeader.stateLoop(ctx)
+
+	// Simulate: local agent already has the daemon running (from before failover)
+	localAgent.mu.Lock()
+	localAgent.jobs[daemon.Name] = daemon
+	localAgent.tasks = append(localAgent.tasks, &types.Task{
+		ID:      "daemon-task",
+		JobName: daemon.Name,
+		State:   types.TaskRunning,
+	})
+	localAgent.mu.Unlock()
+
+	// New leader's local agent heartbeats WITH the daemon it already has
+	newLeader.Heartbeat("new-leader-id", localAgent.URL(), []*types.Job{daemon}, taskCounts([]*types.Job{daemon}), time.Now(), "")
+	time.Sleep(100 * time.Millisecond)
+
+	// EXPECTED: 6 regular jobs should be dispatched (daemon already running, no new dispatch)
+	// daemon: already running, placement learned → no dispatch
+	// job-1 to job-6: not running, under-scheduled → dispatch all 6
+	runCalls := localAgent.RunCallCount()
+	if runCalls != 6 {
+		t.Errorf("BUG: Expected 6 /run calls (regular jobs only), got %d", runCalls)
+	}
+
+	// Verify placement
+	daemonPlacement := newLeader.GetPlacement(daemon.ID)
+	if len(daemonPlacement) != 1 {
+		t.Errorf("Daemon should have 1 placement (no duplicate), got %d", len(daemonPlacement))
+	}
+
+	for _, job := range regularJobs {
+		placement := newLeader.GetPlacement(job.ID)
+		if len(placement) == 0 {
+			t.Errorf("Job %s should be in placement, got empty", job.Name)
+		}
+	}
+}
+
+func TestFailoverJobsPinnedToDeadAgent(t *testing.T) {
+	// Note: tryRescheduleUnderscheduled uses sendJobToAgent directly,
+	// which doesn't check AgentID constraints. This test documents current behavior.
+	// TODO: Should pinned jobs be skipped in tryRescheduleUnderscheduled?
+
+	localAgent := newMockAgent()
+	defer localAgent.Close()
+
+	oldLeaderID := "old-leader-id"
+
+	// Jobs pinned to old leader
+	pinnedJobs := []*types.Job{
+		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1, AgentID: oldLeaderID},
+		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1, AgentID: oldLeaderID},
+		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1, AgentID: oldLeaderID},
+	}
+	// Jobs NOT pinned (can run anywhere)
+	unpinnedJobs := []*types.Job{
+		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
+		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
+		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
+	}
+	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
+
+	// New leader loads all jobs from persisted state
+	newLeaderStore := NewMockJobStore()
+	newLeaderStore.StoreJob(daemon)
+	for _, job := range pinnedJobs {
+		newLeaderStore.StoreJob(job)
+	}
+	for _, job := range unpinnedJobs {
+		newLeaderStore.StoreJob(job)
+	}
+
+	newLeader := New("new-leader-id", newLeaderStore, &http.Client{Timeout: 1 * time.Second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newLeader.stateLoop(ctx)
+
+	// New leader's local agent heartbeats
+	newLeader.Heartbeat("new-leader-id", localAgent.URL(), nil, nil, time.Time{}, "")
+	time.Sleep(100 * time.Millisecond)
+
+	// Current behavior: ALL jobs dispatched (pinned jobs not checked)
+	// This might be intentional - "rescue" pinned jobs when their node is dead
+	runCalls := localAgent.RunCallCount()
+	if runCalls != 7 {
+		t.Errorf("Expected 7 /run calls (all jobs), got %d", runCalls)
+	}
+}
+
+func TestFailoverSecondHeartbeatDoesNotReschedule(t *testing.T) {
+	// Jobs only get rescheduled on FIRST heartbeat (isNew=true).
+	// This documents current behavior - not necessarily a bug.
+
+	localAgent := newMockAgent()
+	defer localAgent.Close()
+
+	jobs := []*types.Job{
+		{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1},
+		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1},
+	}
+
+	newLeaderStore := NewMockJobStore()
+	for _, job := range jobs {
+		newLeaderStore.StoreJob(job)
+	}
+
+	newLeader := New("new-leader-id", newLeaderStore, &http.Client{Timeout: 1 * time.Second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newLeader.stateLoop(ctx)
+
+	// First heartbeat - agent rejects all /run calls
+	localAgent.SetFailRuns(true)
+	newLeader.Heartbeat("new-leader-id", localAgent.URL(), nil, nil, time.Time{}, "")
+	time.Sleep(50 * time.Millisecond)
+
+	// Now agent is healthy
+	localAgent.SetFailRuns(false)
+
+	// Second heartbeat - agent is no longer "new", no rescheduling
+	newLeader.Heartbeat("new-leader-id", localAgent.URL(), nil, nil, time.Time{}, "")
+	time.Sleep(50 * time.Millisecond)
+
+	// Current behavior: no rescheduling on second heartbeat
+	t.Logf("Run calls after second heartbeat: %d", localAgent.RunCallCount())
+}
+
+func TestFailoverAgentReportsOnlyRunningJobs(t *testing.T) {
+	// TEST: Agent sends only RUNNING jobs (not all known jobs)
+	// This allows the leader to correctly reschedule missing jobs.
+	//
+	// Scenario:
+	// 1. Agent was synced with old leader, knows about 7 jobs
+	// 2. Agent was only RUNNING the daemon (count=-1)
+	// 3. Old leader dies, agent becomes new leader
+	// 4. Agent heartbeats with only the daemon (the RUNNING job)
+	// 5. Placement learned only for daemon
+	// 6. tryRescheduleUnderscheduled sees 6 jobs missing → dispatches them!
+	// 7. All 7 jobs now running
+
+	localAgent := newMockAgent()
+	defer localAgent.Close()
+
+	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
+	regularJobs := []*types.Job{
+		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1},
+		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1},
+		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1},
+		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
+		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
+		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
+	}
+
+	// All jobs known to the agent (from SyncJobs with old leader)
+	allKnownJobs := append([]*types.Job{daemon}, regularJobs...)
+
+	// New leader store has all jobs
+	newLeaderStore := NewMockJobStore()
+	for _, job := range allKnownJobs {
+		newLeaderStore.StoreJob(job)
+	}
+
+	newLeader := New("new-leader-id", newLeaderStore, &http.Client{Timeout: 1 * time.Second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newLeader.stateLoop(ctx)
+
+	// Simulate: local agent only has daemon RUNNING
+	localAgent.mu.Lock()
+	localAgent.jobs[daemon.Name] = daemon
+	localAgent.tasks = append(localAgent.tasks, &types.Task{
+		ID:      "daemon-task",
+		JobName: daemon.Name,
+		State:   types.TaskRunning,
+	})
+	localAgent.mu.Unlock()
+
+	// FIX: Agent heartbeats with only RUNNING jobs (the daemon)
+	// Agent.GetRunningJobs() returns only jobs with running tasks
+	runningJobs := []*types.Job{daemon}
+	newLeader.Heartbeat("new-leader-id", localAgent.URL(), runningJobs, taskCounts(runningJobs), time.Now(), "")
+	time.Sleep(100 * time.Millisecond)
+
+	// Placement only learned for daemon
+	// tryRescheduleUnderscheduled sees 6 jobs under-scheduled → dispatches them
+
+	runCalls := localAgent.RunCallCount()
+
+	// EXPECTED: 6 regular jobs should be dispatched (daemon already running)
+	if runCalls != 6 {
+		t.Errorf("Expected 6 /run calls for regular jobs, got %d", runCalls)
+	}
+}
+
+func TestFailoverAgentDiesTasksRescheduled(t *testing.T) {
+	// This test uses manual placement setup - see TestFailoverAgentDiesRealisticHeartbeat
+	// for the real bug reproduction.
+
+	agentA := newMockAgent()
+	agentB := newMockAgent()
+	defer agentB.Close()
+
+	store := NewMockJobStore()
+	leader := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader.agentTimeout = 200 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	job := &types.Job{
+		ID:      "ticker-id",
+		Name:    "ticker",
+		Command: "sh -c 'while :; do echo tick; sleep 1; done'",
+		Count:   20,
+	}
+	store.StoreJob(job)
+
+	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, map[string]int{job.ID: 1}, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, map[string]int{job.ID: 1}, time.Now(), "")
+	time.Sleep(20 * time.Millisecond)
+
+	// Manual placement: 11 on A, 9 on B (total 20)
+	leader.do(func(s *leaderState) {
+		s.placement[job.ID] = []string{
+			"agent-a", "agent-a", "agent-a", "agent-a", "agent-a", "agent-a",
+			"agent-a", "agent-a", "agent-a", "agent-a", "agent-a",
+			"agent-b", "agent-b", "agent-b", "agent-b", "agent-b",
+			"agent-b", "agent-b", "agent-b", "agent-b",
+		}
+	})
+
+	agentA.Close()
+	time.Sleep(300 * time.Millisecond)
+
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, map[string]int{job.ID: 9}, time.Now(), "")
+	time.Sleep(20 * time.Millisecond)
+
+	leader.checkDeadAgents()
+	time.Sleep(100 * time.Millisecond)
+
+	runCalls := agentB.RunCallCount()
+	if runCalls != 11 {
+		t.Errorf("Agent B should receive 11 /run calls, got %d", runCalls)
+	}
+
+	placement := leader.GetPlacement(job.ID)
+	if len(placement) != 20 {
+		t.Errorf("Final placement should be 20, got %d", len(placement))
+	}
+}
+
+func TestFailoverHeartbeatLearnsWrongPlacementCount(t *testing.T) {
+	// BUG REPRODUCTION: When leader learns placement from heartbeat,
+	// it only creates 1 entry per job per agent, not per task.
+	//
+	// FIX: Change heartbeat to send task COUNTS per job:
+	//   running_job_ids: ["ticker-id"]           ← OLD (broken)
+	//   running_tasks:   {"ticker-id": 11}       ← NEW (correct)
+
+	agentA := newMockAgent()
+	agentB := newMockAgent()
+	defer agentA.Close()
+	defer agentB.Close()
+
+	store := NewMockJobStore()
+	leader := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	job := &types.Job{
+		ID:      "ticker-id",
+		Name:    "ticker",
+		Command: "sh -c 'while :; do echo tick; sleep 1; done'",
+		Count:   20,
+	}
+	store.StoreJob(job)
+
+	// Agents heartbeat with task COUNTS
+	// Agent A has 11 tasks, Agent B has 9 tasks
+	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, map[string]int{job.ID: 11}, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, map[string]int{job.ID: 9}, time.Now(), "")
+	time.Sleep(20 * time.Millisecond)
+
+	// Placement should now have 20 entries (11 + 9)
+	placement := leader.GetPlacement(job.ID)
+	t.Logf("Placement entries from heartbeat: %d", len(placement))
+
+	if len(placement) != 20 {
+		t.Errorf("Placement should have 20 entries (11+9), got %d", len(placement))
+	}
+
+	// Count per agent
+	countA := 0
+	countB := 0
+	for _, p := range placement {
+		if p == "agent-a" {
+			countA++
+		}
+		if p == "agent-b" {
+			countB++
+		}
+	}
+	if countA != 11 {
+		t.Errorf("Agent A should have 11 placements, got %d", countA)
+	}
+	if countB != 9 {
+		t.Errorf("Agent B should have 9 placements, got %d", countB)
+	}
+}
+
+func TestFailoverAgentDiesRealisticHeartbeat(t *testing.T) {
+	// BUG REPRODUCTION: Realistic heartbeat flow where placement is learned from heartbeats.
+	//
+	// The problem: Heartbeat only sends job IDs, not task counts.
+	// So placement[job.ID] only has 1 entry per agent, regardless of how many tasks.
+	//
+	// Scenario:
+	// 1. Leader dispatches job with count=20 to 2 agents (10 each via round-robin)
+	// 2. Agent A crashes
+	// 3. Placement only knows "agent-a has ticker, agent-b has ticker" (2 entries)
+	// 4. After A dies, placement = ["agent-b"] (1 entry)
+	// 5. Leader thinks 1 instance running, should reschedule 19
+	// 6. BUG: Heartbeat learns placement as 1 entry per agent, not per task!
+
+	agentA := newMockAgent()
+	agentB := newMockAgent()
+	defer agentB.Close()
+
+	store := NewMockJobStore()
+	leader := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader.agentTimeout = 200 * time.Millisecond
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	// Register agents FIRST (before job exists)
+	leader.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	time.Sleep(20 * time.Millisecond)
+
+	// Create and dispatch job with count=20
+	job := &types.Job{
+		ID:      "ticker-id",
+		Name:    "ticker",
+		Command: "sh -c 'while :; do echo tick; sleep 1; done'",
+		Count:   20,
+	}
+	store.StoreJob(job)
+
+	// Dispatch job - should create 20 tasks round-robin across 2 agents
+	err := leader.DispatchJob(job)
+	if err != nil {
+		t.Fatalf("Failed to dispatch: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Check initial dispatch
+	aRuns := agentA.RunCallCount()
+	bRuns := agentB.RunCallCount()
+	t.Logf("Initial dispatch: agent-a got %d, agent-b got %d (total %d)", aRuns, bRuns, aRuns+bRuns)
+
+	if aRuns+bRuns != 20 {
+		t.Fatalf("Should have dispatched 20 tasks, got %d", aRuns+bRuns)
+	}
+
+	// Check placement
+	placement := leader.GetPlacement(job.ID)
+	t.Logf("Initial placement entries: %d", len(placement))
+
+	// Reset counters for the crash test
+	agentA.ResetRunCount()
+	agentB.ResetRunCount()
+
+	// CHAOS: Agent A crashes
+	agentA.Close()
+	time.Sleep(300 * time.Millisecond)
+
+	// Keep agent B alive - report task count based on dispatch (placement already tracked)
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, map[string]int{job.ID: bRuns}, time.Now(), "")
+	time.Sleep(20 * time.Millisecond)
+
+	// Trigger dead agent check
+	leader.checkDeadAgents()
+	time.Sleep(100 * time.Millisecond)
+
+	// Count how many were rescheduled to B
+	rescheduled := agentB.RunCallCount()
+	t.Logf("After agent-a death: agent-b received %d /run calls", rescheduled)
+
+	// Agent A had ~10 tasks (round-robin), so B should get ~10 more
+	if rescheduled < 8 { // Allow some variance from round-robin
+		t.Errorf("BUG: Agent B should receive ~10 /run calls to reschedule, got %d", rescheduled)
+	}
+
+	// Final placement should be back to 20
+	placement = leader.GetPlacement(job.ID)
+	if len(placement) != 20 {
+		t.Errorf("BUG: Final placement should be 20, got %d", len(placement))
 	}
 }

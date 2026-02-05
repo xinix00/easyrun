@@ -25,7 +25,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.4.3" // Agent version
+const version = "v0.4.6" // Agent version
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
@@ -145,11 +145,11 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 					failCount = 0
 					// Send heartbeat to ourselves (register as agent)
 					leaderAddr = fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
-					sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
+					sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetRunningTaskCounts(), ag.GetStateTime())
 				}
 			} else if leaderAddr != "" {
 				// Send heartbeat to leader with our jobs and state time
-				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
+				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetRunningTaskCounts(), ag.GetStateTime())
 				if err != nil {
 					failCount++
 					log.Printf("Heartbeat failed (%d): %v", failCount, err)
@@ -223,7 +223,7 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 	// No bootstrapping needed - the agent already has all our jobs
 	*l = leader.New(ag.ID(), ag, nil)
 
-	log.Printf("Leader initialized with %d jobs from local agent", len(ag.GetJobs()))
+	log.Printf("Leader initialized with %d jobs from local agent", len(ag.GetRunningTaskCounts()))
 
 	// Start API server on leader port FIRST
 	leaderAddr := fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
@@ -247,15 +247,16 @@ type heartbeatResponse struct {
 	StateTime time.Time    `json:"state_time"`
 }
 
-func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, stateTime time.Time) (*heartbeatResponse, error) {
+func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, runningTaskCounts map[string]int, stateTime time.Time) (*heartbeatResponse, error) {
 	url := fmt.Sprintf("http://%s/v1/heartbeat", leaderAddr)
 
 	body, _ := json.Marshal(map[string]any{
-		"id":         agentID,
-		"endpoint":   agentEndpoint,
-		"version":    version,
-		"jobs":       jobs,
-		"state_time": stateTime,
+		"id":            agentID,
+		"endpoint":      agentEndpoint,
+		"version":       version,
+		"jobs":          jobs,              // All known jobs (for state sync)
+		"running_tasks": runningTaskCounts, // jobID -> task count (for placement)
+		"state_time":    stateTime,
 	})
 
 	client := &http.Client{Timeout: 5 * time.Second}

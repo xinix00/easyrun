@@ -4,7 +4,6 @@ import (
 	"context"
 	"log"
 	"net/http"
-	"slices"
 	"time"
 
 	"easyrun/internal/types"
@@ -95,8 +94,10 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 	return <-result
 }
 
-// Heartbeat updates agent's LastSeen and learns jobs/placement from agents
-func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentStateTime time.Time, version string) []*types.Job {
+// Heartbeat updates agent's LastSeen, syncs jobs, and learns placement
+// - jobs: all job definitions (for state sync if agent has newer state)
+// - runningTaskCounts: map of jobID -> number of running tasks (for correct placement tracking)
+func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, runningTaskCounts map[string]int, stateTime time.Time, version string) []*types.Job {
 	// Register or update agent
 	isNew := query(l, func(s *leaderState) bool {
 		if agent, ok := s.agents[id]; ok {
@@ -113,29 +114,43 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 		return true
 	})
 
-	// If agent has newer state than us, adopt their state (sync jobs to store)
+	// Sync job definitions if agent has newer state
 	myStateTime := l.jobStore.GetStateTime()
-	if agentStateTime.After(myStateTime) && len(agentJobs) > 0 {
+	if stateTime.After(myStateTime) && len(jobs) > 0 {
 		log.Printf("Agent %s has newer state, syncing", id)
-		l.jobStore.SyncJobs(agentJobs, agentStateTime)
+		l.jobStore.SyncJobs(jobs, stateTime)
 	}
 
-	// Learn placement from ALL agents (including local!) for failover recovery
-	// This must happen BEFORE tryRescheduleUnderscheduled to avoid duplicates
-	// Use query() to ensure this completes before continuing (not fire-and-forget)
-	if len(agentJobs) > 0 {
+	// Learn placement from task counts (creates correct number of entries per agent)
+	if len(runningTaskCounts) > 0 {
 		query(l, func(s *leaderState) struct{} {
-			for _, job := range agentJobs {
-				if job.ID == "" {
-					continue // Skip jobs without ID (legacy)
+			for jobID, reportedCount := range runningTaskCounts {
+				// Count current placement entries for this agent
+				currentCount := 0
+				for _, agentID := range s.placement[jobID] {
+					if agentID == id {
+						currentCount++
+					}
 				}
-				// Store job if we don't know about it yet
-				if l.jobStore.GetJob(job.ID) == nil {
-					l.jobStore.StoreJob(job)
-				}
-				// Track placement
-				if !slices.Contains(s.placement[job.ID], id) {
-					s.placement[job.ID] = append(s.placement[job.ID], id)
+
+				// Adjust placement to match reported count
+				if reportedCount > currentCount {
+					// Need to ADD entries
+					for i := 0; i < reportedCount-currentCount; i++ {
+						s.placement[jobID] = append(s.placement[jobID], id)
+					}
+				} else if reportedCount < currentCount {
+					// Need to REMOVE entries (agent reports fewer tasks)
+					toRemove := currentCount - reportedCount
+					newPlacement := make([]string, 0, len(s.placement[jobID])-toRemove)
+					for _, agentID := range s.placement[jobID] {
+						if agentID == id && toRemove > 0 {
+							toRemove--
+							continue // Skip this entry
+						}
+						newPlacement = append(newPlacement, agentID)
+					}
+					s.placement[jobID] = newPlacement
 				}
 			}
 			return struct{}{}
@@ -143,7 +158,6 @@ func (l *Leader) Heartbeat(id, endpoint string, agentJobs []*types.Job, agentSta
 	}
 
 	// New agent gets count=-1 jobs and we try to reschedule under-scheduled jobs
-	// This runs AFTER learning placement - placement check prevents duplicates
 	if isNew {
 		l.ensureAllAgentJobs(id, endpoint)
 		l.tryRescheduleUnderscheduled(id, endpoint)
@@ -208,7 +222,12 @@ func (l *Leader) ensureAllAgentJobs(agentID, endpoint string) {
 		}
 		// Skip if agent already has this job (placement learned from heartbeat)
 		if query(l, func(s *leaderState) bool {
-			return slices.Contains(s.placement[job.ID], agentID)
+			for _, a := range s.placement[job.ID] {
+				if a == agentID {
+					return true
+				}
+			}
+			return false
 		}) {
 			continue
 		}
@@ -233,7 +252,12 @@ func (l *Leader) tryRescheduleUnderscheduled(agentID, endpoint string) {
 
 		// Skip if agent already has this job (placement learned from heartbeat)
 		if query(l, func(s *leaderState) bool {
-			return slices.Contains(s.placement[job.ID], agentID)
+			for _, a := range s.placement[job.ID] {
+				if a == agentID {
+					return true
+				}
+			}
+			return false
 		}) {
 			continue
 		}

@@ -93,11 +93,12 @@ func (s *Server) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 // handleHeartbeat handles agent heartbeat (also registers new agents)
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID        string       `json:"id"`
-		Endpoint  string       `json:"endpoint"`
-		Version   string       `json:"version,omitempty"`
-		Jobs      []*types.Job `json:"jobs,omitempty"`
-		StateTime time.Time    `json:"state_time,omitempty"`
+		ID                string         `json:"id"`
+		Endpoint          string         `json:"endpoint"`
+		Version           string         `json:"version,omitempty"`
+		Jobs              []*types.Job   `json:"jobs,omitempty"`           // All known jobs (for state sync)
+		RunningTaskCounts map[string]int `json:"running_tasks,omitempty"`  // jobID -> task count (for placement)
+		StateTime         time.Time      `json:"state_time,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
@@ -109,7 +110,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobs := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime, req.Version)
+	jobs := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.RunningTaskCounts, req.StateTime, req.Version)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
 		"jobs":       jobs,

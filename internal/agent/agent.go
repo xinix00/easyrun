@@ -262,7 +262,7 @@ func (a *Agent) GetJobByName(jobName string) *types.Job {
 	})
 }
 
-// GetJobs returns all jobs this agent knows about
+// GetJobs returns all jobs this agent knows about (for JobStore interface)
 func (a *Agent) GetJobs() []*types.Job {
 	return query(a, func(s *agentState) []*types.Job {
 		jobs := make([]*types.Job, 0, len(s.jobs))
@@ -270,6 +270,21 @@ func (a *Agent) GetJobs() []*types.Job {
 			jobs = append(jobs, j)
 		}
 		return jobs
+	})
+}
+
+// GetRunningTaskCounts returns a map of jobID -> number of running tasks on this agent
+func (a *Agent) GetRunningTaskCounts() map[string]int {
+	return query(a, func(s *agentState) map[string]int {
+		counts := make(map[string]int)
+		for _, task := range s.tasks {
+			if task.State == types.TaskRunning {
+				if job := findJobByName(s, task.JobName); job != nil {
+					counts[job.ID]++
+				}
+			}
+		}
+		return counts
 	})
 }
 
