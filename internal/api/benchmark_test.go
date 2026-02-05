@@ -261,6 +261,10 @@ func (m *mockJobStore) StoreJob(job *types.Job) {
 	m.jobs[job.Name] = job
 }
 
+func (m *mockJobStore) DeleteJob(jobName string) {
+	delete(m.jobs, jobName)
+}
+
 func (m *mockJobStore) GetStateTime() time.Time {
 	return time.Now()
 }
