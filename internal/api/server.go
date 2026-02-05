@@ -52,27 +52,10 @@ func NewServer(l *leader.Leader, addr string) *Server {
 
 	s.server = &http.Server{
 		Addr:    addr,
-		Handler: corsMiddleware(mux),
+		Handler: mux,
 	}
 
 	return s
-}
-
-// corsMiddleware adds CORS headers for browser access
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-
-		// Handle preflight
-		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }
 
 // Run starts the HTTP server
