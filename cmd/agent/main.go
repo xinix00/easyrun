@@ -54,6 +54,11 @@ func main() {
 		log.Fatal("cluster name required (use --cluster or config file)")
 	}
 
+	// Use cluster-specific state file to avoid conflicts when running multiple clusters
+	if cfg.Paths.StateFile == "./data/state.json" {
+		cfg.Paths.StateFile = fmt.Sprintf("./data/state-%s.json", cfg.Cluster.Name)
+	}
+
 	// Get or create stable node ID
 	nodeID := getOrCreateNodeID(cfg)
 
