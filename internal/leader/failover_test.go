@@ -165,14 +165,14 @@ func TestFailoverNewLeaderLearnsJobsFromAgents(t *testing.T) {
 		{ID: "webapp-id", Name: "webapp", Command: "./webapp", Count: 2},
 		{ID: "api-id", Name: "api", Command: "./api", Count: 1},
 	}
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agent1Jobs, time.Now())
+	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agent1Jobs, time.Now(, ""))
 
 	// Agent 2 heartbeats with its jobs
 	agent2Jobs := []*types.Job{
 		{ID: "webapp-id", Name: "webapp", Command: "./webapp", Count: 2}, // Same job, running on both
 		{ID: "worker-id", Name: "worker", Command: "./worker", Count: 1},
 	}
-	newLeader.Heartbeat("agent-2", "http://10.0.0.2:8080", agent2Jobs, time.Now())
+	newLeader.Heartbeat("agent-2", "http://10.0.0.2:8080", agent2Jobs, time.Now(, ""))
 
 	time.Sleep(20 * time.Millisecond)
 
@@ -207,7 +207,7 @@ func TestFailoverStateTimeBasedSync(t *testing.T) {
 		{Name: "critical", Command: "./critical"},
 	}
 
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, newerStateTime)
+	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, newerStateTime, "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Verify new leader adopted the newer state
@@ -245,11 +245,11 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 		Command: "./daemon",
 		Count:   -1,
 	}
-	newLeader.Heartbeat("agent-1", agent1.URL(), []*types.Job{daemonJob}, time.Now())
+	newLeader.Heartbeat("agent-1", agent1.URL(), []*types.Job{daemonJob}, time.Now(, ""))
 	time.Sleep(20 * time.Millisecond)
 
 	// Now agent 2 joins - it should receive the count=-1 job via dispatch
-	newLeader.Heartbeat("agent-2", agent2.URL(), nil, time.Time{})
+	newLeader.Heartbeat("agent-2", agent2.URL(), nil, time.Time{}, "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify agent 2 received the job via /run
@@ -299,7 +299,7 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 	// All agents heartbeat saying they have the daemon job
 	for i, agent := range agents {
 		agentID := string(rune('a' + i))
-		newLeader.Heartbeat("agent-"+agentID, agent.URL(), []*types.Job{daemonJob}, time.Now())
+		newLeader.Heartbeat("agent-"+agentID, agent.URL(), []*types.Job{daemonJob}, time.Now(, ""))
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -343,11 +343,11 @@ func TestFailoverNewAgentGetsAllDaemonJobs(t *testing.T) {
 		{ID: "easylb-id", Name: "easylb", Command: "./easylb", Count: -1},
 		{ID: "monitoring-id", Name: "monitoring", Command: "./monitor", Count: -1},
 	}
-	newLeader.Heartbeat("existing", existingAgent.URL(), daemonJobs, time.Now())
+	newLeader.Heartbeat("existing", existingAgent.URL(), daemonJobs, time.Now(, ""))
 	time.Sleep(20 * time.Millisecond)
 
 	// New agent joins with no jobs
-	newLeader.Heartbeat("new-agent", newAgent.URL(), nil, time.Time{})
+	newLeader.Heartbeat("new-agent", newAgent.URL(), nil, time.Time{}, "")
 	time.Sleep(100 * time.Millisecond)
 
 	// New agent should have received all 3 daemon jobs
@@ -382,7 +382,7 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 		Tags:        map[string]string{"urlprefix": "api.example.com", "lb": "main"},
 	}
 
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", []*types.Job{originalJob}, time.Now())
+	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", []*types.Job{originalJob}, time.Now(, ""))
 	time.Sleep(20 * time.Millisecond)
 
 	// Retrieve and verify
@@ -419,7 +419,7 @@ func TestFailoverAgentWithEmptyJobsStillRegisters(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	// Agent heartbeats with no jobs
-	newLeader.Heartbeat("fresh-agent", "http://10.0.0.99:8080", nil, time.Time{})
+	newLeader.Heartbeat("fresh-agent", "http://10.0.0.99:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	agents := newLeader.GetAgents()
@@ -450,7 +450,7 @@ func TestFailoverOlderAgentStateIgnored(t *testing.T) {
 		{ID: "old-job-id", Name: "old-job", Command: "old"},
 	}
 
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, olderTime)
+	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, olderTime, "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Leader should still learn about placement (agent IS running the job)
@@ -501,11 +501,11 @@ func TestFailoverDispatchFailureDoesNotBreakHeartbeat(t *testing.T) {
 	goodAgent := newMockAgent()
 	defer goodAgent.Close()
 	daemonJob := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./d", Count: -1}
-	newLeader.Heartbeat("good-agent", goodAgent.URL(), []*types.Job{daemonJob}, time.Now())
+	newLeader.Heartbeat("good-agent", goodAgent.URL(), []*types.Job{daemonJob}, time.Now(, ""))
 	time.Sleep(20 * time.Millisecond)
 
 	// Rejecting agent joins - dispatch will fail but heartbeat should succeed
-	newLeader.Heartbeat("rejecting-agent", rejectingAgent.URL, nil, time.Time{})
+	newLeader.Heartbeat("rejecting-agent", rejectingAgent.URL, nil, time.Time{}, "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Agent should still be registered
