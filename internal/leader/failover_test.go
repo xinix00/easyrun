@@ -204,7 +204,7 @@ func TestFailoverStateTimeBasedSync(t *testing.T) {
 	// Agent has newer state (was synced with old leader just before crash)
 	newerStateTime := time.Now()
 	agentJobs := []*types.Job{
-		{Name: "critical", Command: "./critical"},
+		{ID: "critical-id", Name: "critical", Command: "./critical"},
 	}
 
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, newerStateTime, "")
@@ -271,9 +271,8 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 
 func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 	// Multiple agents heartbeat, all should have the daemon job tracked
-	// Note: When agents heartbeat sequentially, new agents will receive /run calls
-	// for count=-1 jobs even if they report having them (ensureAllAgentJobs runs
-	// before placement is updated). This is acceptable - agents handle idempotent dispatch.
+	// When agents report having a job, they should NOT receive duplicate /run calls
+	// because placement is learned BEFORE ensureAllAgentJobs runs.
 
 	// Create 3 mock agents
 	agents := make([]*mockAgent, 3)
@@ -296,7 +295,7 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 		Count:   -1,
 	}
 
-	// All agents heartbeat saying they have the daemon job
+	// All agents heartbeat saying they ALREADY have the daemon job
 	for i, agent := range agents {
 		agentID := string(rune('a' + i))
 		newLeader.Heartbeat("agent-"+agentID, agent.URL(), []*types.Job{daemonJob}, time.Now(), "")
@@ -309,15 +308,11 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 		t.Errorf("monitoring should be on 3 agents, got %d: %v", len(placement), placement)
 	}
 
-	// First agent reports the job so no dispatch needed
-	// Subsequent agents get /run calls because ensureAllAgentJobs runs before placement update
-	if agents[0].RunCallCount() != 0 {
-		t.Errorf("First agent should have 0 /run calls (introduced the job), got %d", agents[0].RunCallCount())
-	}
-	// Agents 1 and 2 will receive /run because they're "new" and placement wasn't updated yet
-	for i := 1; i < len(agents); i++ {
-		if agents[i].RunCallCount() != 1 {
-			t.Errorf("Agent %d should have 1 /run call (new agent), got %d", i, agents[i].RunCallCount())
+	// All agents report having the job, so NONE should receive /run calls
+	// (placement is learned before ensureAllAgentJobs runs)
+	for i, agent := range agents {
+		if agent.RunCallCount() != 0 {
+			t.Errorf("Agent %d should have 0 /run calls (already has job), got %d", i, agent.RunCallCount())
 		}
 	}
 }
@@ -372,6 +367,7 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	originalJob := &types.Job{
+		ID:          "complex-id",
 		Name:        "complex",
 		Command:     "./complex",
 		Count:       3,
@@ -386,7 +382,7 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Retrieve and verify
-	recoveredJob := newLeaderStore.GetJob("complex")
+	recoveredJob := newLeaderStore.GetJobByName("complex")
 	if recoveredJob == nil {
 		t.Fatal("Job not recovered")
 	}
@@ -518,5 +514,156 @@ func TestFailoverDispatchFailureDoesNotBreakHeartbeat(t *testing.T) {
 	placement := newLeader.GetPlacement("daemon-id")
 	if len(placement) != 1 {
 		t.Errorf("daemon should only be on 1 agent (good-agent), got %d: %v", len(placement), placement)
+	}
+}
+
+func TestFailoverNewLeaderDoesNotDuplicateOwnTasks(t *testing.T) {
+	// BUG REPRODUCTION: When a node becomes leader, it should NOT redispatch
+	// jobs that it already has running locally.
+	//
+	// Scenario:
+	// 1. Node A (old leader) and Node B both run "my-api" (count=2, one each)
+	// 2. Node A fails
+	// 3. Node B becomes new leader WITH PERSISTED STATE (knows about the job)
+	// 4. Node B's task from before should NOT be duplicated
+	//
+	// The bug: New leader doesn't learn placement from its OWN local agent
+	// because of the `id != l.localAgentID` check in Heartbeat().
+	// Combined with tryRescheduleUnderscheduled running BEFORE placement is learned,
+	// this causes duplicates.
+
+	// Mock agent representing the NEW LEADER's local agent
+	localAgent := newMockAgent()
+	defer localAgent.Close()
+
+	// The job that was already running BEFORE this node became leader
+	existingJob := &types.Job{
+		ID:      "my-api-id",
+		Name:    "my-api",
+		Command: "./api",
+		Count:   2, // Desired: 2 instances total
+	}
+
+	// New leader has PERSISTED STATE from before the failover
+	// (it was synced by the old leader, or loaded from disk)
+	newLeaderStore := NewMockJobStore()
+	newLeaderStore.StoreJob(existingJob) // Job already in store!
+	newLeaderStore.stateTime = time.Now().Add(-1 * time.Minute) // State from before
+
+	// The new leader's ID matches the local agent
+	newLeader := New("local-agent-id", newLeaderStore, &http.Client{Timeout: 1 * time.Second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newLeader.stateLoop(ctx)
+
+	// The local agent already has 1 running task for this job (from before failover)
+	localAgent.mu.Lock()
+	localAgent.jobs[existingJob.Name] = existingJob
+	localAgent.tasks = append(localAgent.tasks, &types.Task{
+		ID:      "existing-task-1",
+		JobName: "my-api",
+		State:   types.TaskRunning,
+	})
+	localAgent.mu.Unlock()
+
+	// LOCAL agent heartbeats to the new leader (itself)
+	// Note: stateTime is SAME as leader's (not newer), so sync path is NOT triggered
+	newLeader.Heartbeat("local-agent-id", localAgent.URL(), []*types.Job{existingJob}, newLeaderStore.stateTime, "")
+	time.Sleep(50 * time.Millisecond)
+
+	// BUG: The new leader dispatches instances to itself because:
+	// 1. Local agent is "new" (not in agents map)
+	// 2. tryRescheduleUnderscheduled runs → finds my-api in store with count=2
+	// 3. Placement is EMPTY → job appears under-scheduled (0/2) → dispatch 2!
+	// 4. The leader SKIPS learning placement from local agent (id != l.localAgentID)
+
+	// EXPECTED: 0 new /run calls (1 instance already running locally, wait for other agents)
+	// ACTUAL (BUG): Should dispatch, but not to itself for instances it already has!
+	runCalls := localAgent.RunCallCount()
+	if runCalls > 1 {
+		// At most 1 call could be justified (the "missing" second instance)
+		// But 2 calls means it dispatched both instances ignoring the existing one
+		t.Errorf("BUG: New leader dispatched %d tasks, ignoring its own existing task", runCalls)
+	}
+
+	// Verify placement includes the local agent (critical for correct scheduling)
+	placement := newLeader.GetPlacement("my-api-id")
+	hasLocalAgent := false
+	for _, p := range placement {
+		if p == "local-agent-id" {
+			hasLocalAgent = true
+			break
+		}
+	}
+	if !hasLocalAgent {
+		t.Errorf("BUG: Placement should include local-agent-id, got: %v", placement)
+	}
+}
+
+func TestFailoverNewLeaderLearnsFromLocalAgent(t *testing.T) {
+	// Verify that the new leader learns job placement from its LOCAL agent,
+	// not just remote agents.
+	//
+	// BUG: The `id != l.localAgentID` check in Heartbeat() skips learning
+	// placement from the local agent, leaving placement empty.
+
+	localAgent := newMockAgent()
+	defer localAgent.Close()
+
+	// Local agent reports jobs it's running
+	localJobs := []*types.Job{
+		{ID: "job-a-id", Name: "job-a", Command: "./a", Count: 1},
+		{ID: "job-b-id", Name: "job-b", Command: "./b", Count: 1},
+	}
+
+	// New leader has persisted state (jobs already known)
+	newLeaderStore := NewMockJobStore()
+	for _, job := range localJobs {
+		newLeaderStore.StoreJob(job)
+	}
+	newLeaderStore.stateTime = time.Now().Add(-1 * time.Minute)
+
+	newLeader := New("local-agent-id", newLeaderStore, &http.Client{Timeout: 1 * time.Second})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go newLeader.stateLoop(ctx)
+
+	// Simulate local agent already having these tasks running
+	localAgent.mu.Lock()
+	for _, job := range localJobs {
+		localAgent.jobs[job.Name] = job
+		localAgent.tasks = append(localAgent.tasks, &types.Task{
+			ID:      "task-" + job.Name,
+			JobName: job.Name,
+			State:   types.TaskRunning,
+		})
+	}
+	localAgent.mu.Unlock()
+
+	// Local agent heartbeats (same stateTime, not newer)
+	newLeader.Heartbeat("local-agent-id", localAgent.URL(), localJobs, newLeaderStore.stateTime, "")
+	time.Sleep(50 * time.Millisecond)
+
+	// Jobs should still be in store
+	jobs := newLeaderStore.GetJobs()
+	if len(jobs) != 2 {
+		t.Errorf("Expected 2 jobs in store, got %d", len(jobs))
+	}
+
+	// BUG CHECK: Placement should be tracked for local agent
+	// The bug is that placement is NOT tracked because of `id != l.localAgentID`
+	for _, job := range localJobs {
+		placement := newLeader.GetPlacement(job.ID)
+		if len(placement) != 1 || placement[0] != "local-agent-id" {
+			t.Errorf("BUG: Job %s should have local-agent-id in placement, got: %v", job.Name, placement)
+		}
+	}
+
+	// BUG CHECK: No new dispatches should have happened (tasks already running)
+	// But with the bug, tryRescheduleUnderscheduled dispatches because placement is empty
+	if localAgent.RunCallCount() != 0 {
+		t.Errorf("BUG: Local agent should not receive new /run calls, got %d", localAgent.RunCallCount())
 	}
 }

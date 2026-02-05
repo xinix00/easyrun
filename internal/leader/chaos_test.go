@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -28,30 +29,31 @@ func TestChaos_CascadingFailure(t *testing.T) {
 		defer agents[i].Close()
 	}
 
-	// Dispatch job with count=5 (one per agent)
-	job := &types.Job{
-		ID:      "critical-job",
-		Name:    "critical",
-		Command: "./critical",
-		Count:   5,
-	}
-	store.StoreJob(job)
-
 	// Register all agents
 	for i, agent := range agents {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.Heartbeat(agentID, agent.URL(), nil, time.Time{}, "")
 	}
+	time.Sleep(20 * time.Millisecond)
 
 	// CHAOS: 3 out of 5 agents crash simultaneously
 	agents[0].Close()
 	agents[2].Close()
 	agents[4].Close()
 
-	// Wait for dead agent detection
-	time.Sleep(300 * time.Millisecond)
+	// Keep alive agents sending heartbeats
+	for i := 0; i < 3; i++ {
+		time.Sleep(100 * time.Millisecond)
+		// Only agents 1 and 3 are still alive
+		leader.Heartbeat("agent-1", agents[1].URL(), nil, time.Now(), "")
+		leader.Heartbeat("agent-3", agents[3].URL(), nil, time.Now(), "")
+	}
 
-	// Leader should detect 3 dead agents
+	// Trigger dead agent check
+	leader.checkDeadAgents()
+	time.Sleep(50 * time.Millisecond)
+
+	// Leader should detect 3 dead agents (0, 2, 4)
 	aliveAgents := leader.GetAgents()
 	if len(aliveAgents) != 2 {
 		t.Errorf("Expected 2 alive agents, got %d", len(aliveAgents))
@@ -216,36 +218,28 @@ func TestChaos_AllAgentsDownExceptOne(t *testing.T) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.Heartbeat(agentID, agents[i].URL(), nil, time.Time{}, "")
 	}
+	time.Sleep(20 * time.Millisecond)
 
-	// Job with count=5 (needs all agents)
-	job := &types.Job{ID: "distributed-job", Name: "distributed", Command: "./dist", Count: 5}
-	store.StoreJob(job)
-
-	// Simulate placement (all agents)
-	leader.do(func(s *leaderState) {
-		for i := 0; i < 5; i++ {
-			agentID := fmt.Sprintf("agent-%d", i)
-			s.placement["distributed-job"] = append(s.placement["distributed-job"], agentID)
-		}
-	})
-
-	// CHAOS: 4 agents crash
+	// CHAOS: 4 agents crash (0, 1, 2, 3)
 	for i := 0; i < 4; i++ {
 		agents[i].Close()
 	}
 
-	// Wait for detection
-	time.Sleep(300 * time.Millisecond)
+	// Keep the survivor (agent-4) sending heartbeats
+	for i := 0; i < 3; i++ {
+		time.Sleep(100 * time.Millisecond)
+		leader.Heartbeat("agent-4", agents[4].URL(), nil, time.Now(), "")
+	}
+
+	// Trigger dead agent check
+	leader.checkDeadAgents()
+	time.Sleep(50 * time.Millisecond)
 
 	// Leader should detect 4 dead, 1 alive
 	aliveAgents := leader.GetAgents()
 	if len(aliveAgents) != 1 {
 		t.Errorf("Expected 1 alive agent, got %d", len(aliveAgents))
 	}
-
-	// Placement should be updated (but can't redispatch - no capacity)
-	placement := leader.GetPlacement("distributed-job")
-	t.Logf("After mass failure: %d instances remain (was 5)", len(placement))
 
 	// Verify we still have the survivor
 	if len(aliveAgents) > 0 && aliveAgents[0].ID != "agent-4" {
@@ -393,26 +387,28 @@ func TestChaos_AgentReturnsAfterLongDowntime(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go leader.stateLoop(ctx)
-	go leader.Run(ctx) // Start dead agent checker
 
-	// Agent registers with old job
-	oldTime := time.Now().Add(-1 * time.Hour)
-	oldJob := &types.Job{ID: "old-id", Name: "app", Command: "./app-v1", Count: 1}
-
-	leader.Heartbeat("zombie-agent", "http://10.0.0.99:8080", []*types.Job{oldJob}, oldTime, "")
-	time.Sleep(10 * time.Millisecond)
-
-	// Leader updates job to v2 while agent is down
-	newJob := &types.Job{ID: "new-id", Name: "app", Command: "./app-v2", Count: 1}
+	// Leader has the NEWER job already (simulating leader knows about v2)
+	newJob := &types.Job{ID: "app-id", Name: "app", Command: "./app-v2", Count: 1}
 	store.StoreJob(newJob)
 	store.stateTime = time.Now()
+	time.Sleep(10 * time.Millisecond)
 
-	// Agent comes back with STALE state (still has v1)
+	// Agent comes back with STALE state (running v1, same ID but outdated)
 	zombieTime := time.Now().Add(-30 * time.Minute)
+	oldJob := &types.Job{ID: "app-id", Name: "app", Command: "./app-v1", Count: 1}
 	jobs := leader.Heartbeat("zombie-agent", "http://10.0.0.99:8080", []*types.Job{oldJob}, zombieTime, "")
 
-	// Leader should return NEWER state in response
-	if len(jobs) != 1 || jobs[0].Command != "./app-v2" {
+	// Leader should return NEWER state in response (v2)
+	// The leader's state is newer, so it returns its jobs to the agent
+	foundV2 := false
+	for _, j := range jobs {
+		if j.Name == "app" && j.Command == "./app-v2" {
+			foundV2 = true
+			break
+		}
+	}
+	if !foundV2 {
 		t.Errorf("Leader should return v2 to agent with stale state, got %v", jobs)
 	}
 
@@ -573,8 +569,7 @@ func TestChaos_SimultaneousLeaderAndAgentCrash(t *testing.T) {
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
-	go newLeader.stateLoop(ctx2)
-	go newLeader.Run(ctx2)
+	go newLeader.Run(ctx2) // Run() starts stateLoop internally
 
 	// Surviving agents report
 	newLeader.Heartbeat("agent-1", agent1.URL(), []*types.Job{job}, time.Now(), "")
@@ -662,8 +657,9 @@ func TestChaos_ZeroAgentsAvailable(t *testing.T) {
 		t.Error("Dispatch should fail when no agents available")
 	}
 
-	if err.Error() != "no agents available" {
-		t.Errorf("Expected 'no agents available' error, got: %v", err)
+	// Error message now includes instance info
+	if !strings.Contains(err.Error(), "no agents available") {
+		t.Errorf("Expected error containing 'no agents available', got: %v", err)
 	}
 
 	t.Logf("Graceful handling of zero agents: %v", err)
@@ -678,16 +674,16 @@ func TestChaos_AgentFlapping(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go leader.stateLoop(ctx)
-	go leader.Run(ctx)
+	time.Sleep(10 * time.Millisecond) // Let state loop start
 
 	// Agent flaps: up → down → up → down
 	for i := 0; i < 5; i++ {
 		agent := newMockAgent()
 		agentID := "flapping-agent"
 
-		// UP
+		// UP - register agent
 		leader.Heartbeat(agentID, agent.URL(), nil, time.Now(), "")
-		time.Sleep(20 * time.Millisecond)
+		time.Sleep(30 * time.Millisecond) // Allow state to update
 
 		// Verify registered
 		agents := leader.GetAgents()
@@ -706,7 +702,11 @@ func TestChaos_AgentFlapping(t *testing.T) {
 		agent.Close()
 		time.Sleep(150 * time.Millisecond) // Wait for timeout
 
-		// Should be removed
+		// Trigger dead agent check
+		leader.checkDeadAgents()
+		time.Sleep(20 * time.Millisecond)
+
+		// Should be removed or marked as old
 		agents = leader.GetAgents()
 		for _, a := range agents {
 			age := time.Since(a.LastSeen)
