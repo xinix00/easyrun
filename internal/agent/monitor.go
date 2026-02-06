@@ -48,7 +48,7 @@ func (a *Agent) checkTasks() {
 			if task.State == types.TaskRunning {
 				result = append(result, taskInfo{
 					task: task,
-					job:  findJobByName(s, task.JobName), // Jobs stored by ID
+					job:  s.jobs[task.JobID],
 				})
 			}
 		}
@@ -79,8 +79,11 @@ func (a *Agent) checkTasks() {
 			continue
 		}
 
-		// Check health if configured
+		// Check health if configured (skip during initial startup grace period)
 		if job != nil && job.HealthCheck != nil {
+			if job.HealthCheck.InitialTimeout > 0 && time.Since(task.StartedAt) < job.HealthCheck.InitialTimeout {
+				continue
+			}
 			if !a.checkHealth(task, job.HealthCheck) {
 				log.Printf("Task %s failed health check", task.ID)
 

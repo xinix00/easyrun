@@ -287,6 +287,9 @@ func (a *Agent) restartTask(task *types.Task) {
 		return
 	}
 
+	// Clean up old runner entries (process already dead, this just removes maps + task dir)
+	a.runner.Stop(task)
+
 	ports, err := allocatePorts(job.Ports)
 	if err != nil {
 		log.Printf("Failed to allocate ports for restart: %v", err)
@@ -304,18 +307,18 @@ func (a *Agent) restartTask(task *types.Task) {
 		return
 	}
 
-	// Update task with new info
+	// Replace old task with new in state (preserving RestartCount)
 	a.do(func(s *agentState) {
+		oldRestart := 0
 		if t := s.tasks[task.ID]; t != nil {
-			t.Pid = newTask.Pid
-			t.Ports = newTask.Ports
-			t.State = types.TaskRunning
-			t.StartedAt = newTask.StartedAt
-			t.RestartCount++
+			oldRestart = t.RestartCount
 		}
+		delete(s.tasks, task.ID)
+		newTask.RestartCount = oldRestart + 1
+		s.tasks[newTask.ID] = newTask
 	})
 
-	log.Printf("Restarted task %s (job %s), restart #%d", task.ID, job.Name, restartCount+1)
+	log.Printf("Restarted task %s -> %s (job %s), restart #%d", task.ID, newTask.ID, job.Name, restartCount+1)
 }
 
 // deleteJobByID removes job definition AND cleans up all tasks by job ID

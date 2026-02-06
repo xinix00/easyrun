@@ -59,6 +59,7 @@ func (m *MockRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 
 	task := &types.Task{
 		ID:          taskID,
+		JobID:       job.ID,
 		JobName:     job.Name,
 		Ports:       ports,
 		Pid:         m.nextPid,

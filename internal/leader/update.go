@@ -77,7 +77,6 @@ func (l *Leader) updateRecreate(old, new *types.Job) error {
 
 // updateBlueGreen: dispatch all → KILL all
 func (l *Leader) updateBlueGreen(old, new *types.Job) error {
-	new.Count = old.Count
 	if err := l.DispatchJob(new); err != nil {
 		return err
 	}
@@ -108,7 +107,11 @@ func (l *Leader) stopOneInstance(job *types.Job) {
 // deleteTaskOnAgent deletes a job on specific agent (by job ID)
 func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobID string) {
 	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobID)
-	req, _ := http.NewRequest(http.MethodDelete, url, nil)
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		log.Printf("Failed to create delete request for %s on %s: %v", jobID, agent.ID, err)
+		return
+	}
 	resp, err := l.httpClient.Do(req)
 	if err != nil {
 		log.Printf("Failed to delete %s on %s: %v", jobID, agent.ID, err)

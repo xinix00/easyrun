@@ -91,14 +91,38 @@ func TestChaos_TaskExceedsMaxRestarts(t *testing.T) {
 		t.Fatalf("Failed to start: %v", err)
 	}
 
-	// Simulate crash loop
+	// Simulate crash loop — task ID changes on each restart
+	currentTaskID := task.ID
 	for i := 0; i < 5; i++ {
 		// Task crashes
-		mockRunner.tasks[task.ID].state = types.TaskFailed
+		if ct, ok := mockRunner.tasks[currentTaskID]; ok {
+			ct.state = types.TaskFailed
+		}
+
+		// Get current task reference from agent state
+		currentTask := query(agent, func(s *agentState) *types.Task {
+			return s.tasks[currentTaskID]
+		})
+		if currentTask == nil {
+			break // task was removed (max restarts exceeded)
+		}
 
 		// Agent detects and restarts
-		agent.restartTask(task)
+		agent.restartTask(currentTask)
 		time.Sleep(10 * time.Millisecond)
+
+		// Find new task ID after restart
+		newID := query(agent, func(s *agentState) string {
+			for id, t := range s.tasks {
+				if t.JobName == "crasher" {
+					return id
+				}
+			}
+			return ""
+		})
+		if newID != "" {
+			currentTaskID = newID
+		}
 	}
 
 	// After max restarts, should give up
@@ -107,10 +131,12 @@ func TestChaos_TaskExceedsMaxRestarts(t *testing.T) {
 		t.Error("Job should still exist")
 	}
 
-	// Check final restart count
+	// Check final restart count (find any remaining task for this job)
 	restartCount := query(agent, func(s *agentState) int {
-		if t := s.tasks[task.ID]; t != nil {
-			return t.RestartCount
+		for _, t := range s.tasks {
+			if t.JobName == "crasher" {
+				return t.RestartCount
+			}
 		}
 		return 0
 	})
@@ -200,10 +226,12 @@ func TestChaos_TaskZombie(t *testing.T) {
 	agent.checkTasks()
 	time.Sleep(50 * time.Millisecond)
 
-	// Check if restart was attempted
+	// Check if restart was attempted (task ID changes on restart, search by job name)
 	restartCount := query(agent, func(s *agentState) int {
-		if t := s.tasks[task.ID]; t != nil {
-			return t.RestartCount
+		for _, t := range s.tasks {
+			if t.JobName == "zombie-job" {
+				return t.RestartCount
+			}
 		}
 		return 0
 	})
@@ -228,6 +256,7 @@ type zombieRunner struct {
 func (r *zombieRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
 	task := &types.Task{
 		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		JobID:       job.ID,
 		JobName:     job.Name,
 		State:       types.TaskRunning,
 		Ports:       ports,
@@ -347,6 +376,7 @@ type crashingTask struct {
 func (r *crashingRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
 	task := &types.Task{
 		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		JobID:       job.ID,
 		JobName:     job.Name,
 		State:       types.TaskRunning,
 		Ports:       ports,
@@ -356,10 +386,13 @@ func (r *crashingRunner) Run(job *types.Job, ports map[string]int) (*types.Task,
 	}
 	r.tasks[task.ID] = &crashingTask{task: task, state: types.TaskRunning}
 
-	// Crash immediately
+	// Crash after short delay (check if still tracked before writing)
+	taskID := task.ID
 	go func() {
 		time.Sleep(10 * time.Millisecond)
-		r.tasks[task.ID].state = types.TaskFailed
+		if t, ok := r.tasks[taskID]; ok {
+			t.state = types.TaskFailed
+		}
 	}()
 
 	return task, nil

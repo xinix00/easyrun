@@ -240,6 +240,7 @@ type mockRunner struct {
 func (m *mockRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
 	task := &types.Task{
 		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		JobID:       job.ID,
 		JobName:     job.Name,
 		Ports:       ports,
 		State:       types.TaskRunning,

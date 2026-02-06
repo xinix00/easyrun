@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.5.13" // Agent version - placed in RegisterAgent, not heartbeat
+const version = "v0.5.14" // Agent version - placed in RegisterAgent, not heartbeat
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
@@ -94,6 +94,9 @@ func main() {
 
 	run(ctx, cfg, nodeID)
 }
+
+// httpClient is reused for all heartbeat/register calls (connection pooling)
+var httpClient = &http.Client{Timeout: 5 * time.Second}
 
 func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	// Create discovery client for leader election
@@ -297,8 +300,7 @@ func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]
 		"placed":   placed, // jobID -> count (what's running on this agent)
 	})
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -323,8 +325,7 @@ func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job,
 		"state_time": stateTime,
 	})
 
-	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}

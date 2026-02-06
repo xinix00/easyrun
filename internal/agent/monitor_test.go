@@ -246,6 +246,7 @@ func TestCheckTasksHealthCheckFails(t *testing.T) {
 		s.jobs[job.ID] = job
 		s.tasks["task-health"] = &types.Task{
 			ID:      "task-health",
+			JobID:   job.ID,
 			JobName: "health-job",
 			Ports:   map[string]int{"http": port},
 			Pid:     1234,
@@ -306,6 +307,7 @@ func TestCheckTasksHealthCheckSucceeds(t *testing.T) {
 		s.jobs[job.ID] = job
 		s.tasks["task-ok"] = &types.Task{
 			ID:      "task-ok",
+			JobID:   job.ID,
 			JobName: "healthy-job",
 			Ports:   map[string]int{"http": port},
 			Pid:     1234,
@@ -373,19 +375,27 @@ func TestRestartTaskSuccess(t *testing.T) {
 	agent.restartTask(task)
 	time.Sleep(50 * time.Millisecond)
 
-	// After restart: state should be running, RestartCount incremented
+	// After restart: old task replaced by new one (mock generates "task-" + job.Name)
 	info := query(agent, func(s *agentState) *types.Task {
-		return s.tasks["task-restart"]
+		return s.tasks["task-restart-me"]
 	})
 
 	if info == nil {
-		t.Fatal("Task not found after restart")
+		t.Fatal("New task not found after restart")
 	}
 	if info.State != types.TaskRunning {
 		t.Errorf("State = %q, want %q", info.State, types.TaskRunning)
 	}
 	if info.RestartCount != 1 {
 		t.Errorf("RestartCount = %d, want 1", info.RestartCount)
+	}
+
+	// Old task should be gone
+	old := query(agent, func(s *agentState) *types.Task {
+		return s.tasks["task-restart"]
+	})
+	if old != nil {
+		t.Error("Old task should be removed from state after restart")
 	}
 }
 
