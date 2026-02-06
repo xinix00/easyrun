@@ -23,17 +23,21 @@ func generateID() string {
 	return uuid.New().String()
 }
 
-// DispatchJob sends a job to agents and stores it.
+// DispatchJob stores a job and sends it to agents.
 // count=-1 means run on ALL agents (exactly once per agent)
+// The job is ALWAYS stored, even if dispatch fails (reconciliation will retry later).
 func (l *Leader) DispatchJob(job *types.Job) error {
 	if job.ID == "" {
 		job.ID = generateID()
 	}
 
-	// During settle period: just store, reconcileJobs after settle will dispatch
+	// Always store the job first — even if no agents have capacity now,
+	// reconciliation will pick it up when capacity becomes available.
+	l.jobStore.StoreJob(job)
+
+	// During settle period: reconcileJobs after settle will dispatch
 	settled := query(l, func(s *leaderState) bool { return s.settled })
 	if !settled {
-		l.jobStore.StoreJob(job)
 		log.Printf("Job %s stored (leader settling, dispatch deferred)", job.Name)
 		return nil
 	}
@@ -42,15 +46,16 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 		// Daemon: use reconcile-based dispatch (same path as reconciliation)
 		agents := l.GetAgents()
 		if err := l.reconcileJob(job, agents); err != nil {
+			log.Printf("Job %s stored but dispatch failed: %v (will retry on reconciliation)", job.Name, err)
 			return err
 		}
 	} else {
 		if err := l.dispatchInstances(job, job.Count); err != nil {
+			log.Printf("Job %s stored but dispatch failed: %v (will retry on reconciliation)", job.Name, err)
 			return err
 		}
 	}
 
-	l.jobStore.StoreJob(job)
 	return nil
 }
 

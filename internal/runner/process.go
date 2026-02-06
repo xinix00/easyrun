@@ -117,13 +117,15 @@ func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, 
 	}()
 
 	return &types.Task{
-		ID:        taskID,
-		JobID:     job.ID,
-		JobName:   job.Name,
-		Ports:     ports,
-		Pid:       cmd.Process.Pid,
-		State:     types.TaskRunning,
-		StartedAt: time.Now(),
+		ID:          taskID,
+		JobID:       job.ID,
+		JobName:     job.Name,
+		Ports:       ports,
+		Pid:         cmd.Process.Pid,
+		State:       types.TaskRunning,
+		StartedAt:   time.Now(),
+		CPUShares:   job.CPUShares,
+		MemoryLimit: job.MemoryLimit,
 	}, nil
 }
 

@@ -136,13 +136,16 @@ func runJob(c *cli.Context) error {
 
 	// Show appropriate message based on operation
 	status := result["status"]
-	if status == "updated" {
+	switch status {
+	case "updated":
 		policy := result["policy"]
 		if policy == "" {
 			policy = "rolling"
 		}
 		fmt.Printf("Job '%s' updated (ID %s, policy=%s)\n", job.Name, result["id"], policy)
-	} else {
+	case "pending":
+		fmt.Printf("Job '%s' stored (ID %s) — pending dispatch: %s\n", job.Name, result["id"], result["error"])
+	default:
 		fmt.Printf("Job '%s' dispatched with ID %s\n", job.Name, result["id"])
 	}
 
@@ -300,7 +303,7 @@ func showAgentDetails(agent *types.Agent) error {
 	fmt.Printf("LastSeen: %s\n", agent.LastSeen.Format("15:04:05"))
 	fmt.Println()
 
-	// Fetch capacity from agent directly
+	// Fetch capacity from agent directly (includes live usage)
 	capResp, err := http.Get(agent.Endpoint + "/capacity")
 	if err != nil {
 		fmt.Printf("Capacity: (unavailable - %v)\n", err)
@@ -314,57 +317,24 @@ func showAgentDetails(agent *types.Agent) error {
 	}
 
 	var cap struct {
-		CPUCores    int    `json:"cpu_cores"`
-		MemoryBytes uint64 `json:"memory_bytes"`
+		CPUCores        int    `json:"cpu_cores"`
+		MemoryBytes     uint64 `json:"memory_bytes"`
+		CPUUsedShares   int    `json:"cpu_used_shares"`
+		MemoryUsedBytes uint64 `json:"memory_used_bytes"`
+		TasksRunning    int    `json:"tasks_running"`
 	}
 	if err := json.NewDecoder(capResp.Body).Decode(&cap); err != nil {
 		fmt.Printf("Capacity: (unavailable - %v)\n", err)
 		return nil
 	}
 
-	// Fetch status to calculate used resources
-	statusResp, err := doRequest("GET", "/v1/status", nil)
-	if err != nil {
-		fmt.Printf("CPU:      %d cores\n", cap.CPUCores)
-		fmt.Printf("Memory:   %.1f GB\n", float64(cap.MemoryBytes)/(1024*1024*1024))
-		return nil
-	}
-
-	var status struct {
-		TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
-	}
-	json.Unmarshal(statusResp, &status)
-
-	// Fetch jobs for resource info
-	jobsResp, _ := doRequest("GET", "/v1/jobs", nil)
-	var jobs []*types.Job
-	json.Unmarshal(jobsResp, &jobs)
-
-	jobMap := make(map[string]*types.Job)
-	for _, j := range jobs {
-		jobMap[j.Name] = j
-	}
-
-	// Calculate used resources
-	var usedCPU int
-	var usedMem uint64
-	if tasks, ok := status.TasksByAgent[agent.ID]; ok {
-		for _, t := range tasks {
-			if t.State == "running" {
-				if job := jobMap[t.JobName]; job != nil {
-					usedCPU += job.CPUShares
-					usedMem += job.MemoryLimit
-				}
-			}
-		}
-	}
-
+	usedCores := float64(cap.CPUUsedShares) / 1024
 	totalShares := cap.CPUCores * 1024
-	usedCores := float64(usedCPU) / 1024
 	totalGB := float64(cap.MemoryBytes) / (1024 * 1024 * 1024)
-	usedGB := float64(usedMem) / (1024 * 1024 * 1024)
+	usedGB := float64(cap.MemoryUsedBytes) / (1024 * 1024 * 1024)
 
-	fmt.Printf("CPU:      %.1f / %d cores (%.0f / %d shares)\n", usedCores, cap.CPUCores, float64(usedCPU), totalShares)
+	fmt.Printf("Tasks:    %d running\n", cap.TasksRunning)
+	fmt.Printf("CPU:      %.1f / %d cores (%.0f / %d shares)\n", usedCores, cap.CPUCores, float64(cap.CPUUsedShares), totalShares)
 	fmt.Printf("Memory:   %.1f / %.0f GB\n", usedGB, totalGB)
 
 	return nil

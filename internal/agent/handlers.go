@@ -65,18 +65,37 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// CapacityResponse shows system resources and usage
+// CapacityResponse shows system resources and actual usage
 type CapacityResponse struct {
-	CPUCores    int    `json:"cpu_cores"`
-	MemoryBytes uint64 `json:"memory_bytes"`
+	CPUCores        int    `json:"cpu_cores"`
+	MemoryBytes     uint64 `json:"memory_bytes"`
+	CPUUsedShares   int    `json:"cpu_used_shares"`
+	MemoryUsedBytes uint64 `json:"memory_used_bytes"`
+	TasksRunning    int    `json:"tasks_running"`
 }
 
-// handleCapacity returns detected system capacity
+// handleCapacity returns detected system capacity with actual usage from running tasks
 func (a *Agent) handleCapacity(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteJSON(w, http.StatusOK, CapacityResponse{
-		CPUCores:    a.sysInfo.CPUCores,
-		MemoryBytes: a.sysInfo.MemoryBytes,
+	usage := query(a, func(s *agentState) CapacityResponse {
+		var cpuUsed int
+		var memUsed uint64
+		var running int
+		for _, task := range s.tasks {
+			if task.State == types.TaskRunning {
+				cpuUsed += task.CPUShares
+				memUsed += task.MemoryLimit
+				running++
+			}
+		}
+		return CapacityResponse{
+			CPUCores:        a.sysInfo.CPUCores,
+			MemoryBytes:     a.sysInfo.MemoryBytes,
+			CPUUsedShares:   cpuUsed,
+			MemoryUsedBytes: memUsed,
+			TasksRunning:    running,
+		}
 	})
+	httputil.WriteJSON(w, http.StatusOK, usage)
 }
 
 // handleTasks returns all running tasks

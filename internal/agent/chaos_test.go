@@ -227,11 +227,13 @@ type zombieRunner struct {
 
 func (r *zombieRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
 	task := &types.Task{
-		ID:      fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		JobName: job.Name,
-		State:   types.TaskRunning,
-		Ports:   ports,
-		Pid:     12345,
+		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		JobName:     job.Name,
+		State:       types.TaskRunning,
+		Ports:       ports,
+		Pid:         12345,
+		CPUShares:   job.CPUShares,
+		MemoryLimit: job.MemoryLimit,
 	}
 	r.tasks[task.ID] = &zombieTask{task: task, actualState: types.TaskRunning}
 	return task, nil
@@ -344,11 +346,13 @@ type crashingTask struct {
 
 func (r *crashingRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
 	task := &types.Task{
-		ID:      fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		JobName: job.Name,
-		State:   types.TaskRunning,
-		Ports:   ports,
-		Pid:     12345,
+		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		JobName:     job.Name,
+		State:       types.TaskRunning,
+		Ports:       ports,
+		Pid:         12345,
+		CPUShares:   job.CPUShares,
+		MemoryLimit: job.MemoryLimit,
 	}
 	r.tasks[task.ID] = &crashingTask{task: task, state: types.TaskRunning}
 

@@ -338,7 +338,7 @@ func TestRunJobCreatesNew(t *testing.T) {
 }
 
 func TestRunJobNoAgentsAvailable(t *testing.T) {
-	server, _, cancel := setupTestServer(t)
+	server, store, cancel := setupTestServer(t)
 	defer cancel()
 
 	w := doRequest(server, "POST", "/v1/jobs", types.Job{
@@ -346,8 +346,24 @@ func TestRunJobNoAgentsAvailable(t *testing.T) {
 		Command: "echo hello",
 	})
 
-	if w.Code != 503 {
-		t.Errorf("Status = %d, want 503", w.Code)
+	// Job should be stored (201) even when no agents are available
+	if w.Code != 201 {
+		t.Errorf("Status = %d, want 201", w.Code)
+	}
+
+	var resp map[string]string
+	json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["status"] != "pending" {
+		t.Errorf("status = %q, want %q", resp["status"], "pending")
+	}
+
+	// Job should exist in store for later reconciliation
+	jobs := store.GetJobs()
+	if len(jobs) != 1 {
+		t.Fatalf("expected 1 job in store, got %d", len(jobs))
+	}
+	if jobs[0].Name != "test-job" {
+		t.Errorf("stored job name = %q, want %q", jobs[0].Name, "test-job")
 	}
 }
 

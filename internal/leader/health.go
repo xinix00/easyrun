@@ -57,6 +57,7 @@ func (l *Leader) checkDeadAgents() {
 }
 
 // reconcileJobs ensures all jobs have the correct number of running instances.
+// Rebuilds placed counts from actual agent status before reconciling.
 func (l *Leader) reconcileJobs() {
 	jobs := l.jobStore.GetJobs()
 	if len(jobs) == 0 {
@@ -67,6 +68,22 @@ func (l *Leader) reconcileJobs() {
 	if len(agents) == 0 {
 		return
 	}
+
+	// Rebuild placed from reality for agents that responded
+	// (fixes stale state after leader recovery without affecting unreachable agents)
+	status := l.GetClusterStatus()
+	l.do(func(s *leaderState) {
+		// Only update placed for agents that responded — keep existing
+		// counts for unreachable agents to avoid duplicate dispatching
+		for agentID, tasks := range status {
+			s.placed[agentID] = make(map[string]int)
+			for _, task := range tasks {
+				if task.JobID != "" {
+					s.placed[agentID][task.JobID]++
+				}
+			}
+		}
+	})
 
 	for _, job := range jobs {
 		if job.ID == "" {

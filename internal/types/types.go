@@ -71,6 +71,8 @@ type Task struct {
 	State        TaskState      `json:"state"`
 	StartedAt    time.Time      `json:"started_at"`
 	RestartCount int            `json:"restart_count"`
+	CPUShares    int            `json:"cpu_shares,omitempty"`
+	MemoryLimit  uint64         `json:"memory_limit,omitempty"`
 }
 
 // Agent represents a registered agent

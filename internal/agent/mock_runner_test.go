@@ -58,12 +58,14 @@ func (m *MockRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 	m.nextPid++
 
 	task := &types.Task{
-		ID:      taskID,
-		JobName: job.Name,
-		Ports:     ports,
-		Pid:       m.nextPid,
-		State:     types.TaskRunning,
-		StartedAt: time.Now(),
+		ID:          taskID,
+		JobName:     job.Name,
+		Ports:       ports,
+		Pid:         m.nextPid,
+		State:       types.TaskRunning,
+		StartedAt:   time.Now(),
+		CPUShares:   job.CPUShares,
+		MemoryLimit: job.MemoryLimit,
 	}
 
 	m.tasks[taskID] = task

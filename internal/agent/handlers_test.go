@@ -618,6 +618,11 @@ func TestHandleCapacity(t *testing.T) {
 	agent := New(cfg, "test-agent", mockRunner)
 	agent.SetSysInfo(SystemInfo{CPUCores: 8, MemoryBytes: 16 * 1024 * 1024 * 1024})
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
 	req := httptest.NewRequest(http.MethodGet, "/capacity", nil)
 	w := httptest.NewRecorder()
 
@@ -637,6 +642,15 @@ func TestHandleCapacity(t *testing.T) {
 	}
 	if resp.MemoryBytes != 16*1024*1024*1024 {
 		t.Errorf("MemoryBytes = %d, want %d", resp.MemoryBytes, 16*1024*1024*1024)
+	}
+	if resp.TasksRunning != 0 {
+		t.Errorf("TasksRunning = %d, want 0", resp.TasksRunning)
+	}
+	if resp.CPUUsedShares != 0 {
+		t.Errorf("CPUUsedShares = %d, want 0", resp.CPUUsedShares)
+	}
+	if resp.MemoryUsedBytes != 0 {
+		t.Errorf("MemoryUsedBytes = %d, want 0", resp.MemoryUsedBytes)
 	}
 }
 

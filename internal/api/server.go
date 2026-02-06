@@ -205,7 +205,13 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.leader.DispatchJob(&job); err != nil {
-		httputil.WriteError(w, http.StatusServiceUnavailable, err.Error())
+		// Job is stored but dispatch failed — report as accepted (will retry on reconciliation)
+		httputil.WriteJSON(w, http.StatusCreated, map[string]string{
+			"id":     job.ID,
+			"name":   job.Name,
+			"status": "pending",
+			"error":  err.Error(),
+		})
 		return
 	}
 

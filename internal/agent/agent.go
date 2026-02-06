@@ -416,7 +416,9 @@ func findJobByName(s *agentState, jobName string) *types.Job {
 	return nil
 }
 
-// hasCapacity checks if the agent has capacity for a new job
+// hasCapacity checks if the agent has capacity for a new job.
+// Resource usage is read from the Task itself (not the Job definition),
+// so capacity tracking works even when job definitions are missing (e.g., after recovery).
 func (a *Agent) hasCapacity(job *types.Job) bool {
 	return query(a, func(s *agentState) bool {
 		usedCPU := 0
@@ -424,10 +426,8 @@ func (a *Agent) hasCapacity(job *types.Job) bool {
 
 		for _, task := range s.tasks {
 			if task.State == types.TaskRunning {
-				if j := findJobByName(s, task.JobName); j != nil {
-					usedCPU += j.CPUShares
-					usedMem += j.MemoryLimit
-				}
+				usedCPU += task.CPUShares
+				usedMem += task.MemoryLimit
 			}
 		}
 

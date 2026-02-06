@@ -239,11 +239,13 @@ type mockRunner struct {
 
 func (m *mockRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
 	task := &types.Task{
-		ID:      fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		JobName: job.Name,
-		Ports:   ports,
-		State:   types.TaskRunning,
-		Pid:     12345,
+		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
+		JobName:     job.Name,
+		Ports:       ports,
+		State:       types.TaskRunning,
+		Pid:         12345,
+		CPUShares:   job.CPUShares,
+		MemoryLimit: job.MemoryLimit,
 	}
 	m.tasks[task.ID] = task
 	return task, nil

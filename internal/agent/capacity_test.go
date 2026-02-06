@@ -67,9 +67,11 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 	// Add a running task that uses capacity
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
-			ID:      "task-1",
-			JobName: "existing",
-			State:   types.TaskRunning,
+			ID:          "task-1",
+			JobName:     "existing",
+			State:       types.TaskRunning,
+			CPUShares:   600,
+			MemoryLimit: 600,
 		}
 	})
 
@@ -336,6 +338,50 @@ func TestAgentCapacityExactLimit(t *testing.T) {
 	}
 }
 
+// TestAgentCapacityWithoutJobDefinition verifies that running tasks track their own
+// resource usage (CPUShares/MemoryLimit on Task) instead of looking up the Job definition.
+// After leader recovery, job definitions might not be in the store yet, but the agent
+// must still correctly report capacity based on what's actually running.
+func TestAgentCapacityWithoutJobDefinition(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024}) // 1024 CPU shares, 1024 bytes
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	// Running task WITHOUT job definition in store (simulates post-recovery state)
+	// The task uses 600 CPU shares and 600 bytes memory
+	agent.do(func(s *agentState) {
+		s.tasks["task-1"] = &types.Task{
+			ID:          "task-1",
+			JobName:     "orphaned-job",
+			State:       types.TaskRunning,
+			CPUShares:   600,
+			MemoryLimit: 600,
+		}
+	})
+
+	time.Sleep(10 * time.Millisecond)
+
+	// New job that would fit if alone, but not with existing task
+	newJob := &types.Job{
+		Name:        "new-job",
+		CPUShares:   500,
+		MemoryLimit: 500,
+	}
+
+	// BUG: without fix, hasCapacity looks up Job by name, finds nil (no job in store),
+	// and counts the running task's resource usage as 0. This allows over-provisioning.
+	if agent.hasCapacity(newJob) {
+		t.Error("hasCapacity should return false: running task uses 600 CPU + 600 mem, " +
+			"new job needs 500 CPU + 500 mem, but total capacity is only 1024 each. " +
+			"Task resource usage must be tracked on the Task itself, not looked up from Job definition")
+	}
+}
+
 func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
@@ -357,9 +403,10 @@ func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 		})
 		agent.do(func(s *agentState) {
 			s.tasks["task-"+string(rune('a'+i))] = &types.Task{
-				ID:      "task-" + string(rune('a'+i)),
-				JobName: jobName,
-				State:   types.TaskRunning,
+				ID:        "task-" + string(rune('a'+i)),
+				JobName:   jobName,
+				State:     types.TaskRunning,
+				CPUShares: 300,
 			}
 		})
 	}
