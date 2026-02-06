@@ -129,24 +129,28 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime tim
 	return l.jobStore.GetJobs()
 }
 
+// cleanPlacementForAgent removes an agent from all placement entries
+func cleanPlacementForAgent(s *leaderState, agentID string) {
+	for jobID, agents := range s.placement {
+		newPlacement := make([]string, 0, len(agents))
+		for _, id := range agents {
+			if id != agentID {
+				newPlacement = append(newPlacement, id)
+			}
+		}
+		if len(newPlacement) > 0 {
+			s.placement[jobID] = newPlacement
+		} else {
+			delete(s.placement, jobID)
+		}
+	}
+}
+
 // UnregisterAgent removes an agent and reconciles jobs
 func (l *Leader) UnregisterAgent(id string) {
 	l.do(func(s *leaderState) {
 		delete(s.agents, id)
-		// Clean up placement entries for this agent
-		for jobID, agents := range s.placement {
-			newPlacement := make([]string, 0, len(agents))
-			for _, agentID := range agents {
-				if agentID != id {
-					newPlacement = append(newPlacement, agentID)
-				}
-			}
-			if len(newPlacement) > 0 {
-				s.placement[jobID] = newPlacement
-			} else {
-				delete(s.placement, jobID)
-			}
-		}
+		cleanPlacementForAgent(s, id)
 	})
 	l.reconcileJobs()
 }

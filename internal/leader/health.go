@@ -37,6 +37,7 @@ func (l *Leader) checkDeadAgents() {
 			if time.Since(agent.LastSeen) > l.agentTimeout {
 				log.Printf("Agent %s is dead (no heartbeat for %v)", id, time.Since(agent.LastSeen))
 				delete(s.agents, id)
+				cleanPlacementForAgent(s, id)
 				hadDead = true
 			}
 		}
@@ -50,81 +51,81 @@ func (l *Leader) checkDeadAgents() {
 }
 
 // reconcileJobs ensures all jobs have the correct number of running instances.
-// It queries the actual cluster state and dispatches missing instances.
-// This is KISS: compare desired vs actual, dispatch the difference.
-// Handles both count=-1 (daemon) and regular jobs.
 func (l *Leader) reconcileJobs() {
 	jobs := l.jobStore.GetJobs()
 	if len(jobs) == 0 {
-		return // Nothing to reconcile
+		return
 	}
 
 	agents := l.GetAgents()
 	if len(agents) == 0 {
-		return // No agents to dispatch to
+		return
 	}
 
-	// Get actual running tasks from all agents
 	status := l.GetClusterStatus()
 
-	// Build lookup: which agents have which jobs running
-	agentHasJob := make(map[string]map[string]bool) // agentID -> jobName -> running
-	runningPerJob := make(map[string]int)
-	for agentID, tasks := range status {
-		agentHasJob[agentID] = make(map[string]bool)
-		for _, task := range tasks {
-			if task.State == types.TaskRunning {
-				agentHasJob[agentID][task.JobName] = true
-				runningPerJob[task.JobName]++
-			}
-		}
-	}
-
-	// Reconcile each job
 	for _, job := range jobs {
 		if job.ID == "" {
 			continue
 		}
+		if err := l.reconcileJob(job, status, agents); err != nil {
+			log.Printf("Failed to reconcile job %s: %v", job.Name, err)
+		}
+	}
+}
 
-		if job.Count == -1 {
-			// Daemon job: must run on ALL agents
-			// Rebuild placement from actual state
-			var newPlacement []string
-			for _, agent := range agents {
-				if agentHasJob[agent.ID][job.Name] {
-					newPlacement = append(newPlacement, agent.ID)
-					continue // Already running
-				}
-				log.Printf("Reconciling daemon %s: dispatching to %s", job.Name, agent.ID)
-				if err := l.sendJobToAgent(agent, job); err != nil {
-					log.Printf("Failed to dispatch daemon %s to %s: %v", job.Name, agent.ID, err)
-				} else {
-					newPlacement = append(newPlacement, agent.ID)
-				}
-			}
-			// Update placement atomically
-			jobID := job.ID
-			l.do(func(s *leaderState) {
-				s.placement[jobID] = newPlacement
-			})
-		} else {
-			// Regular job: must have Count instances running
-			desired := job.Count
-			if desired <= 0 {
-				desired = 1
-			}
-
-			running := runningPerJob[job.Name]
-			missing := desired - running
-
-			if missing > 0 {
-				log.Printf("Reconciling job %s: %d/%d running, dispatching %d", job.Name, running, desired, missing)
-				if err := l.dispatchInstances(job, missing); err != nil {
-					log.Printf("Failed to reconcile job %s: %v", job.Name, err)
-				}
+// reconcileJob ensures a single job has the correct instances running.
+// Daemon jobs (count=-1): dispatch to all agents missing it, rebuild placement atomically.
+// Regular jobs: dispatch missing instances via round-robin.
+func (l *Leader) reconcileJob(job *types.Job, status map[string][]*types.Task, agents []*types.Agent) error {
+	// Count running instances per agent
+	agentHasJob := make(map[string]bool)
+	running := 0
+	for agentID, tasks := range status {
+		for _, task := range tasks {
+			if task.JobName == job.Name && task.State == types.TaskRunning {
+				agentHasJob[agentID] = true
+				running++
 			}
 		}
 	}
+
+	if job.Count == -1 {
+		// Daemon: run on ALL agents, rebuild placement atomically
+		var newPlacement []string
+		for _, agent := range agents {
+			if agentHasJob[agent.ID] {
+				newPlacement = append(newPlacement, agent.ID)
+				continue
+			}
+			log.Printf("Reconciling daemon %s: dispatching to %s", job.Name, agent.ID)
+			if err := l.sendJobToAgent(agent, job); err != nil {
+				log.Printf("Failed to dispatch daemon %s to %s: %v", job.Name, agent.ID, err)
+			} else {
+				newPlacement = append(newPlacement, agent.ID)
+			}
+		}
+		jobID := job.ID
+		l.do(func(s *leaderState) {
+			s.placement[jobID] = newPlacement
+		})
+		if len(newPlacement) == 0 && len(agents) > 0 {
+			return fmt.Errorf("all agents rejected daemon job %s", job.Name)
+		}
+		return nil
+	}
+
+	// Regular: dispatch missing instances
+	desired := job.Count
+	if desired <= 0 {
+		desired = 1
+	}
+	missing := desired - running
+	if missing > 0 {
+		log.Printf("Reconciling job %s: %d/%d running, dispatching %d", job.Name, running, desired, missing)
+		return l.dispatchInstances(job, missing)
+	}
+	return nil
 }
 
 // GetClusterStatus fetches status from all agents (parallel, no goroutine leaks!)

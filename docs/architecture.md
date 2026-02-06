@@ -119,16 +119,28 @@ No bootstrap, no recovery delay. Ready immediately.
 ### Leader
 - Node that has lease via EasyRaft
 - Receives heartbeats from agents
-- Dispatches jobs round-robin to agents with capacity checking
-- Tracks which job instances run on which agents
-- On agent failure: redispatch only lost instances to other agents
+- Dispatches regular jobs via deterministic round-robin (agents sorted by ID)
+- Dispatches daemon jobs (count=-1) via reconcile-based dispatch
+- Tracks which job instances run on which agents (placement map)
+- On agent failure: cleans stale placement, reconciles all jobs
 - Runs on port+1000 (default 9080)
 
 **Multi-instance Scheduling:**
-- Job with Count=3 → dispatches 3x via round-robin
+- Job with Count=3 → dispatches 3x via deterministic round-robin (agents sorted by ID)
 - Agent checks capacity (CPU/memory) before accepting
 - On 503 (full) → leader tries next agent
 - Automatic spreading over agents
+
+**Daemon Scheduling (count=-1):**
+- Uses reconcile-based dispatch (same code path as periodic reconciliation)
+- Checks which agents already run the job, dispatches to missing agents
+- Rebuilds placement atomically
+
+**Reconciliation:**
+- Triggered after agent death, new agent registration, or agent unregister
+- `reconcileJob` is the single function for both daemon and regular job reconciliation
+- Daemon jobs: check all agents, dispatch to missing, rebuild placement atomically
+- Regular jobs: count running instances, dispatch missing via round-robin
 
 ### Agent
 - Runs on each node (including leader node)
@@ -220,13 +232,20 @@ Easyrun only stores tags - external tooling does the discovery logic.
 
 ### Agent fails
 1. Leader sees no heartbeat (30s timeout)
-2. Leader marks agent as dead
-3. Leader counts how many instances per job ran on failed agent
-4. Leader redispatches only those instances via round-robin
+2. Leader marks agent as dead and cleans its placement entries (`cleanPlacementForAgent`)
+3. Leader reconciles all jobs: queries actual cluster state, dispatches missing instances
+4. For daemon jobs: dispatches to all agents missing the job
+5. For regular jobs: counts running instances, dispatches the difference
 
 **Example:** Job with Count=5 on [A,B,B,C,C]. Agent B fails:
-- Leader dispatches 2 new instances (lost from B)
+- Leader cleans B from all placement entries
+- Reconciliation sees 3 running (on A,C,C), dispatches 2 more via round-robin
 - Result: Job now runs on [A,C,C,D,E] (still 5 instances)
+
+**Delete robustness:** `DeleteJobByID` uses two-phase approach:
+1. Read + clear placement entries (atomic)
+2. Check `GetClusterStatus()` for orphaned tasks not in placement
+3. Send delete to the union of both sets (catches stale placement)
 
 ### Leader fails
 1. Agents get heartbeat timeout

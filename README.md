@@ -100,10 +100,11 @@ go build -o bin/orch ./cmd/cli
               Heartbeats
 ```
 
-- **Leader**: Dispatches jobs, monitors agent health
+- **Leader**: Dispatches jobs, monitors agent health, reconciles on changes
 - **Agents**: Run tasks, report status, auto-restart failures
-- **Round-robin**: Automatic spreading across nodes
+- **Deterministic round-robin**: Spreading across nodes (agents sorted by ID)
 - **Capacity-aware**: Agents reject when full, leader tries next
+- **Reconcile-based**: Single code path for daemon dispatch and periodic reconciliation
 
 ## Job Spec
 
@@ -312,7 +313,8 @@ curl http://leader:8080/v1/status | jq '.tasks_by_agent'
 
 ### Agent Failures
 - Leader detects missing heartbeat (30s timeout)
-- Redispatch lost instances to other agents
+- Cleans stale placement entries for dead agent
+- Reconciles all jobs: compares desired vs actual, dispatches missing
 - Count preserved: 3 instances stay 3 instances
 
 ## Resource Limits

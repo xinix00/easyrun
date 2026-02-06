@@ -180,18 +180,26 @@ type Agent struct {
 ## Leader State (in-memory)
 
 ```go
-type Leader struct {
-    agents    map[string]*Agent     // Registered agents
-    jobs      map[string]*Job       // All jobs (shared with agent)
-    placement map[string][]string   // jobID -> []agentID (multiple instances)
+type leaderState struct {
+    agents     map[string]*Agent    // Registered agents
+    placement  map[string][]string  // jobID -> []agentID (multiple instances)
+    roundRobin int                  // Counter for deterministic round-robin
 }
 ```
 
+Jobs are stored in the shared `JobStore` (owned by Agent, referenced by Leader).
+
+All state access goes through a single goroutine via the `ops` channel, using `do()` (fire-and-forget) and `query()` (blocking with result) helpers.
+
 The leader tracks:
 - Which agents are online (via heartbeats)
-- Which jobs exist
-- Which job instances run on which agents
+- Which job instances run on which agents (placement)
+- Round-robin counter for deterministic agent selection (agents sorted by ID)
 
-**Multi-instance support:** A job with Count=3 has 3 entries in placement, spread across agents via round-robin.
+**Multi-instance support:** A job with Count=3 has 3 entries in placement, spread across agents via deterministic round-robin.
 
-On agent failure, only instances on that agent are redispatched.
+**Placement cleanup:** `cleanPlacementForAgent` removes a dead/unregistered agent from all placement entries. Shared by `checkDeadAgents` and `UnregisterAgent`.
+
+**Reconciliation:** After agent changes, `reconcileJob` compares desired vs actual state and dispatches the difference. Single code path for daemon (count=-1) and regular jobs.
+
+**Delete:** `DeleteJobByID` uses two-phase approach (placement + cluster status) to catch orphaned tasks.

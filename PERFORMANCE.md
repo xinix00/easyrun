@@ -30,7 +30,7 @@ Measured on Apple M4 Pro (14 cores, 48GB RAM):
 | Heartbeat processing | 500k/sec | 2 µs | With 100 agents |
 | Job lookup (10k jobs) | 13.6k/sec | 73 µs | O(n) scan |
 | Job list (1k jobs) | 125k/sec | 8 µs | Simple copy |
-| Round-robin selection | 10M+/sec | <100 ns | Very fast |
+| Round-robin selection | 160k+/sec | ~6 µs | Deterministic (sorted by agent ID) |
 | State query | 1M+/sec | <1 µs | Channel-based |
 
 **Key Insights:**

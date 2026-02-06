@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,6 +18,9 @@ import (
 func BenchmarkGetAgentsEndpoint(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
 	// Register 100 agents
@@ -43,6 +47,9 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 func BenchmarkGetJobsEndpoint(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
 	// Create 1000 jobs
@@ -73,6 +80,9 @@ func BenchmarkGetJobsEndpoint(b *testing.B) {
 func BenchmarkPostJobEndpoint(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
 	// Register agents
@@ -106,6 +116,9 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 func BenchmarkHeartbeatEndpoint(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
 	b.ResetTimer()
@@ -132,6 +145,9 @@ func BenchmarkHeartbeatEndpoint(b *testing.B) {
 func BenchmarkStatusEndpoint(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
 	// Register agents
@@ -158,6 +174,9 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 func BenchmarkConcurrentRequests(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
 	// Register agents

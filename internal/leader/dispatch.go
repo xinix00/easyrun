@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"easyrun/internal/types"
@@ -26,62 +27,42 @@ func generateID() string {
 	return uuid.New().String()
 }
 
-// DispatchJob sends a job to agents (Count times with round-robin spreading)
+// DispatchJob sends a job to agents and stores it.
 // count=-1 means run on ALL agents (exactly once per agent)
 func (l *Leader) DispatchJob(job *types.Job) error {
-	// Generate ID if not set (API always sets one, but tests may not)
-	// Note: Users cannot set IDs - the API server overwrites any provided ID
 	if job.ID == "" {
 		job.ID = generateID()
 	}
 
-	if err := l.dispatchInstances(job, job.Count); err != nil {
-		return err
+	if job.Count == -1 {
+		// Daemon: use reconcile-based dispatch (same path as reconciliation)
+		agents := l.GetAgents()
+		status := l.GetClusterStatus()
+		if err := l.reconcileJob(job, status, agents); err != nil {
+			return err
+		}
+	} else {
+		if err := l.dispatchInstances(job, job.Count); err != nil {
+			return err
+		}
 	}
 
 	l.jobStore.StoreJob(job)
 	return nil
 }
 
-// dispatchInstances dispatches N instances of a job to agents WITHOUT storing the job.
-// Used by DispatchJob (for new jobs) and redispatchJobsFrom (for rescheduling).
-// count=-1 means run on ALL agents (exactly once per agent)
+// dispatchInstances dispatches N instances of a job via round-robin.
+// Daemon jobs (count=-1) use reconcileJob instead.
 func (l *Leader) dispatchInstances(job *types.Job, count int) error {
-	var targetAgents []*types.Agent
-
-	if count == -1 {
-		// Dispatch to ALL agents (specific list, no round-robin)
-		targetAgents = l.GetAgents()
-		count = len(targetAgents)
-	} else if count <= 0 {
+	if count <= 0 {
 		count = 1
 	}
 
-	// Dispatch to agents
-	succeeded := 0
 	for i := 0; i < count; i++ {
-		var agent *types.Agent
-		if targetAgents != nil {
-			// count=-1: use specific agent from list
-			agent = targetAgents[i]
+		if err := l.dispatchToAvailableAgent(job); err != nil {
+			return fmt.Errorf("failed to dispatch instance %d/%d: %w", i+1, count, err)
 		}
-
-		if err := l.dispatchToAgent(agent, job); err != nil {
-			log.Printf("Failed to dispatch instance %d/%d: %v", i+1, count, err)
-			if targetAgents == nil {
-				// Normal count: fail if can't dispatch
-				return fmt.Errorf("failed to dispatch instance %d/%d: %w", i+1, count, err)
-			}
-			// count=-1: skip failed agent, continue
-			continue
-		}
-		succeeded++
 	}
-
-	if succeeded == 0 && count > 0 {
-		return fmt.Errorf("all agents rejected job")
-	}
-
 	return nil
 }
 
@@ -152,10 +133,11 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 }
 
 
-// DeleteJobByID sends delete requests to all agents running instances of this job
-// Uses job.ID for placement tracking, job.Name for agent communication
+// DeleteJobByID sends delete requests to all agents running instances of this job.
+// Two-phase: uses placement + cluster status to catch orphaned tasks.
 func (l *Leader) DeleteJobByID(job *types.Job) {
-	agents := query(l, func(s *leaderState) []*types.Agent {
+	// Phase 1: Get agents from placement (atomic read + clear)
+	placementAgents := query(l, func(s *leaderState) []*types.Agent {
 		agentIDs := s.placement[job.ID]
 		delete(s.placement, job.ID)
 
@@ -168,10 +150,36 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 		return result
 	})
 
-	// Delete on all agents (if any)
-	if len(agents) > 0 {
+	// Phase 2: Check cluster status for agents running this job but not in placement
+	status := l.GetClusterStatus()
+	seen := make(map[string]bool)
+	for _, a := range placementAgents {
+		seen[a.ID] = true
+	}
+
+	var extraAgents []*types.Agent
+	for agentID, tasks := range status {
+		if seen[agentID] {
+			continue
+		}
+		for _, task := range tasks {
+			if task.JobName == job.Name {
+				agent := query(l, func(s *leaderState) *types.Agent {
+					return s.agents[agentID]
+				})
+				if agent != nil {
+					extraAgents = append(extraAgents, agent)
+				}
+				break
+			}
+		}
+	}
+
+	// Send delete to union of both sets
+	allAgents := append(placementAgents, extraAgents...)
+	if len(allAgents) > 0 {
 		ctx := context.Background()
-		for _, agent := range agents {
+		for _, agent := range allAgents {
 			url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, job.Name)
 			req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 			if err != nil {
@@ -182,10 +190,9 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 				log.Printf("Failed to delete job %s on agent %s: %v", job.Name, agent.ID, err)
 			}
 		}
-		log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(agents))
+		log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(allAgents))
 	}
 
-	// Remove from store by ID (now consistent!)
 	l.jobStore.DeleteJob(job.ID)
 }
 
@@ -210,6 +217,9 @@ func (l *Leader) nextAgent() *types.Agent {
 		for _, a := range s.agents {
 			agents = append(agents, a)
 		}
+		sort.Slice(agents, func(i, j int) bool {
+			return agents[i].ID < agents[j].ID
+		})
 
 		idx := s.roundRobin % len(agents)
 		s.roundRobin++

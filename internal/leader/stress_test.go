@@ -198,6 +198,9 @@ func BenchmarkHeartbeatScale(b *testing.B) {
 		b.Run(fmt.Sprintf("%d_agents", count), func(b *testing.B) {
 			store := NewMockJobStore()
 			leader := New("local-agent", store, nil)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go leader.stateLoop(ctx)
 
 			// Pre-register agents
 			for i := 0; i < count; i++ {

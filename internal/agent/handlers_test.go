@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -605,5 +606,250 @@ func TestHandleRunPortInUse(t *testing.T) {
 
 	if len(tasks) != 0 {
 		t.Errorf("Got %d tasks, want 0 (port in use should fail)", len(tasks))
+	}
+}
+
+// ============== CAPACITY HANDLER TESTS ==============
+
+func TestHandleCapacity(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 8, MemoryBytes: 16 * 1024 * 1024 * 1024})
+
+	req := httptest.NewRequest(http.MethodGet, "/capacity", nil)
+	w := httptest.NewRecorder()
+
+	agent.handleCapacity(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp CapacityResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if resp.CPUCores != 8 {
+		t.Errorf("CPUCores = %d, want 8", resp.CPUCores)
+	}
+	if resp.MemoryBytes != 16*1024*1024*1024 {
+		t.Errorf("MemoryBytes = %d, want %d", resp.MemoryBytes, 16*1024*1024*1024)
+	}
+}
+
+// ============== LEADER HANDLER TESTS ==============
+
+func TestHandleLeader(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	// No getLeader set
+
+	req := httptest.NewRequest(http.MethodGet, "/leader", nil)
+	w := httptest.NewRecorder()
+
+	agent.handleLeader(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if resp["leader"] != "" {
+		t.Errorf("leader = %q, want empty string", resp["leader"])
+	}
+}
+
+func TestHandleLeaderWithFunc(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetLeaderFunc(func() string {
+		return "10.0.0.1:9080"
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/leader", nil)
+	w := httptest.NewRecorder()
+
+	agent.handleLeader(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	if resp["leader"] != "10.0.0.1:9080" {
+		t.Errorf("leader = %q, want %q", resp["leader"], "10.0.0.1:9080")
+	}
+}
+
+// ============== PROXY TO LEADER TESTS ==============
+
+func TestProxyToLeaderNoFunc(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	// No getLeader set
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/agents", nil)
+	w := httptest.NewRecorder()
+
+	agent.proxyToLeader(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestProxyToLeaderNoLeader(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetLeaderFunc(func() string {
+		return "" // No leader available
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/agents", nil)
+	w := httptest.NewRecorder()
+
+	agent.proxyToLeader(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestProxyToLeaderSuccess(t *testing.T) {
+	// Mock leader server
+	leaderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[{"id":"agent-1"}]`))
+	}))
+	defer leaderServer.Close()
+
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetLeaderFunc(func() string {
+		return leaderServer.Listener.Addr().String()
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/agents", nil)
+	w := httptest.NewRecorder()
+
+	agent.proxyToLeader(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	// Verify response was proxied
+	body := w.Body.String()
+	if body != `[{"id":"agent-1"}]` {
+		t.Errorf("Body = %q, want agent list", body)
+	}
+}
+
+func TestProxyToLeaderPostForward(t *testing.T) {
+	var receivedBody string
+	var receivedMethod string
+
+	leaderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod = r.Method
+		data, _ := io.ReadAll(r.Body)
+		receivedBody = string(data)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer leaderServer.Close()
+
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetLeaderFunc(func() string {
+		return leaderServer.Listener.Addr().String()
+	})
+
+	reqBody := `{"name":"test","command":"echo"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/jobs", bytes.NewReader([]byte(reqBody)))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	agent.proxyToLeader(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Errorf("Status code = %d, want %d", w.Code, http.StatusCreated)
+	}
+	if receivedMethod != http.MethodPost {
+		t.Errorf("Proxied method = %q, want %q", receivedMethod, http.MethodPost)
+	}
+	if receivedBody != reqBody {
+		t.Errorf("Proxied body = %q, want %q", receivedBody, reqBody)
+	}
+}
+
+// ============== LOG STREAMING TESTS ==============
+
+func TestHandleLogsStdoutStream(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Start a job to create a task with log broadcasters
+	job := &types.Job{ID: "job-1", Name: "log-test", Command: "echo hello"}
+	task, err := agent.startJob(job)
+	if err != nil {
+		t.Fatalf("startJob failed: %v", err)
+	}
+
+	// Write to the stdout broadcaster
+	broadcaster := mockRunner.GetStdout(task.ID)
+	if broadcaster == nil {
+		t.Fatal("No stdout broadcaster for task")
+	}
+
+	// Create a request with a context we can cancel
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/logs/"+task.ID+"/stdout", nil)
+	req = req.WithContext(reqCtx)
+	w := httptest.NewRecorder()
+
+	// Run handleLogs in a goroutine (it blocks on the SSE stream)
+	done := make(chan struct{})
+	go func() {
+		agent.handleLogs(w, req)
+		close(done)
+	}()
+
+	// Write a log line
+	time.Sleep(20 * time.Millisecond)
+	broadcaster.Write([]byte("test log line"))
+
+	// Give time for the message to be processed
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel the request to stop the stream
+	reqCancel()
+	<-done
+
+	body := w.Body.String()
+	if !bytes.Contains([]byte(body), []byte("data: test log line")) {
+		t.Errorf("Body = %q, want SSE format with 'data: test log line'", body)
 	}
 }

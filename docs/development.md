@@ -40,13 +40,20 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 /internal
     /agent/
         agent.go           # Agent HTTP server + task management
+        handlers.go        # Agent HTTP handlers
+        monitor.go         # Task monitoring (health checks, restarts)
     /leader/
-        leader.go          # Leader: dispatch, heartbeats, failover
+        leader.go          # State management, heartbeat, single-goroutine loop
+        dispatch.go        # Job dispatch, round-robin, placement tracking, delete
+        health.go          # Reconciliation (reconcileJob/reconcileJobs), dead agent check, cluster status
+        update.go          # Update policies: rolling, recreate, blue-green
     /runner/
         runner.go          # Runner interface
         process.go         # Process runner
         process_linux.go   # Linux: cgroups
         process_darwin.go  # macOS: ulimit
+        download.go        # Artifact download (HTTP, S3)
+        logs.go            # Log broadcasting (SSE)
     /api/
         server.go          # Leader HTTP API
     /discovery/
@@ -56,11 +63,8 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 /pkg
     /config/
         config.go          # Configuratie laden
-/easyraft                  # Leader election service
-    /cmd/election/
-    /internal/raft/
-    /internal/lease/
-    /internal/api/
+    /httputil/
+        response.go        # JSON response helpers
 /docs                      # Documentatie
 ```
 
