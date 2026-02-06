@@ -128,18 +128,6 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	var lastLeaderAddr string // cached leader address — fallback when raft is down
 
 	// Main loop: heartbeat to leader, handle leader election
-	//
-	// Leader failover timeline (worst case):
-	//   T=0   Leader crashes
-	//   T=30  Agent detects (3 failed heartbeats × 10s tick) → TryBecomeLeader
-	//   T=30  New leader starts, settle period begins (30s)
-	//   T=40  Other agents: heartbeat → 404 "not registered" → will re-register
-	//   T=50  Other agents: register with new leader (worst case 2 bounce ticks)
-	//   T=60  Settle ends → reconcileJobs dispatches to all registered agents
-	//
-	// The 30s settle window always covers the 20s registration bounce because
-	// both are gated by the same 3×10s failure detection. Late registrations
-	// (after settle) still trigger reconcileJobs via RegisterAgent.
 	go func() {
 		tick := func() {
 			// Use cached leader, only ask raft when unknown
