@@ -38,6 +38,8 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// ===== STAP 1: 20 tasks over 2 nodes =====
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -96,6 +98,7 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 
 	// ===== STAP 3: agent-c komt online binnen 2 sec =====
 	t.Log("STAP 3 - Agent C komt online")
+	leader.RegisterAgent("agent-c", agentC.URL(), "", nil)
 	leader.Heartbeat("agent-c", agentC.URL(), nil, time.Time{}, "")
 	time.Sleep(100 * time.Millisecond)
 
@@ -171,6 +174,8 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// 20 tasks over 2 nodes
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -209,6 +214,7 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 
 	// Agent-c komt online
 	t.Log("Agent C komt online terwijl agent-a onbereikbaar is")
+	leader.RegisterAgent("agent-c", agentC.URL(), "", nil)
 	leader.Heartbeat("agent-c", agentC.URL(), nil, time.Time{}, "")
 	time.Sleep(100 * time.Millisecond)
 
@@ -290,6 +296,8 @@ func TestNetworkBlipNoRedistribution(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)

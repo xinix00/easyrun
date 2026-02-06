@@ -31,6 +31,9 @@ func TestThreeNodeClusterOneDies(t *testing.T) {
 	defer cancel()
 	go l.stateLoop(ctx)
 
+	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
+	l.RegisterAgent("agent-c", agentC.URL(), "", nil)
 	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-c", agentC.URL(), nil, time.Time{}, "")
@@ -105,6 +108,8 @@ func TestDaemonStableDuringBlipNewNodeJoins(t *testing.T) {
 	go l.stateLoop(ctx)
 
 	// Dispatch daemon to A and B
+	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -175,6 +180,8 @@ func TestHeartbeatReducedPlacedTriggersReconcile(t *testing.T) {
 	defer cancel()
 	go l.stateLoop(ctx)
 
+	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -230,6 +237,8 @@ func TestMixedJobsAgentDies(t *testing.T) {
 	defer cancel()
 	go l.stateLoop(ctx)
 
+	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -304,6 +313,9 @@ func TestGracefulLeaveThreeNodes(t *testing.T) {
 	defer cancel()
 	go l.stateLoop(ctx)
 
+	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
+	l.RegisterAgent("agent-c", agentC.URL(), "", nil)
 	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-c", agentC.URL(), nil, time.Time{}, "")
@@ -369,6 +381,8 @@ func TestAgentDiesAndRejoinsGetsDaemon(t *testing.T) {
 	defer cancel()
 	go l.stateLoop(ctx)
 
+	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -441,6 +455,8 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 	defer cancel()
 	go l.stateLoop(ctx)
 
+	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)

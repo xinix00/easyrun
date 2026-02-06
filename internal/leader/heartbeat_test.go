@@ -20,6 +20,7 @@ func TestLeaderHeartbeatRegistersAgent(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Send heartbeat from remote agent
+	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
 	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
 
 	time.Sleep(10 * time.Millisecond)
@@ -46,6 +47,7 @@ func TestLeaderHeartbeatUpdatesLastSeen(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// First heartbeat
+	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
 	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -77,6 +79,7 @@ func TestLeaderHeartbeatLearnsJobsFromRemoteAgents(t *testing.T) {
 		{ID: "job-2-id", Name: "remote-job-2", Command: "echo 2"},
 	}
 
+	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
 	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, time.Now(), "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -103,6 +106,7 @@ func TestLeaderHeartbeatSyncsNewerState(t *testing.T) {
 		{Name: "newer-job", Command: "echo newer"},
 	}
 
+	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
 	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, newerTime, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -122,6 +126,7 @@ func TestLeaderGetAgents(t *testing.T) {
 
 	// Register multiple agents
 	for i := 0; i < 5; i++ {
+		leader.RegisterAgent("agent-"+string(rune('a'+i)), "http://host:8080", "", nil)
 		leader.Heartbeat("agent-"+string(rune('a'+i)), "http://host:8080", nil, time.Time{}, "")
 	}
 
@@ -142,6 +147,7 @@ func TestLeaderUnregisterAgent(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Register agent
+	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
 	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -165,6 +171,12 @@ func TestLeaderConcurrentHeartbeats(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go leader.stateLoop(ctx)
+
+	// Pre-register all agents
+	for i := 0; i < 10; i++ {
+		agentID := "agent-" + string(rune('a'+i))
+		leader.RegisterAgent(agentID, "http://host:8080", "", nil)
+	}
 
 	var wg sync.WaitGroup
 

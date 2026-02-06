@@ -37,6 +37,7 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 	go ldr.stateLoop(ctx)
 
 	// Register agent-1
+	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
 	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
@@ -178,6 +179,9 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	go ldr.stateLoop(ctx)
 
 	// Register all 3 agents
+	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
+	ldr.RegisterAgent("agent-2", agent2.URL(), "", nil)
+	ldr.RegisterAgent("agent-3", agent3.URL(), "", nil)
 	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
 	ldr.Heartbeat("agent-2", agent2.URL(), nil, time.Time{}, "")
 	ldr.Heartbeat("agent-3", agent3.URL(), nil, time.Time{}, "")

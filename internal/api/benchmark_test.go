@@ -26,7 +26,9 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 	// Register 100 agents
 	for i := 0; i < 100; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		l.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		l.RegisterAgent(agentID, endpoint, "", nil)
+		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 	}
 
 	req := httptest.NewRequest("GET", "/v1/agents", nil)
@@ -88,7 +90,9 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 	// Register agents
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		l.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		l.RegisterAgent(agentID, endpoint, "", nil)
+		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -120,6 +124,13 @@ func BenchmarkHeartbeatEndpoint(b *testing.B) {
 	defer cancel()
 	go l.Run(ctx)
 	server := NewServer(l, ":9080")
+
+	// Pre-register 100 agents so heartbeats succeed
+	for i := 0; i < 100; i++ {
+		agentID := fmt.Sprintf("agent-%d", i)
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		l.RegisterAgent(agentID, endpoint, "", nil)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -153,7 +164,9 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 	// Register agents
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		l.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		l.RegisterAgent(agentID, endpoint, "", nil)
+		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 	}
 
 	req := httptest.NewRequest("GET", "/v1/status", nil)
@@ -182,7 +195,9 @@ func BenchmarkConcurrentRequests(b *testing.B) {
 	// Register agents
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		l.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		l.RegisterAgent(agentID, endpoint, "", nil)
+		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()

@@ -96,7 +96,10 @@ func TestGetAgentsWithRegistered(t *testing.T) {
 	defer cancel()
 
 	for i := 0; i < 3; i++ {
-		l.Heartbeat(fmt.Sprintf("agent-%d", i), fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		agentID := fmt.Sprintf("agent-%d", i)
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		l.RegisterAgent(agentID, endpoint, "", nil)
+		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -123,6 +126,9 @@ func TestHeartbeatSuccess(t *testing.T) {
 		"id":       "agent-1",
 		"endpoint": "http://10.0.0.1:8080",
 	}
+
+	// Register agent first
+	doRequest(server, "POST", "/v1/agents", body)
 
 	w := doRequest(server, "POST", "/v1/heartbeat", body)
 
@@ -184,6 +190,9 @@ func TestHeartbeatRegistersNewAgent(t *testing.T) {
 		"id":       "new-agent",
 		"endpoint": "http://10.0.0.1:8080",
 	}
+
+	// Register agent first
+	doRequest(server, "POST", "/v1/agents", body)
 
 	w := doRequest(server, "POST", "/v1/heartbeat", body)
 	if w.Code != 200 {
@@ -299,6 +308,7 @@ func TestRunJobCreatesNew(t *testing.T) {
 	go l.Run(ctx)
 	time.Sleep(10 * time.Millisecond)
 
+	l.RegisterAgent("mock-agent", mockAgent.URL(), "", nil)
 	l.Heartbeat("mock-agent", mockAgent.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -352,6 +362,7 @@ func TestRunJobUpdateExisting(t *testing.T) {
 	go l.Run(ctx)
 	time.Sleep(10 * time.Millisecond)
 
+	l.RegisterAgent("mock-agent", mockAgent.URL(), "", nil)
 	l.Heartbeat("mock-agent", mockAgent.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -415,6 +426,7 @@ func TestUnregisterAgent(t *testing.T) {
 	server, l, cancel := setupTestServer(t)
 	defer cancel()
 
+	l.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
 	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -472,7 +484,10 @@ func TestStatusEndpointWithAgents(t *testing.T) {
 	defer cancel()
 
 	for i := 0; i < 3; i++ {
-		l.Heartbeat(fmt.Sprintf("agent-%d", i), fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		agentID := fmt.Sprintf("agent-%d", i)
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		l.RegisterAgent(agentID, endpoint, "", nil)
+		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 

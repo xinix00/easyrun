@@ -105,7 +105,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobs := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime, req.Version)
+	jobs, known := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime, req.Version)
+	if !known {
+		httputil.WriteError(w, http.StatusNotFound, "not registered")
+		return
+	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
 		"jobs":       jobs,
@@ -241,9 +245,10 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"agents":        len(agents),
-		"total_tasks":   totalTasks,
-		"running_tasks": running,
+		"agents":         len(agents),
+		"total_tasks":    totalTasks,
+		"running_tasks":  running,
+		"settling":       !s.leader.IsSettled(),
 		"tasks_by_agent": tasks,
 	})
 }

@@ -35,6 +35,7 @@ func TestMassiveScale(t *testing.T) {
 			for i := 0; i < tt.agents; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+				leader.RegisterAgent(agentID, endpoint, "", nil)
 				leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 			}
 			registerTime := time.Since(start)
@@ -94,6 +95,7 @@ func BenchmarkMassiveAgents(b *testing.B) {
 			// Register agents once
 			for i := 0; i < size; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
+				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 			}
 
@@ -125,6 +127,7 @@ func BenchmarkMassiveJobs(b *testing.B) {
 			// Register agents
 			for i := 0; i < 10; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
+				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 			}
 
@@ -205,6 +208,7 @@ func BenchmarkHeartbeatScale(b *testing.B) {
 			// Pre-register agents
 			for i := 0; i < count; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
+				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 			}
 
@@ -246,6 +250,7 @@ func BenchmarkPlacementScale(b *testing.B) {
 			// Register agents
 			for i := 0; i < s.agents; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
+				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 			}
 
@@ -293,6 +298,7 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 	// Massive scale: 1000 agents, 10000 jobs, 3 instances each = 30k placements
 	for i := 0; i < 1000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
+		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 

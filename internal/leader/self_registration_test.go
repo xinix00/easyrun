@@ -18,6 +18,7 @@ func TestLeaderRegistersItself(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Leader registers itself via heartbeat
+	leader.RegisterAgent("local-agent", "http://10.0.0.1:8080", "", nil)
 	leader.Heartbeat("local-agent", "http://10.0.0.1:8080", nil, time.Time{}, "")
 
 	// Verify leader is in agents list
@@ -45,10 +46,13 @@ func TestLeaderPlusFollowerAgents(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Leader registers itself
+	leader.RegisterAgent("leader-node", "http://10.0.0.1:8080", "", nil)
 	leader.Heartbeat("leader-node", "http://10.0.0.1:8080", nil, time.Time{}, "")
 
 	// Two followers register
+	leader.RegisterAgent("follower-1", "http://10.0.0.2:8080", "", nil)
 	leader.Heartbeat("follower-1", "http://10.0.0.2:8080", nil, time.Time{}, "")
+	leader.RegisterAgent("follower-2", "http://10.0.0.3:8080", "", nil)
 	leader.Heartbeat("follower-2", "http://10.0.0.3:8080", nil, time.Time{}, "")
 
 	time.Sleep(10 * time.Millisecond)
@@ -86,6 +90,7 @@ func TestLeaderCanDispatchToItself(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Leader registers itself
+	leader.RegisterAgent("leader-node", "http://10.0.0.1:8080", "", nil)
 	leader.Heartbeat("leader-node", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -123,6 +128,7 @@ func TestSingleNodeClusterLeaderIsOnlyAgent(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Solo node registers itself
+	leader.RegisterAgent("solo-node", "http://10.0.0.1:8080", "", nil)
 	leader.Heartbeat("solo-node", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 

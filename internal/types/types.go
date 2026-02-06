@@ -44,21 +44,21 @@ const (
 
 // Job defines what the user wants to run
 type Job struct {
-	ID           string            `json:"id,omitempty"`             // unique ID (generated)
-	Name         string            `json:"name"`                     // user-facing name (for upsert)
-	AgentID      string            `json:"agent_id,omitempty"`       // pin to specific agent
-	Artifact     *Artifact         `json:"artifact,omitempty"`       // binary/assets to download
+	ID           string            `json:"id,omitempty"`       // unique ID (generated)
+	Name         string            `json:"name"`               // user-facing name (for upsert)
+	AgentID      string            `json:"agent_id,omitempty"` // pin to specific agent
+	Artifact     *Artifact         `json:"artifact,omitempty"` // binary/assets to download
 	Command      string            `json:"command"`
-	Count        int               `json:"count,omitempty"`          // number of instances (default 1)
-	Ports        map[string]int    `json:"ports,omitempty"`          // port name -> fixed port (0 = dynamic)
+	Count        int               `json:"count,omitempty"` // number of instances (default 1)
+	Ports        map[string]int    `json:"ports,omitempty"` // port name -> fixed port (0 = dynamic)
 	CPUShares    int               `json:"cpu_shares,omitempty"`
 	MemoryLimit  uint64            `json:"memory_limit,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
-	Tags         map[string]string `json:"tags,omitempty"`           // labels for discovery/grouping
-	Volumes      map[string]string `json:"volumes,omitempty"`        // host_path -> task_path (symlinked)
+	Tags         map[string]string `json:"tags,omitempty"`    // labels for discovery/grouping
+	Volumes      map[string]string `json:"volumes,omitempty"` // host_path -> task_path (symlinked)
 	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
-	MaxRestarts  int               `json:"max_restarts,omitempty"`   // 0 = unlimited
-	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"`  // rolling (default) | recreate | blue-green
+	MaxRestarts  int               `json:"max_restarts,omitempty"`  // 0 = unlimited
+	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"` // rolling (default) | recreate | blue-green
 }
 
 // Task represents a running instance of a Job
@@ -66,7 +66,7 @@ type Task struct {
 	ID           string         `json:"id"`
 	JobID        string         `json:"job_id"`
 	JobName      string         `json:"job_name"`
-	Ports        map[string]int `json:"ports"`         // named port -> port number
+	Ports        map[string]int `json:"ports"` // named port -> port number
 	Pid          int            `json:"pid"`
 	State        TaskState      `json:"state"`
 	StartedAt    time.Time      `json:"started_at"`

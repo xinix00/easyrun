@@ -121,22 +121,20 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 
 // Heartbeat updates agent's LastSeen and syncs jobs.
 // Does NOT trigger reconciliation — that's RegisterAgent's job.
-// During settle period, heartbeats still create agent entries so the leader learns state.
-func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime time.Time, version string) []*types.Job {
-	l.do(func(s *leaderState) {
+// Returns (nil, false) if agent is unknown — caller should return 404 to force re-register.
+func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime time.Time, version string) ([]*types.Job, bool) {
+	known := query(l, func(s *leaderState) bool {
 		if agent, ok := s.agents[id]; ok {
 			agent.LastSeen = time.Now()
 			agent.Version = version
-			return
+			return true
 		}
-		// Unknown agent (e.g. during settle) — create entry but don't reconcile
-		s.agents[id] = &types.Agent{
-			ID:       id,
-			Endpoint: endpoint,
-			Version:  version,
-			LastSeen: time.Now(),
-		}
+		return false
 	})
+
+	if !known {
+		return nil, false
+	}
 
 	// Sync job definitions if agent has newer state
 	myStateTime := l.jobStore.GetStateTime()
@@ -145,7 +143,7 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime tim
 		l.jobStore.SyncJobs(jobs, stateTime)
 	}
 
-	return l.jobStore.GetJobs()
+	return l.jobStore.GetJobs(), true
 }
 
 // RegisterAgent registers a (re)starting agent. Clears old state and triggers reconciliation.
@@ -227,5 +225,10 @@ func (l *Leader) GetPlaced(jobID string) map[string]int {
 // GetStateTime returns the job store's state time
 func (l *Leader) GetStateTime() time.Time {
 	return l.jobStore.GetStateTime()
+}
+
+// IsSettled returns whether the leader has finished its settle period
+func (l *Leader) IsSettled() bool {
+	return query(l, func(s *leaderState) bool { return s.settled })
 }
 

@@ -25,6 +25,7 @@ func TestLeaderDispatchJobToAgent(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("mock-agent", agent.URL(), "", nil)
 	leader.Heartbeat("mock-agent", agent.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -78,6 +79,7 @@ func TestLeaderDispatchAllAgentsReject(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("rejecting-agent", server.URL, "", nil)
 	leader.Heartbeat("rejecting-agent", server.URL, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -105,6 +107,7 @@ func TestLeaderDispatchMultipleInstances(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	for i, a := range agents {
+		leader.RegisterAgent("agent-"+string(rune('a'+i)), a.URL(), "", nil)
 		leader.Heartbeat("agent-"+string(rune('a'+i)), a.URL(), nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -150,7 +153,9 @@ func TestLeaderDeleteJobOnMultipleAgents(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Register agents first (no jobs in store yet, so no rescheduling triggered)
+	leader.RegisterAgent("agent-a", server.URL, "", nil)
 	leader.Heartbeat("agent-a", server.URL, nil, time.Time{}, "")
+	leader.RegisterAgent("agent-b", server.URL, "", nil)
 	leader.Heartbeat("agent-b", server.URL, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -187,6 +192,7 @@ func TestLeaderDispatchJobWithZeroCount(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
 	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -218,6 +224,7 @@ func TestLeaderDispatchCountMinusOne(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	for i, a := range agents {
+		leader.RegisterAgent("agent-"+string(rune('a'+i)), a.URL(), "", nil)
 		leader.Heartbeat("agent-"+string(rune('a'+i)), a.URL(), nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
@@ -249,6 +256,7 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("agent-a", agent1.URL(), "", nil)
 	leader.Heartbeat("agent-a", agent1.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -282,6 +290,7 @@ func TestLeaderConcurrentDispatchAndDelete(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
 	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -341,6 +350,7 @@ func TestLeaderDispatchAccepts202(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("async-agent", server.URL, "", nil)
 	leader.Heartbeat("async-agent", server.URL, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -386,6 +396,7 @@ func TestLeaderDispatchAccepts201(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("create-agent", server.URL, "", nil)
 	leader.Heartbeat("create-agent", server.URL, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -419,6 +430,7 @@ func TestLeaderDispatchRejects500(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("error-agent", server.URL, "", nil)
 	leader.Heartbeat("error-agent", server.URL, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -452,6 +464,7 @@ func TestLeaderDispatchRejects400(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
+	leader.RegisterAgent("bad-agent", server.URL, "", nil)
 	leader.Heartbeat("bad-agent", server.URL, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 

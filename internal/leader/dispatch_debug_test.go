@@ -18,6 +18,7 @@ func TestDispatchSimpleJob(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Register 1 agent
+	leader.RegisterAgent("agent-a", "http://10.0.0.1:8080", "", nil)
 	leader.Heartbeat("agent-a", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 

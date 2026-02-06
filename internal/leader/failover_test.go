@@ -196,6 +196,7 @@ func TestFailoverNewLeaderLearnsJobsFromAgents(t *testing.T) {
 		{ID: "webapp-id", Name: "webapp", Command: "./webapp", Count: 2},
 		{ID: "api-id", Name: "api", Command: "./api", Count: 1},
 	}
+	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agent1Jobs, time.Now(), "")
 
 	// Agent 2 heartbeats with its jobs
@@ -203,6 +204,7 @@ func TestFailoverNewLeaderLearnsJobsFromAgents(t *testing.T) {
 		{ID: "webapp-id", Name: "webapp", Command: "./webapp", Count: 2}, // Same job, running on both
 		{ID: "worker-id", Name: "worker", Command: "./worker", Count: 1},
 	}
+	newLeader.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", nil)
 	newLeader.Heartbeat("agent-2", "http://10.0.0.2:8080", agent2Jobs, time.Now(), "")
 
 	time.Sleep(20 * time.Millisecond)
@@ -241,6 +243,7 @@ func TestFailoverStateTimeBasedSync(t *testing.T) {
 		{ID: "critical-id", Name: "critical", Command: "./critical"},
 	}
 
+	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, newerStateTime, "")
 	time.Sleep(20 * time.Millisecond)
 
@@ -443,6 +446,7 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 		Tags:        map[string]string{"urlprefix": "api.example.com", "lb": "main"},
 	}
 
+	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", []*types.Job{originalJob}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
@@ -480,6 +484,7 @@ func TestFailoverAgentWithEmptyJobsStillRegisters(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	// Agent heartbeats with no jobs
+	newLeader.RegisterAgent("fresh-agent", "http://10.0.0.99:8080", "", nil)
 	newLeader.Heartbeat("fresh-agent", "http://10.0.0.99:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
@@ -510,6 +515,7 @@ func TestFailoverOlderAgentStateIgnored(t *testing.T) {
 		{ID: "old-job-id", Name: "old-job", Command: "old"},
 	}
 
+	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agentJobs, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
@@ -920,6 +926,7 @@ func TestFailoverSecondHeartbeatDoesNotReschedule(t *testing.T) {
 
 	// First heartbeat - agent rejects all /run calls
 	localAgent.SetFailRuns(true)
+	newLeader.RegisterAgent("new-leader-id", localAgent.URL(), "", nil)
 	newLeader.Heartbeat("new-leader-id", localAgent.URL(), nil, time.Time{}, "")
 	time.Sleep(50 * time.Millisecond)
 
@@ -1017,6 +1024,8 @@ func TestFailoverAgentDiesTasksRescheduled(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Register agents first
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -1089,6 +1098,8 @@ func TestFailoverHeartbeatLearnsWrongPlacementCount(t *testing.T) {
 	store.StoreJob(job)
 
 	// Agents heartbeat - they are registered but placement is NOT learned
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, time.Now(), "")
 	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
@@ -1150,6 +1161,8 @@ func TestRedispatchDoesNotCorruptJobCount(t *testing.T) {
 	// Register agents and set up placement
 	// Agent A has 2 ticker tasks and 1 caddy task
 	// Agent B has 18 ticker tasks and 1 caddy task
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{tickerJob, caddyJob}, time.Now(), "")
 	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{tickerJob, caddyJob}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
@@ -1262,6 +1275,8 @@ func TestRedispatchCorrectInstanceCount(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Register agents first
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -1328,6 +1343,8 @@ func TestRedispatchWithStalePlacement(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Register agents first
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
@@ -1394,6 +1411,8 @@ func TestFailoverAgentDiesRealisticHeartbeat(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	// Register agents FIRST (before job exists)
+	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
 	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)

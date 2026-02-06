@@ -26,6 +26,7 @@ func BenchmarkDispatchJob(b *testing.B) {
 	// Register 10 agents
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
+		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 
@@ -59,6 +60,13 @@ func BenchmarkHeartbeat(b *testing.B) {
 	}
 	store.StoreJob(job)
 
+	// Pre-register agents
+	for i := 0; i < 100; i++ {
+		agentID := fmt.Sprintf("agent-%d", i)
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		leader.RegisterAgent(agentID, endpoint, "", nil)
+	}
+
 	b.ResetTimer()
 	b.ReportAllocs()
 
@@ -78,6 +86,7 @@ func BenchmarkGetAgents(b *testing.B) {
 	// Register 1000 agents
 	for i := 0; i < 1000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
+		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 
@@ -129,6 +138,7 @@ func BenchmarkRoundRobinSelection(b *testing.B) {
 	// Register 100 agents
 	for i := 0; i < 100; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
+		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 
@@ -148,6 +158,13 @@ func BenchmarkConcurrentHeartbeats(b *testing.B) {
 	store := NewMockJobStore()
 	leader, cancel := startLeader(store)
 	defer cancel()
+
+	// Pre-register agents
+	for i := 0; i < 1000; i++ {
+		agentID := fmt.Sprintf("agent-%d", i)
+		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
+		leader.RegisterAgent(agentID, endpoint, "", nil)
+	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -172,6 +189,7 @@ func BenchmarkPlacedUpdate(b *testing.B) {
 	// Register agents
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
+		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
 		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 

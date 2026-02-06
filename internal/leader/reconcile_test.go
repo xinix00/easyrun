@@ -18,6 +18,8 @@ func TestVolumeAffinity(t *testing.T) {
 	go l.stateLoop(ctx)
 
 	// Register two agents
+	l.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
+	l.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", nil)
 	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	l.Heartbeat("agent-2", "http://10.0.0.2:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
@@ -90,6 +92,7 @@ func TestNodeRecovery(t *testing.T) {
 	store.StoreJob(job)
 
 	// Register node A and dispatch job
+	l.RegisterAgent("node-a", "http://10.0.0.1:8080", "", nil)
 	l.Heartbeat("node-a", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 	l.do(func(s *leaderState) {
@@ -118,6 +121,7 @@ func TestNodeRecovery(t *testing.T) {
 
 	// Node comes back (with STABLE ID!)
 	// isNew = true because it was deleted from agents map
+	l.RegisterAgent("node-a", "http://10.0.0.1:8080", "", nil)
 	l.Heartbeat("node-a", "http://10.0.0.1:8080", nil, time.Time{}, "")
 
 	// tryRescheduleUnderscheduled should have been called
