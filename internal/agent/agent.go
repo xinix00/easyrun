@@ -37,6 +37,12 @@ type agentState struct {
 	jobs      map[string]*types.Job
 	tasks     map[string]*types.Task
 	stateTime time.Time
+
+	// Capacity reservations: resources claimed by accepted-but-not-yet-started jobs.
+	// Prevents TOCTOU race where concurrent /run requests all pass hasCapacity
+	// before any task appears in state.
+	reservedCPU int
+	reservedMem uint64
 }
 
 // Agent runs jobs and reports status
@@ -417,12 +423,11 @@ func findJobByName(s *agentState, jobName string) *types.Job {
 }
 
 // hasCapacity checks if the agent has capacity for a new job.
-// Resource usage is read from the Task itself (not the Job definition),
-// so capacity tracking works even when job definitions are missing (e.g., after recovery).
+// Accounts for both running tasks AND pending reservations.
 func (a *Agent) hasCapacity(job *types.Job) bool {
 	return query(a, func(s *agentState) bool {
-		usedCPU := 0
-		usedMem := uint64(0)
+		usedCPU := s.reservedCPU
+		usedMem := s.reservedMem
 
 		for _, task := range s.tasks {
 			if task.State == types.TaskRunning {
@@ -432,17 +437,16 @@ func (a *Agent) hasCapacity(job *types.Job) bool {
 		}
 
 		if job.CPUShares > 0 {
-			maxCPU := a.sysInfo.CPUCores * 1024 // 1024 shares per core
+			maxCPU := a.sysInfo.CPUCores * 1024
 			if usedCPU+job.CPUShares > maxCPU {
-				log.Printf("Insufficient CPU capacity: used=%d, requested=%d, max=%d", usedCPU, job.CPUShares, maxCPU)
+				log.Printf("Insufficient CPU: used=%d requested=%d max=%d", usedCPU, job.CPUShares, maxCPU)
 				return false
 			}
 		}
 
 		if job.MemoryLimit > 0 {
-			maxMem := a.sysInfo.MemoryBytes
-			if usedMem+job.MemoryLimit > maxMem {
-				log.Printf("Insufficient memory capacity: used=%d, requested=%d, max=%d", usedMem, job.MemoryLimit, maxMem)
+			if usedMem+job.MemoryLimit > a.sysInfo.MemoryBytes {
+				log.Printf("Insufficient memory: used=%d requested=%d max=%d", usedMem, job.MemoryLimit, a.sysInfo.MemoryBytes)
 				return false
 			}
 		}

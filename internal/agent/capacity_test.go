@@ -1,7 +1,12 @@
 package agent
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -379,6 +384,78 @@ func TestAgentCapacityWithoutJobDefinition(t *testing.T) {
 		t.Error("hasCapacity should return false: running task uses 600 CPU + 600 mem, " +
 			"new job needs 500 CPU + 500 mem, but total capacity is only 1024 each. " +
 			"Task resource usage must be tracked on the Task itself, not looked up from Job definition")
+	}
+}
+
+// TestConcurrentDispatchRespectsCapacity verifies that concurrent /run requests
+// cannot over-provision an agent. With 2 CPU cores (2048 shares) and 3 concurrent
+// requests each needing 1024 shares, exactly 2 should be accepted and 1 rejected.
+//
+// BUG: handleRun checks hasCapacity THEN starts the job in a goroutine.
+// Between the check and the task appearing in state, other requests can pass
+// the same check (TOCTOU race). This test fails until the race is fixed.
+func TestConcurrentDispatchRespectsCapacity(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+
+	// Slow runner: widens the race window so all 3 requests check capacity
+	// before any task is added to state
+	mockRunner.onRun = func(job *types.Job) error {
+		time.Sleep(50 * time.Millisecond)
+		return nil
+	}
+
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 2, MemoryBytes: 1024 * 1024 * 1024}) // 2 cores = 2048 shares
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Send 3 concurrent requests, each needing 1024 shares (1 core)
+	var wg sync.WaitGroup
+	codes := make([]int, 3)
+
+	for i := 0; i < 3; i++ {
+		wg.Add(1)
+		go func(n int) {
+			defer wg.Done()
+			job := types.Job{
+				Name:      fmt.Sprintf("concurrent-%d", n),
+				Command:   "echo hello",
+				CPUShares: 1024,
+			}
+			body, _ := json.Marshal(job)
+			req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+			w := httptest.NewRecorder()
+			agent.handleRun(w, req)
+			codes[n] = w.Code
+		}(i)
+	}
+
+	wg.Wait()
+
+	// Wait for goroutines to finish starting tasks
+	time.Sleep(200 * time.Millisecond)
+
+	accepted := 0
+	rejected := 0
+	for _, code := range codes {
+		switch code {
+		case 202:
+			accepted++
+		case 503:
+			rejected++
+		}
+	}
+
+	// Agent has 2048 shares, each job needs 1024 → max 2 jobs
+	if accepted > 2 {
+		t.Errorf("accepted %d jobs but agent only has capacity for 2 (2048 shares, 1024 each)", accepted)
+	}
+	if rejected < 1 {
+		t.Errorf("expected at least 1 rejection but got accepted=%d rejected=%d", accepted, rejected)
 	}
 }
 

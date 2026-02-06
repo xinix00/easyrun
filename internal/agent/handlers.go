@@ -77,8 +77,8 @@ type CapacityResponse struct {
 // handleCapacity returns detected system capacity with actual usage from running tasks
 func (a *Agent) handleCapacity(w http.ResponseWriter, r *http.Request) {
 	usage := query(a, func(s *agentState) CapacityResponse {
-		var cpuUsed int
-		var memUsed uint64
+		cpuUsed := s.reservedCPU
+		memUsed := s.reservedMem
 		var running int
 		for _, task := range s.tasks {
 			if task.State == types.TaskRunning {
@@ -123,7 +123,28 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !a.hasCapacity(&job) {
+	// Check capacity AND reserve atomically (prevents TOCTOU race)
+	reserved := query(a, func(s *agentState) bool {
+		usedCPU := s.reservedCPU
+		usedMem := s.reservedMem
+		for _, task := range s.tasks {
+			if task.State == types.TaskRunning {
+				usedCPU += task.CPUShares
+				usedMem += task.MemoryLimit
+			}
+		}
+		if job.CPUShares > 0 && usedCPU+job.CPUShares > a.sysInfo.CPUCores*1024 {
+			return false
+		}
+		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.sysInfo.MemoryBytes {
+			return false
+		}
+		s.reservedCPU += job.CPUShares
+		s.reservedMem += job.MemoryLimit
+		return true
+	})
+
+	if !reserved {
 		httputil.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "insufficient capacity",
 		})
@@ -141,6 +162,11 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	// Start job in background (includes artifact download)
 	go func() {
 		task, err := a.startJob(&job)
+		// Release reservation (task now tracks its own resources, or start failed)
+		a.do(func(s *agentState) {
+			s.reservedCPU -= job.CPUShares
+			s.reservedMem -= job.MemoryLimit
+		})
 		if err != nil {
 			log.Printf("Failed to start job %s: %v", job.Name, err)
 			return
