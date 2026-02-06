@@ -34,6 +34,7 @@ func NewServer(l *leader.Leader, addr string) *Server {
 
 	// Agents
 	mux.HandleFunc("GET /v1/agents", s.handleGetAgents)
+	mux.HandleFunc("POST /v1/agents", s.handleRegisterAgent)
 	mux.HandleFunc("POST /v1/heartbeat", s.handleHeartbeat)
 	mux.HandleFunc("DELETE /v1/agents/", s.handleUnregisterAgent)
 
@@ -108,6 +109,32 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":     "ok",
 		"jobs":       jobs,
+		"state_time": s.leader.GetStateTime(),
+	})
+}
+
+// handleRegisterAgent registers a (re)starting agent
+func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID       string         `json:"id"`
+		Endpoint string         `json:"endpoint"`
+		Version  string         `json:"version,omitempty"`
+		Placed   map[string]int `json:"placed,omitempty"` // jobID -> count (what's running on this agent)
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+
+	if req.ID == "" || req.Endpoint == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "id and endpoint required")
+		return
+	}
+
+	s.leader.RegisterAgent(req.ID, req.Endpoint, req.Version, req.Placed)
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"status":     "registered",
+		"jobs":       s.leader.GetJobs(),
 		"state_time": s.leader.GetStateTime(),
 	})
 }

@@ -157,7 +157,12 @@ func TestLeaderDeleteJobOnMultipleAgents(t *testing.T) {
 	// Now store the job and set up placement manually
 	store.StoreJob(job)
 	leader.do(func(s *leaderState) {
-		s.placement["test-job-id"] = []string{"agent-a", "agent-b"}
+		for _, agentID := range []string{"agent-a", "agent-b"} {
+			if s.placed[agentID] == nil {
+				s.placed[agentID] = make(map[string]int)
+			}
+			s.placed[agentID]["test-job-id"]++
+		}
 	})
 	time.Sleep(10 * time.Millisecond)
 
@@ -255,11 +260,11 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 		t.Errorf("Expected 1 dispatch, got %d", agent1.TaskCount())
 	}
 
-	// Add new agent - should automatically get the job
+	// Add new agent via RegisterAgent - should automatically get the job
 	agent2 := newMockAgent()
 	defer agent2.Close()
-	leader.Heartbeat("agent-b", agent2.URL(), nil, time.Time{}, "")
-	time.Sleep(100 * time.Millisecond) // Allow time for ensureAllAgentJobs
+	leader.RegisterAgent("agent-b", agent2.URL(), "", nil)
+	time.Sleep(100 * time.Millisecond) // Allow time for reconciliation
 
 	if agent2.TaskCount() != 1 {
 		t.Errorf("New agent should get job, got %d", agent2.TaskCount())

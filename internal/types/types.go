@@ -64,6 +64,7 @@ type Job struct {
 // Task represents a running instance of a Job
 type Task struct {
 	ID           string         `json:"id"`
+	JobID        string         `json:"job_id"`
 	JobName      string         `json:"job_name"`
 	Ports        map[string]int `json:"ports"`         // named port -> port number
 	Pid          int            `json:"pid"`

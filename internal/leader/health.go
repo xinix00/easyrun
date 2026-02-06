@@ -31,13 +31,19 @@ func (l *Leader) Run(ctx context.Context) {
 
 // checkDeadAgents removes agents that haven't sent heartbeat and reconciles jobs
 func (l *Leader) checkDeadAgents() {
+	// Skip during settle period (learning state from agents)
+	settled := query(l, func(s *leaderState) bool { return s.settled })
+	if !settled {
+		return
+	}
+
 	hadDead := query(l, func(s *leaderState) bool {
 		hadDead := false
 		for id, agent := range s.agents {
 			if time.Since(agent.LastSeen) > l.agentTimeout {
 				log.Printf("Agent %s is dead (no heartbeat for %v)", id, time.Since(agent.LastSeen))
 				delete(s.agents, id)
-				cleanPlacementForAgent(s, id)
+				delete(s.placed, id)
 				hadDead = true
 			}
 		}
@@ -62,67 +68,79 @@ func (l *Leader) reconcileJobs() {
 		return
 	}
 
-	status := l.GetClusterStatus()
-
 	for _, job := range jobs {
 		if job.ID == "" {
 			continue
 		}
-		if err := l.reconcileJob(job, status, agents); err != nil {
+		if err := l.reconcileJob(job, agents); err != nil {
 			log.Printf("Failed to reconcile job %s: %v", job.Name, err)
 		}
 	}
 }
 
 // reconcileJob ensures a single job has the correct instances running.
-// Daemon jobs (count=-1): dispatch to all agents missing it, rebuild placement atomically.
+// Uses placed counts (from heartbeats + dispatch tracking) instead of GetClusterStatus.
+// Daemon jobs (count=-1): dispatch to all agents missing it.
 // Regular jobs: dispatch missing instances via round-robin.
-func (l *Leader) reconcileJob(job *types.Job, status map[string][]*types.Task, agents []*types.Agent) error {
-	// Count running instances per agent
-	agentHasJob := make(map[string]bool)
-	running := 0
-	for agentID, tasks := range status {
-		for _, task := range tasks {
-			if task.JobName == job.Name && task.State == types.TaskRunning {
-				agentHasJob[agentID] = true
-				running++
-			}
-		}
+func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
+	// Skip jobs being actively dispatched (prevents double dispatch)
+	dispatching := query(l, func(s *leaderState) bool { return s.dispatching[job.ID] })
+	if dispatching {
+		return nil
 	}
 
 	if job.Count == -1 {
-		// Daemon: run on ALL agents, rebuild placement atomically
-		var newPlacement []string
-		for _, agent := range agents {
-			if agentHasJob[agent.ID] {
-				newPlacement = append(newPlacement, agent.ID)
-				continue
+		// Daemon: run on ALL agents, check placed to find who's missing
+		missing := query(l, func(s *leaderState) []*types.Agent {
+			var need []*types.Agent
+			for _, agent := range agents {
+				if s.placed[agent.ID] == nil || s.placed[agent.ID][job.ID] == 0 {
+					need = append(need, agent)
+				}
 			}
+			return need
+		})
+
+		dispatched := 0
+		for _, agent := range missing {
 			log.Printf("Reconciling daemon %s: dispatching to %s", job.Name, agent.ID)
 			if err := l.sendJobToAgent(agent, job); err != nil {
 				log.Printf("Failed to dispatch daemon %s to %s: %v", job.Name, agent.ID, err)
 			} else {
-				newPlacement = append(newPlacement, agent.ID)
+				l.do(func(s *leaderState) {
+					if s.placed[agent.ID] == nil {
+						s.placed[agent.ID] = make(map[string]int)
+					}
+					s.placed[agent.ID][job.ID] = 1
+				})
+				dispatched++
 			}
 		}
-		jobID := job.ID
-		l.do(func(s *leaderState) {
-			s.placement[jobID] = newPlacement
-		})
-		if len(newPlacement) == 0 && len(agents) > 0 {
+		if dispatched == 0 && len(missing) > 0 {
 			return fmt.Errorf("all agents rejected daemon job %s", job.Name)
 		}
 		return nil
 	}
 
-	// Regular: dispatch missing instances
+	// Regular: use sum of placed across live agents
 	desired := job.Count
 	if desired <= 0 {
 		desired = 1
 	}
-	missing := desired - running
+
+	totalPlaced := query(l, func(s *leaderState) int {
+		total := 0
+		for agentID := range s.agents {
+			if p := s.placed[agentID]; p != nil {
+				total += p[job.ID]
+			}
+		}
+		return total
+	})
+
+	missing := desired - totalPlaced
 	if missing > 0 {
-		log.Printf("Reconciling job %s: %d/%d running, dispatching %d", job.Name, running, desired, missing)
+		log.Printf("Reconciling job %s: %d/%d placed, dispatching %d", job.Name, totalPlaced, desired, missing)
 		return l.dispatchInstances(job, missing)
 	}
 	return nil

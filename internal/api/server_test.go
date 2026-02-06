@@ -521,6 +521,7 @@ func (ma *testMockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	ma.seq++
 	task := &types.Task{
 		ID:      fmt.Sprintf("task-%s-%d", job.Name, ma.seq),
+		JobID:   job.ID,
 		JobName: job.Name,
 		State:   types.TaskRunning,
 	}

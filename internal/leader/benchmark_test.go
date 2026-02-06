@@ -163,8 +163,8 @@ func BenchmarkConcurrentHeartbeats(b *testing.B) {
 	})
 }
 
-// BenchmarkPlacementUpdate measures placement tracking overhead
-func BenchmarkPlacementUpdate(b *testing.B) {
+// BenchmarkPlacedUpdate measures placed tracking overhead
+func BenchmarkPlacedUpdate(b *testing.B) {
 	store := NewMockJobStore()
 	leader, cancel := startLeader(store)
 	defer cancel()
@@ -182,9 +182,12 @@ func BenchmarkPlacementUpdate(b *testing.B) {
 		jobID := fmt.Sprintf("job-%d", i%1000)
 		agentID := fmt.Sprintf("agent-%d", i%10)
 
-		// Simulate placement update
+		// Simulate placed update
 		leader.do(func(s *leaderState) {
-			s.placement[jobID] = append(s.placement[jobID], agentID)
+			if s.placed[agentID] == nil {
+				s.placed[agentID] = make(map[string]int)
+			}
+			s.placed[agentID][jobID]++
 		})
 	}
 }

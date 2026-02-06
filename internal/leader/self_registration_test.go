@@ -106,10 +106,10 @@ func TestLeaderCanDispatchToItself(t *testing.T) {
 	}
 
 	// Placement should be possible
-	placement := leader.GetPlacement(job.ID)
-	if len(placement) > 0 {
+	placed := leader.GetPlaced(job.ID)
+	if len(placed) > 0 {
 		// Job was dispatched (in real scenario with HTTP)
-		t.Logf("Job dispatched to %d agents including leader", len(placement))
+		t.Logf("Job dispatched to %d agents including leader", len(placed))
 	}
 }
 

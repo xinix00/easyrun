@@ -52,14 +52,17 @@ func TestRescheduleUnderscheduled(t *testing.T) {
 
 	// Manually set placement to simulate partial dispatch (only 1/3 instances)
 	l.do(func(s *leaderState) {
-		s.placement[job.ID] = []string{"agent-1"}
+		if s.placed["agent-1"] == nil {
+			s.placed["agent-1"] = make(map[string]int)
+		}
+		s.placed["agent-1"][job.ID] = 1
 	})
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify under-scheduled
-	placement := l.GetPlacement(job.ID)
-	if len(placement) != 1 {
-		t.Fatalf("expected 1 instance, got %d", len(placement))
+	placed := l.GetPlaced(job.ID)
+	if len(placed) != 1 {
+		t.Fatalf("expected 1 instance, got %d", len(placed))
 	}
 
 	// Note: tryRescheduleUnderscheduled is called during Heartbeat with isNew=true
@@ -90,23 +93,26 @@ func TestNodeRecovery(t *testing.T) {
 	l.Heartbeat("node-a", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 	l.do(func(s *leaderState) {
-		s.placement[job.ID] = []string{"node-a"}
+		if s.placed["node-a"] == nil {
+			s.placed["node-a"] = make(map[string]int)
+		}
+		s.placed["node-a"][job.ID] = 1
 	})
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify placement
-	if len(l.GetPlacement(job.ID)) != 1 {
+	if len(l.GetPlaced(job.ID)) != 1 {
 		t.Fatal("expected 1 instance")
 	}
 
 	// Simulate node failure (agent timeout + removal)
 	l.do(func(s *leaderState) {
 		delete(s.agents, "node-a")
-		delete(s.placement, job.ID) // Placement cleared during redispatch failure
+		delete(s.placed, "node-a") // Placement cleared during redispatch failure
 	})
 
 	// Verify job is orphaned
-	if len(l.GetPlacement(job.ID)) != 0 {
+	if len(l.GetPlaced(job.ID)) != 0 {
 		t.Error("expected 0 instances after node failure")
 	}
 

@@ -1,4 +1,4 @@
 bin/
 data/
 *.log
-agent
+/agent

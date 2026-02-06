@@ -83,9 +83,11 @@ func TestChaos_LeaderCrashDuringRollingUpdate(t *testing.T) {
 	}
 	oldLeaderStore.StoreJob(oldJob)
 
-	// Simulate placement (3 instances)
+	// Simulate placed (3 instances across 3 agents)
 	oldLeader.do(func(s *leaderState) {
-		s.placement["app-v1-id"] = []string{"agent-1", "agent-2", "agent-3"}
+		s.placed["agent-1"] = map[string]int{"app-v1-id": 1}
+		s.placed["agent-2"] = map[string]int{"app-v1-id": 1}
+		s.placed["agent-3"] = map[string]int{"app-v1-id": 1}
 	})
 
 	// Start rolling update to v2
@@ -99,8 +101,9 @@ func TestChaos_LeaderCrashDuringRollingUpdate(t *testing.T) {
 	// Simulate partial update: 1 instance replaced
 	oldLeaderStore.StoreJob(newJob)
 	oldLeader.do(func(s *leaderState) {
-		s.placement["app-v2-id"] = []string{"agent-1"} // Only 1 updated
-		s.placement["app-v1-id"] = []string{"agent-2", "agent-3"} // 2 still old
+		s.placed["agent-1"] = map[string]int{"app-v2-id": 1} // agent-1 updated
+		s.placed["agent-2"] = map[string]int{"app-v1-id": 1} // still old
+		s.placed["agent-3"] = map[string]int{"app-v1-id": 1} // still old
 	})
 
 	// OLD LEADER CRASHES

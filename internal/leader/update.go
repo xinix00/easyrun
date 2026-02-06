@@ -85,15 +85,19 @@ func (l *Leader) updateBlueGreen(old, new *types.Job) error {
 	return nil
 }
 
-// stopOneInstance stops one instance of a job (uses job.ID for placement, job.Name for agent)
+// stopOneInstance stops one instance of a job (uses placed to find agent, decrements count)
 func (l *Leader) stopOneInstance(job *types.Job) {
 	agent := query(l, func(s *leaderState) *types.Agent {
-		if len(s.placement[job.ID]) == 0 {
-			return nil
+		for agentID, jobs := range s.placed {
+			if jobs[job.ID] > 0 {
+				jobs[job.ID]--
+				if jobs[job.ID] == 0 {
+					delete(jobs, job.ID)
+				}
+				return s.agents[agentID]
+			}
 		}
-		id := s.placement[job.ID][0]
-		s.placement[job.ID] = s.placement[job.ID][1:]
-		return s.agents[id]
+		return nil
 	})
 
 	if agent != nil {

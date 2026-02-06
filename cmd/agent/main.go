@@ -25,12 +25,12 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.4.9" // Agent version - KISS refactor: reconcileJobs via GetClusterStatus
+const version = "v0.5.4" // Agent version - placed in RegisterAgent, not heartbeat
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	clusterName := flag.String("cluster", "", "Cluster name (e.g., easyflor-prod)")
-	raftEndpoint := flag.String("raft", "https://server-raft.easyflor.net:7080", "EasyRaft endpoint")
+	raftEndpoint := flag.String("raft", "", "EasyRaft endpoint (overrides config file)")
 	standalone := flag.Bool("standalone", false, "Run without easyraft (single-node mode)")
 	flag.Parse()
 
@@ -50,7 +50,7 @@ func main() {
 
 	// Validate
 	if !*standalone && len(cfg.Cluster.RaftEndpoints) == 0 {
-		log.Fatal("raft endpoint required (use --raft or config file, or --standalone for single-node)")
+		log.Fatal("No raft endpoint configured.\n  Use --raft <url> or set raft_endpoints in config file.\n  For single-node mode: --standalone")
 	}
 	if cfg.Cluster.Name == "" {
 		log.Fatal("cluster name required (use --cluster or config file)")
@@ -124,6 +124,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	var l *leader.Leader
 	var isLeader bool
 	var failCount int
+	var registeredWith string // leader address we registered with (re-register on change)
 
 	// Main loop: heartbeat to leader, handle leader election
 	go func() {
@@ -141,15 +142,24 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 						leaderSrv = nil
 					}
 					l = nil
+					registeredWith = "" // Force re-register with new leader
 				} else {
 					failCount = 0
-					// Send heartbeat to ourselves (register as agent)
 					leaderAddr = fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
-					sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetRunningTaskCounts(), ag.GetStateTime())
+					sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
 				}
 			} else if leaderAddr != "" {
+				// Register on startup or when leader changes
+				if registeredWith != leaderAddr {
+					if err := registerAgent(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetPlacedTaskCounts()); err != nil {
+						log.Printf("Register failed: %v", err)
+					} else {
+						registeredWith = leaderAddr
+						log.Printf("Registered with leader %s", leaderAddr)
+					}
+				}
 				// Send heartbeat to leader with our jobs and state time
-				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetRunningTaskCounts(), ag.GetStateTime())
+				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
 				if err != nil {
 					failCount++
 					log.Printf("Heartbeat failed (%d): %v", failCount, err)
@@ -158,7 +168,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 					if failCount >= 3 {
 						log.Println("Leader seems dead, trying to become leader...")
 						if disc.TryBecomeLeader() {
-							becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader)
+							becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader, &registeredWith)
 							failCount = 0
 						}
 						// If we couldn't become leader, failCount keeps incrementing
@@ -175,7 +185,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				failCount++
 				log.Printf("No leader found (%d), trying to become leader...", failCount)
 				if disc.TryBecomeLeader() {
-					becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader)
+					becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader, &registeredWith)
 					failCount = 0
 				}
 			}
@@ -215,17 +225,19 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	}
 }
 
-func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, srv **api.Server, isLeader *bool) {
+func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, srv **api.Server, isLeader *bool, registeredWith *string) {
 	log.Println("Became leader!")
 	*isLeader = true
 
-	// Start leader - it shares the agent's job store directly!
-	// No bootstrapping needed - the agent already has all our jobs
+	// Start leader with settle delay - wait for agents to register with placed counts
 	*l = leader.New(ag.ID(), ag, nil)
+	(*l).EnableSettle()
 
-	log.Printf("Leader initialized with %d jobs from local agent", len(ag.GetRunningTaskCounts()))
+	// Start leader state loop + health checker BEFORE any state operations
+	// Without this, RegisterAgent deadlocks (query waits on ops channel that nobody reads)
+	go (*l).Run(ctx)
 
-	// Start API server on leader port FIRST
+	// Start API server so other agents can register/heartbeat
 	leaderAddr := fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
 	*srv = api.NewServer(*l, leaderAddr)
 	go func() {
@@ -234,11 +246,11 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 		}
 	}()
 
-	// Start leader health check loop
-	go (*l).Run(ctx)
+	// Register self with placed counts (during settle, no reconcile yet)
+	(*l).RegisterAgent(ag.ID(), ag.Endpoint(), version, ag.GetPlacedTaskCounts())
 
-	// Register self as agent (done via normal heartbeat loop every 10s)
-	// First heartbeat happens in tick() after becomeLeader() returns
+	log.Printf("Leader initialized with %d placed jobs from local agent", len(ag.GetPlacedTaskCounts()))
+	*registeredWith = leaderAddr
 }
 
 type heartbeatResponse struct {
@@ -247,16 +259,38 @@ type heartbeatResponse struct {
 	StateTime time.Time    `json:"state_time"`
 }
 
-func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, runningTaskCounts map[string]int, stateTime time.Time) (*heartbeatResponse, error) {
+func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]int) error {
+	url := fmt.Sprintf("http://%s/v1/agents", leaderAddr)
+
+	body, _ := json.Marshal(map[string]any{
+		"id":       agentID,
+		"endpoint": agentEndpoint,
+		"version":  version,
+		"placed":   placed, // jobID -> count (what's running on this agent)
+	})
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("leader returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, stateTime time.Time) (*heartbeatResponse, error) {
 	url := fmt.Sprintf("http://%s/v1/heartbeat", leaderAddr)
 
 	body, _ := json.Marshal(map[string]any{
-		"id":            agentID,
-		"endpoint":      agentEndpoint,
-		"version":       version,
-		"jobs":          jobs,              // All known jobs (for state sync)
-		"running_tasks": runningTaskCounts, // jobID -> task count (for placement)
-		"state_time":    stateTime,
+		"id":         agentID,
+		"endpoint":   agentEndpoint,
+		"version":    version,
+		"jobs":       jobs,      // All known jobs (for state sync)
+		"state_time": stateTime,
 	})
 
 	client := &http.Client{Timeout: 5 * time.Second}

@@ -41,8 +41,8 @@ func TestCountMinusOneDispatchesOncePerAgent(t *testing.T) {
 	store.StoreJob(job)
 
 	// Verify placement would be 3 unique agents
-	placement := leader.GetPlacement("daemon-id")
-	t.Logf("Placement for count=-1 job: %v", placement)
+	placed := leader.GetPlaced("daemon-id")
+	t.Logf("Placement for count=-1 job: %v", placed)
 
 	// NOTE: In real scenario with HTTP, placement would be populated by DispatchJob
 	// This test verifies the logic, full integration test would use mock agents

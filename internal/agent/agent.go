@@ -273,15 +273,14 @@ func (a *Agent) GetJobs() []*types.Job {
 	})
 }
 
-// GetRunningTaskCounts returns a map of jobID -> number of running tasks on this agent
-func (a *Agent) GetRunningTaskCounts() map[string]int {
+// GetPlacedTaskCounts returns a map of jobID -> number of placed tasks on this agent.
+// Counts ALL tasks (not just running) because placed = what the leader dispatched here.
+func (a *Agent) GetPlacedTaskCounts() map[string]int {
 	return query(a, func(s *agentState) map[string]int {
 		counts := make(map[string]int)
 		for _, task := range s.tasks {
-			if task.State == types.TaskRunning {
-				if job := findJobByName(s, task.JobName); job != nil {
-					counts[job.ID]++
-				}
+			if task.JobID != "" {
+				counts[task.JobID]++
 			}
 		}
 		return counts

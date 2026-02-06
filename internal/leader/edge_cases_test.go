@@ -68,6 +68,7 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 			acceptCount++
 			tasks = append(tasks, &types.Task{
 				ID:      fmt.Sprintf("task-%d", acceptCount),
+				JobID:   "test-job-id",
 				JobName: "test-job",
 				State:   types.TaskRunning,
 			})
@@ -97,7 +98,10 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 
 	// Manually add placement for job on dying agent (by job ID)
 	leader.do(func(s *leaderState) {
-		s.placement["test-job-id"] = []string{"dying-agent"}
+		if s.placed["dying-agent"] == nil {
+			s.placed["dying-agent"] = make(map[string]int)
+		}
+		s.placed["dying-agent"]["test-job-id"] = 1
 	})
 	time.Sleep(10 * time.Millisecond)
 
@@ -247,7 +251,7 @@ func TestLeaderMultipleAgentsPartialFailure(t *testing.T) {
 		switch r.URL.Path {
 		case "/run":
 			successCount++
-			tasks = append(tasks, &types.Task{ID: "task-1", JobName: "test", State: types.TaskRunning})
+			tasks = append(tasks, &types.Task{ID: "task-1", JobID: "test-id", JobName: "test", State: types.TaskRunning})
 			w.WriteHeader(http.StatusCreated)
 		case "/tasks":
 			json.NewEncoder(w).Encode(tasks)

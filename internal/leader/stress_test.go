@@ -255,7 +255,10 @@ func BenchmarkPlacementScale(b *testing.B) {
 				for j := 0; j < s.count; j++ {
 					agentID := fmt.Sprintf("agent-%d", (i*s.count+j)%s.agents)
 					leader.do(func(state *leaderState) {
-						state.placement[jobID] = append(state.placement[jobID], agentID)
+						if state.placed[agentID] == nil {
+							state.placed[agentID] = make(map[string]int)
+						}
+						state.placed[agentID][jobID]++
 					})
 				}
 			}
@@ -265,12 +268,12 @@ func BenchmarkPlacementScale(b *testing.B) {
 			b.ResetTimer()
 			b.ReportAllocs()
 
-			// Measure placement lookups
+			// Measure placed lookups
 			for i := 0; i < b.N; i++ {
 				jobID := fmt.Sprintf("job-%d", i%s.jobs)
-				agents := leader.GetPlacement(jobID)
-				if len(agents) != s.count {
-					b.Fatalf("Expected %d placements, got %d", s.count, len(agents))
+				placed := leader.GetPlaced(jobID)
+				if len(placed) != s.count {
+					b.Fatalf("Expected %d placements, got %d", s.count, len(placed))
 				}
 			}
 
@@ -309,7 +312,10 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 		for j := 0; j < 3; j++ {
 			agentID := fmt.Sprintf("agent-%d", (i*3+j)%1000)
 			leader.do(func(s *leaderState) {
-				s.placement[job.ID] = append(s.placement[job.ID], agentID)
+				if s.placed[agentID] == nil {
+					s.placed[agentID] = make(map[string]int)
+				}
+				s.placed[agentID][job.ID]++
 			})
 		}
 	}
@@ -325,5 +331,5 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 		_ = leader.FindJobByName(name)
 	}
 
-	b.Logf("State size: 1000 agents, 10k jobs, 30k placements")
+	b.Logf("State size: 1000 agents, 10k jobs, 30k placed")
 }

@@ -34,11 +34,18 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 		job.ID = generateID()
 	}
 
+	// During settle period: just store, reconcileJobs after settle will dispatch
+	settled := query(l, func(s *leaderState) bool { return s.settled })
+	if !settled {
+		l.jobStore.StoreJob(job)
+		log.Printf("Job %s stored (leader settling, dispatch deferred)", job.Name)
+		return nil
+	}
+
 	if job.Count == -1 {
 		// Daemon: use reconcile-based dispatch (same path as reconciliation)
 		agents := l.GetAgents()
-		status := l.GetClusterStatus()
-		if err := l.reconcileJob(job, status, agents); err != nil {
+		if err := l.reconcileJob(job, agents); err != nil {
 			return err
 		}
 	} else {
@@ -57,6 +64,10 @@ func (l *Leader) dispatchInstances(job *types.Job, count int) error {
 	if count <= 0 {
 		count = 1
 	}
+
+	// Mark as actively dispatching so reconcileJob skips this job
+	l.do(func(s *leaderState) { s.dispatching[job.ID] = true })
+	defer l.do(func(s *leaderState) { delete(s.dispatching, job.ID) })
 
 	for i := 0; i < count; i++ {
 		if err := l.dispatchToAvailableAgent(job); err != nil {
@@ -79,7 +90,10 @@ func (l *Leader) dispatchToAgent(agent *types.Agent, job *types.Job) error {
 	}
 
 	l.do(func(s *leaderState) {
-		s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
+		if s.placed[agent.ID] == nil {
+			s.placed[agent.ID] = make(map[string]int)
+		}
+		s.placed[agent.ID][job.ID]++
 	})
 	return nil
 }
@@ -124,7 +138,10 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 		}
 
 		l.do(func(s *leaderState) {
-			s.placement[job.ID] = append(s.placement[job.ID], agent.ID)
+			if s.placed[agent.ID] == nil {
+				s.placed[agent.ID] = make(map[string]int)
+			}
+			s.placed[agent.ID][job.ID]++
 		})
 		return nil
 	}
@@ -134,26 +151,26 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 
 
 // DeleteJobByID sends delete requests to all agents running instances of this job.
-// Two-phase: uses placement + cluster status to catch orphaned tasks.
+// Uses placed to find agents, plus GetClusterStatus as safety net for orphaned tasks.
 func (l *Leader) DeleteJobByID(job *types.Job) {
-	// Phase 1: Get agents from placement (atomic read + clear)
-	placementAgents := query(l, func(s *leaderState) []*types.Agent {
-		agentIDs := s.placement[job.ID]
-		delete(s.placement, job.ID)
-
+	// Phase 1: Get agents from placed (atomic read + clear)
+	placedAgents := query(l, func(s *leaderState) []*types.Agent {
 		var result []*types.Agent
-		for _, id := range agentIDs {
-			if a := s.agents[id]; a != nil {
-				result = append(result, a)
+		for agentID, jobs := range s.placed {
+			if jobs[job.ID] > 0 {
+				if a := s.agents[agentID]; a != nil {
+					result = append(result, a)
+				}
+				delete(jobs, job.ID)
 			}
 		}
 		return result
 	})
 
-	// Phase 2: Check cluster status for agents running this job but not in placement
+	// Phase 2: Check cluster status for orphaned tasks not in placed
 	status := l.GetClusterStatus()
 	seen := make(map[string]bool)
-	for _, a := range placementAgents {
+	for _, a := range placedAgents {
 		seen[a.ID] = true
 	}
 
@@ -176,7 +193,7 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 	}
 
 	// Send delete to union of both sets
-	allAgents := append(placementAgents, extraAgents...)
+	allAgents := append(placedAgents, extraAgents...)
 	if len(allAgents) > 0 {
 		ctx := context.Background()
 		for _, agent := range allAgents {
