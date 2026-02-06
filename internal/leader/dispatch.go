@@ -14,10 +14,6 @@ import (
 	"github.com/google/uuid"
 )
 
-const (
-	defaultInitialTimeout = 30 * time.Second
-)
-
 var (
 	// VerifyInterval can be overridden in tests for faster execution
 	VerifyInterval = 500 * time.Millisecond
@@ -245,7 +241,8 @@ func (l *Leader) nextAgent() *types.Agent {
 	})
 }
 
-// sendJobToAgent sends a job to a specific agent and waits until task is running
+// sendJobToAgent sends a job to a specific agent.
+// Agent accepts (2xx) or rejects (non-2xx) based on capacity. No polling needed.
 func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	url := fmt.Sprintf("%s/run", agent.Endpoint)
 
@@ -266,40 +263,10 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	}
 	defer resp.Body.Close()
 
-	// Accept 200 OK, 201 Created, and 202 Accepted (async job handling)
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
 		return fmt.Errorf("agent %s returned status %d", agent.ID, resp.StatusCode)
 	}
 
-	// Wait until task is actually running
-	timeout := defaultInitialTimeout
-	if job.HealthCheck != nil && job.HealthCheck.InitialTimeout > 0 {
-		timeout = job.HealthCheck.InitialTimeout
-	} else if job.Artifact != nil {
-		// Artifact downloads can take a while - use 10 minute timeout
-		timeout = 10 * time.Minute
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
-
-	ticker := time.NewTicker(VerifyInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("task didn't start on agent %s (timeout)", agent.ID)
-		case <-ticker.C:
-			tasks, err := l.fetchAgentTasks(ctx, agent)
-			if err == nil {
-				for _, task := range tasks {
-					if task.JobName == job.Name && task.State == types.TaskRunning {
-						log.Printf("Job %s dispatched to agent %s", job.Name, agent.ID)
-						return nil
-					}
-				}
-			}
-		}
-	}
+	log.Printf("Job %s dispatched to agent %s", job.Name, agent.ID)
+	return nil
 }

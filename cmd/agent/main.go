@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.5.5" // Agent version - placed in RegisterAgent, not heartbeat
+const version = "v0.5.7" // Agent version - placed in RegisterAgent, not heartbeat
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
@@ -125,6 +125,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	var l *leader.Leader
 	var isLeader bool
 	var failCount int
+	var registered bool // false on startup → first contact = register with placed counts
 
 	// Main loop: heartbeat to leader, handle leader election
 	go func() {
@@ -137,6 +138,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				if !disc.RenewLease() {
 					log.Println("Lost leadership")
 					isLeader = false
+					registered = false // Must re-register with new leader
 					if leaderSrv != nil {
 						leaderSrv.Stop()
 						leaderSrv = nil
@@ -148,17 +150,27 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 					sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
 				}
 			} else if leaderAddr != "" {
-				// Send heartbeat — if leader doesn't know us, register
+				// On startup (or after leader change): register first with placed counts
+				if !registered {
+					log.Printf("Registering with leader %s...", leaderAddr)
+					if err := registerAgent(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetPlacedTaskCounts()); err != nil {
+						failCount++
+						log.Printf("Register failed (%d): %v", failCount, err)
+					} else {
+						log.Printf("Registered with leader %s", leaderAddr)
+						registered = true
+						failCount = 0
+					}
+					return
+				}
+
+				// Already registered → heartbeat
 				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
 				if err != nil {
 					if errors.Is(err, errNotRegistered) {
-						// Leader doesn't know us → register with placed counts
-						log.Printf("Not registered with leader, registering...")
-						if err := registerAgent(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetPlacedTaskCounts()); err != nil {
-							log.Printf("Register failed: %v", err)
-						} else {
-							log.Printf("Registered with leader %s", leaderAddr)
-						}
+						// Leader doesn't know us (new leader?) → re-register next tick
+						log.Printf("Not registered with leader, will re-register...")
+						registered = false
 					} else {
 						failCount++
 						log.Printf("Heartbeat failed (%d): %v", failCount, err)

@@ -135,6 +135,14 @@ func (ma *mockAgent) TaskCount() int {
 	return len(ma.tasks)
 }
 
+// ClearTasks simulates agent restart (all tasks lost)
+func (ma *mockAgent) ClearTasks() {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	ma.tasks = nil
+	ma.jobs = make(map[string]*types.Job)
+}
+
 func (ma *mockAgent) handleTasks(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()
