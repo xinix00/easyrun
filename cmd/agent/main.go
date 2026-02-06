@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.5.7" // Agent version - placed in RegisterAgent, not heartbeat
+const version = "v0.5.8" // Agent version - placed in RegisterAgent, not heartbeat
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
@@ -123,6 +123,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 
 	var leaderSrv *api.Server
 	var l *leader.Leader
+	var leaderCancel context.CancelFunc // cancels leader goroutines on leadership loss
 	var isLeader bool
 	var failCount int
 	var registered bool // false on startup → first contact = register with placed counts
@@ -139,6 +140,10 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 					log.Println("Lost leadership")
 					isLeader = false
 					registered = false // Must re-register with new leader
+					if leaderCancel != nil {
+						leaderCancel() // stops leader stateLoop + checkDeadAgents
+						leaderCancel = nil
+					}
 					if leaderSrv != nil {
 						leaderSrv.Stop()
 						leaderSrv = nil
@@ -179,7 +184,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 						if failCount >= 3 {
 							log.Println("Leader seems dead, trying to become leader...")
 							if disc.TryBecomeLeader() {
-								becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader)
+								becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader, &leaderCancel)
 								failCount = 0
 							}
 							// If we couldn't become leader, failCount keeps incrementing
@@ -197,7 +202,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				failCount++
 				log.Printf("No leader found (%d), trying to become leader...", failCount)
 				if disc.TryBecomeLeader() {
-					becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader)
+					becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader, &leaderCancel)
 					failCount = 0
 				}
 			}
@@ -237,9 +242,13 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	}
 }
 
-func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, srv **api.Server, isLeader *bool) {
+func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, srv **api.Server, isLeader *bool, cancelOut *context.CancelFunc) {
 	log.Println("Became leader!")
 	*isLeader = true
+
+	// Leader gets its own context — cancelled on leadership loss (not just shutdown)
+	leaderCtx, cancel := context.WithCancel(ctx)
+	*cancelOut = cancel
 
 	// Start leader with settle delay - wait for agents to register with placed counts
 	*l = leader.New(ag.ID(), ag, nil)
@@ -247,13 +256,13 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 
 	// Start leader state loop + health checker BEFORE any state operations
 	// Without this, RegisterAgent deadlocks (query waits on ops channel that nobody reads)
-	go (*l).Run(ctx)
+	go (*l).Run(leaderCtx)
 
 	// Start API server so other agents can register/heartbeat
 	leaderAddr := fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
 	*srv = api.NewServer(*l, leaderAddr)
 	go func() {
-		if err := (*srv).Run(ctx); err != nil {
+		if err := (*srv).Run(leaderCtx); err != nil {
 			log.Printf("Leader API error: %v", err)
 		}
 	}()

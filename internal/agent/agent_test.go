@@ -151,6 +151,7 @@ func TestAgentStopAllTasks(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		jobName := "job-" + string(rune('a'+i))
 		job := &types.Job{
+			ID:      "job-id-" + string(rune('a'+i)),
 			Name:    jobName,
 			Command: "echo",
 		}
@@ -170,12 +171,30 @@ func TestAgentStopAllTasks(t *testing.T) {
 	agent.StopAllTasks()
 	time.Sleep(10 * time.Millisecond)
 
-	// All tasks should be stopped
+	// All tasks should be stopped via runner
 	for i := 0; i < 3; i++ {
 		taskID := "task-" + string(rune('a'+i))
 		if !mockRunner.WasStopped(taskID) {
 			t.Errorf("Task %s should be stopped", taskID)
 		}
+	}
+
+	// Tasks should be removed from state
+	taskCount := query(agent, func(s *agentState) int { return len(s.tasks) })
+	if taskCount != 0 {
+		t.Errorf("Expected 0 tasks in state after StopAllTasks, got %d", taskCount)
+	}
+
+	// Jobs should still be in state (definitions survive isolation)
+	jobCount := query(agent, func(s *agentState) int { return len(s.jobs) })
+	if jobCount != 3 {
+		t.Errorf("Expected 3 jobs in state after StopAllTasks, got %d", jobCount)
+	}
+
+	// Placed task counts should be 0 (no tasks = nothing placed)
+	placed := agent.GetPlacedTaskCounts()
+	if len(placed) != 0 {
+		t.Errorf("Expected empty placed counts after StopAllTasks, got %v", placed)
 	}
 }
 

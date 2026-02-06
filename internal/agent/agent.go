@@ -178,9 +178,8 @@ func (a *Agent) Run(ctx context.Context) error {
 	return nil
 }
 
-// StopAllTasks stops all running tasks (used when agent is isolated)
+// StopAllTasks stops all running tasks and removes them from state (used when agent is isolated)
 func (a *Agent) StopAllTasks() {
-	// Get tasks to stop
 	tasks := query(a, func(s *agentState) []*types.Task {
 		var running []*types.Task
 		for _, task := range s.tasks {
@@ -191,19 +190,24 @@ func (a *Agent) StopAllTasks() {
 		return running
 	})
 
-	// Stop them outside of state loop (runner.Stop can block)
+	if len(tasks) == 0 {
+		return
+	}
+
 	for _, task := range tasks {
-		log.Printf("Stopping task %s (isolation mode)", task.ID)
 		if err := a.runner.Stop(task); err != nil {
 			log.Printf("Failed to stop task %s: %v", task.ID, err)
-		} else {
-			a.do(func(s *agentState) {
-				if t := s.tasks[task.ID]; t != nil {
-					t.State = types.TaskStopped
-				}
-			})
 		}
 	}
+
+	a.do(func(s *agentState) {
+		for _, task := range tasks {
+			delete(s.tasks, task.ID)
+		}
+	})
+	a.scheduleSave()
+
+	log.Printf("Isolation mode: stopped and removed %d tasks", len(tasks))
 }
 
 // shutdown gracefully stops all tasks
