@@ -11,9 +11,9 @@ node:
 cluster:
   name: "my-cluster"
   raft_endpoints:           # EasyRaft endpoints
-    - "http://10.0.0.1:8080"
-    - "http://10.0.0.2:8080"
-    - "http://10.0.0.3:8080"
+    - "http://10.0.0.1:7080"
+    - "http://10.0.0.2:7080"
+    - "http://10.0.0.3:7080"
 
 capacity:
   cpu_shares: 14000         # Relatieve CPU capaciteit
@@ -26,7 +26,7 @@ paths:
   cache: "/var/lib/easyrun/cache"
 
 runner:
-  chroot: false             # Enable chroot isolation
+  isolate: true             # Enable process isolation (chroot on Linux)
 
 timeouts:
   health_check_interval: 10s
@@ -34,6 +34,15 @@ timeouts:
   node_dead_threshold: 30s
   leader_lease: 30s
 ```
+
+## CLI Flags
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--config` | Path to config file | (none, uses defaults) |
+| `--cluster` | Cluster name | (from config) |
+| `--raft` | EasyRaft endpoint | (from config) |
+| `--standalone` | Run without easyraft (single-node mode) | false |
 
 ## Development Config
 
@@ -60,8 +69,10 @@ paths:
   cache: "./data/cache"
 
 runner:
-  chroot: false
+  isolate: false
 ```
+
+**Note:** State file path is automatically adjusted per cluster name (`./data/state-{cluster}.json`) when using the default path.
 
 ## Resource Limiting
 
@@ -75,6 +86,8 @@ Relatieve waarde. Hoe meer shares, hoe hoger de prioriteit.
 
 Intern wordt dit vertaald naar nice values (0-19).
 
+Capacity check: agents have `cpu_cores * 1024` total shares. Requests exceeding available shares are rejected (503).
+
 ### Memory Limit
 
 In bytes.
@@ -87,22 +100,40 @@ Platform-specifieke implementatie:
 - **Linux**: cgroups v2 (na process start, OOM killer integration)
 - **macOS**: ulimit -v wrapper (voor exec)
 
-## Chroot Isolation
+Capacity check: agents check total system memory. Requests exceeding available memory are rejected (503).
+
+## Process Isolation
 
 ```yaml
 runner:
-  chroot: true
+  isolate: true
 ```
 
-Met chroot enabled:
-- Elke task draait in een chroot jail
+Met isolation enabled:
+- Elke task draait in een chroot jail (Linux)
 - Minimale shell environment wordt automatisch gelinkt (`/bin/sh`, libraries)
 - Command is relatief aan chroot root (bv. `/app/mybin`)
 
-Zonder chroot (default):
+Zonder isolation (default in dev):
 - Tasks draaien in eigen werkdirectory maar niet geïsoleerd
 
 In beide modes:
 - Command kan shell syntax gebruiken
 - Memory limiting via ulimit (macOS) of cgroups (Linux)
 - CPU limiting via nice
+- Volume mounts via symlinks
+
+**Default:** `isolate: true` (security by default in production)
+
+## Auto-Detection
+
+| Setting | Auto-Detected | Override |
+|---------|---------------|----------|
+| Node IP | Outbound interface | `node.ip` in config |
+| Node Port | 8080 | `node.port` in config |
+| Node ID | UUID (persisted in data/node-id) | `node.id` in config |
+| Capacity | System CPU/RAM | `capacity.*` in config |
+| Paths | ./data/* | `paths.*` in config |
+| Leader Port | node.port + 1000 | N/A |
+| Timeouts | Smart defaults | `timeouts.*` in config |
+| State File | ./data/state-{cluster}.json | `paths.state_file` in config |

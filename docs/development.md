@@ -21,6 +21,8 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 
 2. Start agent:
 ```bash
+./bin/agent --cluster=dev --standalone
+# of met config:
 ./bin/agent --config ./dev-config.yaml
 ```
 
@@ -28,38 +30,45 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 ```bash
 ./bin/easyrun --leader localhost:9080 status
 ./bin/easyrun --leader localhost:9080 run --name test --command "sleep 60"
-./bin/easyrun --leader localhost:9080 delete <job-name>
+./bin/easyrun --leader localhost:9080 delete test
+./bin/easyrun --leader localhost:9080 agents
+./bin/easyrun --leader localhost:9080 logs <task-id>
 ```
 
 ## Project Structuur
 
 ```
 /cmd
-    /agent/main.go         # Agent + leader binary
+    /agent/main.go         # Agent + leader binary (v0.5.8)
     /cli/main.go           # CLI tool
 /internal
     /agent/
-        agent.go           # Agent HTTP server + task management
-        handlers.go        # Agent HTTP handlers
-        monitor.go         # Task monitoring (health checks, restarts)
+        agent.go           # Agent state loop, JobStore, state persistence
+        handlers.go        # Agent HTTP handlers, proxy to leader, CORS
+        monitor.go         # Task monitoring (health checks, restarts, debounced save)
+        sysinfo.go         # System info interface
+        sysinfo_darwin.go  # macOS: CPU/memory detection
+        sysinfo_linux.go   # Linux: CPU/memory detection
     /leader/
-        leader.go          # State management, heartbeat, single-goroutine loop
-        dispatch.go        # Job dispatch, round-robin, placement tracking, delete
+        leader.go          # State management, heartbeat, settle period, registration
+        dispatch.go        # Job dispatch, round-robin, agent pinning, placement, delete
         health.go          # Reconciliation (reconcileJob/reconcileJobs), dead agent check, cluster status
         update.go          # Update policies: rolling, recreate, blue-green
     /runner/
-        runner.go          # Runner interface
-        process.go         # Process runner
-        process_linux.go   # Linux: cgroups
-        process_darwin.go  # macOS: ulimit
-        download.go        # Artifact download (HTTP, S3)
+        runner.go          # Runner interface + Config
+        process.go         # Process runner (start, stop, status, limits, volumes)
+        process_linux.go   # Linux: cgroups, chroot
+        process_darwin.go  # macOS: ulimit, sandbox
+        download.go        # Artifact download router + extraction (tar.gz, tar.bz2, zip)
+        download_http.go   # HTTP/HTTPS downloader
+        download_s3.go     # S3 downloader
         logs.go            # Log broadcasting (SSE)
     /api/
         server.go          # Leader HTTP API
     /discovery/
         discovery.go       # EasyRaft client
     /types/
-        types.go           # Core data types
+        types.go           # Core data types (Job, Task, Agent, etc.)
 /pkg
     /config/
         config.go          # Configuratie laden
@@ -76,3 +85,33 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 | Leader | 9080 | Leader HTTP API (port+1000) |
 | EasyRaft HTTP | 7080 | EasyRaft HTTP API |
 | EasyRaft UDP | 7946 | EasyRaft verkiezing |
+
+## Tests
+
+```bash
+# Alle tests
+go test ./...
+
+# Met race detector
+go test -race ./...
+
+# Specifiek package
+go test -v ./internal/leader
+go test -v ./internal/agent
+go test -v ./internal/api
+go test -v ./internal/runner
+
+# Chaos tests
+go test -run=TestChaos -v ./internal/...
+
+# Benchmarks
+go test -bench=. -benchmem ./internal/...
+```
+
+## Dependencies
+
+- `github.com/google/uuid` — UUID generation
+- `github.com/urfave/cli/v2` — CLI framework (only in cmd/cli)
+- `gopkg.in/yaml.v3` — YAML config parsing (only in pkg/config)
+
+All core logic uses Go stdlib only.

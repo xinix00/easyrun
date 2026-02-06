@@ -28,29 +28,44 @@ go test -bench=. -benchmem ./internal/leader > new.txt
 benchstat old.txt new.txt
 ```
 
-## Leader Benchmarks
+## Latest Results
 
-Located in `internal/leader/benchmark_test.go`:
+Measured on Apple M4 Pro (14 cores, 48GB RAM), Go 1.24.3.
 
-| Benchmark | What it measures |
-|-----------|------------------|
-| `BenchmarkDispatchJob` | Job dispatch throughput (jobs/sec) |
-| `BenchmarkHeartbeat` | Heartbeat processing (heartbeats/sec) |
-| `BenchmarkGetAgents` | Agent list retrieval with 1000 agents |
-| `BenchmarkFindJobByName` | Job lookup performance with 10k jobs |
-| `BenchmarkRoundRobinSelection` | Round-robin agent selection overhead |
-| `BenchmarkConcurrentHeartbeats` | Concurrent heartbeat handling |
-| `BenchmarkPlacementUpdate` | Placement tracking overhead |
+### Agent Benchmarks (`internal/agent/benchmark_test.go`)
 
-**Expected Performance:**
-- Heartbeat processing: >100k ops/sec
-- Job lookup: >1M ops/sec
-- Agent selection: >10M ops/sec
-- Concurrent heartbeats: scales linearly with cores
+| Benchmark | ops/sec | ns/op | B/op | allocs/op |
+|-----------|---------|-------|------|-----------|
+| TaskCreation | 1,534,959 | 786 | 845 | 11 |
+| GetJobs (1k) | 137,226 | 8,405 | 8,360 | 4 |
+| SyncJobs (100) | 947,427 | 1,347 | 64 | 1 |
+| CapacityCheck (50 tasks) | 120,933 | 10,283 | 168 | 3 |
+| StateQuery | 3,534,181 | 337 | 144 | 2 |
+| ConcurrentStateAccess | 1,830,178 | 664 | 184 | 5 |
 
-## Agent Benchmarks
+### Leader Benchmarks (`internal/leader/benchmark_test.go`)
 
-Located in `internal/agent/benchmark_test.go`:
+| Benchmark | ops/sec | ns/op | B/op | allocs/op |
+|-----------|---------|-------|------|-----------|
+| FindJobByName (10k) | 15,805 | 74,228 | 81,996 | 3 |
+| JobLookupScale/100 | 2,005,771 | 586 | 904 | 2 |
+| JobLookupScale/1k | 175,122 | 6,888 | 8,211 | 2 |
+| JobLookupScale/10k | 15,748 | 75,821 | 81,996 | 3 |
+| JobLookupScale/100k | 1,864 | 624,754 | 802,906 | 3 |
+
+### API Benchmarks (`internal/api/benchmark_test.go`)
+
+| Benchmark | ops/sec | ns/op | B/op | allocs/op |
+|-----------|---------|-------|------|-----------|
+| GetJobsEndpoint (1k) | 7,902 | 151,287 | 67,397 | 11 |
+| JSONEncoding (100 jobs) | 45,487 | 25,761 | 17,113 | 102 |
+| JSONDecoding | 990,346 | 1,346 | 1,168 | 20 |
+
+**Note:** Some API benchmarks (DispatchJob, Heartbeat, Status) require mock agents with real HTTP endpoints and may time out in isolated test environments.
+
+## Benchmark Descriptions
+
+### Agent
 
 | Benchmark | What it measures |
 |-----------|------------------|
@@ -58,37 +73,34 @@ Located in `internal/agent/benchmark_test.go`:
 | `BenchmarkGetJobs` | Job list retrieval with 1000 jobs |
 | `BenchmarkSyncJobs` | Job synchronization overhead (100 jobs) |
 | `BenchmarkCapacityCheck` | Capacity checking with 50 running tasks |
-| `BenchmarkStateQuery` | State query performance |
+| `BenchmarkStateQuery` | State query via ops channel |
 | `BenchmarkConcurrentStateAccess` | Concurrent state access (read-only) |
 
-**Expected Performance:**
-- Task creation: >50k ops/sec
-- Job list retrieval: >100k ops/sec
-- Capacity check: >500k ops/sec
-- State query: >1M ops/sec
-- Concurrent reads: scales with cores
-
-## API Benchmarks
-
-Located in `internal/api/benchmark_test.go`:
+### Leader
 
 | Benchmark | What it measures |
 |-----------|------------------|
-| `BenchmarkGetAgentsEndpoint` | GET /v1/agents throughput (100 agents) |
-| `BenchmarkGetJobsEndpoint` | GET /v1/jobs throughput (1000 jobs) |
+| `BenchmarkDispatchJob` | Job dispatch throughput |
+| `BenchmarkHeartbeat` | Heartbeat processing |
+| `BenchmarkGetAgents` | Agent list retrieval with 1000 agents |
+| `BenchmarkFindJobByName` | Job lookup with 10k jobs (O(n) scan) |
+| `BenchmarkJobLookupScale` | Job lookup at different scales |
+| `BenchmarkRoundRobinSelection` | Round-robin agent selection |
+| `BenchmarkPlacementUpdate` | Placement tracking overhead |
+| `BenchmarkConcurrentHeartbeats` | Concurrent heartbeat handling |
+
+### API
+
+| Benchmark | What it measures |
+|-----------|------------------|
+| `BenchmarkGetAgentsEndpoint` | GET /v1/agents throughput |
+| `BenchmarkGetJobsEndpoint` | GET /v1/jobs throughput (1k jobs) |
 | `BenchmarkPostJobEndpoint` | POST /v1/jobs throughput |
 | `BenchmarkHeartbeatEndpoint` | POST /v1/heartbeat throughput |
 | `BenchmarkStatusEndpoint` | GET /v1/status throughput |
 | `BenchmarkConcurrentRequests` | Concurrent API request handling |
 | `BenchmarkJSONEncoding` | JSON serialization overhead |
 | `BenchmarkJSONDecoding` | JSON deserialization overhead |
-
-**Expected Performance:**
-- GET endpoints: >10k req/sec per core
-- POST endpoints: >5k req/sec per core
-- Concurrent requests: scales linearly
-- JSON encoding: >100k ops/sec
-- JSON decoding: >50k ops/sec
 
 ## Performance Targets
 
@@ -99,111 +111,49 @@ Located in `internal/api/benchmark_test.go`:
 | Job dispatch | <10ms | <50ms |
 | Heartbeat | <1ms | <5ms |
 | API requests | <10ms | <50ms |
-| State queries | <100µs | <1ms |
+| State queries | <100us | <1ms |
 
 ### Throughput
 
 | Component | Target | Scale |
 |-----------|--------|-------|
-| Leader | 10k jobs/sec | Horizontal (add leaders) |
+| Leader | 10k jobs/sec | Horizontal (multiple clusters) |
 | Agent | 1k tasks/node | Vertical (bigger nodes) |
 | API | 50k req/sec | Horizontal (load balancer) |
-
-## Optimization Tips
-
-### Leader Performance
-
-1. **High job churn**: Increase `stateChannelBufferSize` in leader.go
-2. **Many agents**: Consider sharding (multiple clusters)
-3. **Slow heartbeats**: Check network latency, reduce heartbeat frequency
-
-### Agent Performance
-
-1. **Task startup slow**: Use artifact caching, faster disk
-2. **High CPU**: Reduce monitor interval (default 5s)
-3. **Memory pressure**: Increase `stateChannelBufferSize`, reduce task count
-
-### API Performance
-
-1. **Slow /v1/status**: Reduce agent timeout, use caching proxy
-2. **High latency**: Add connection pooling, use HTTP/2
-3. **JSON overhead**: Consider protobuf for internal APIs
 
 ## Profiling
 
 ### CPU Profile
 
 ```bash
-# Profile leader for 30 seconds
 go test -bench=BenchmarkDispatchJob -cpuprofile=cpu.prof -benchtime=30s ./internal/leader
-
-# Analyze
 go tool pprof -http=:8080 cpu.prof
 ```
 
 ### Memory Profile
 
 ```bash
-# Profile agent
 go test -bench=BenchmarkTaskCreation -memprofile=mem.prof ./internal/agent
-
-# Find allocations
 go tool pprof -alloc_space mem.prof
-go tool pprof -inuse_space mem.prof
 ```
 
 ### Trace
 
 ```bash
-# Generate trace
 go test -bench=BenchmarkConcurrentHeartbeats -trace=trace.out ./internal/leader
-
-# Visualize
 go tool trace trace.out
-```
-
-## Regression Testing
-
-Run benchmarks in CI to catch performance regressions:
-
-```bash
-# In CI pipeline
-go test -bench=. -benchmem ./internal/... | tee bench-$(git rev-parse --short HEAD).txt
-
-# Compare with main branch
-git checkout main
-go test -bench=. -benchmem ./internal/... > bench-main.txt
-git checkout -
-benchstat bench-main.txt bench-$(git rev-parse --short HEAD).txt
-```
-
-## Real-World Load Testing
-
-Benchmarks test individual components. For end-to-end testing:
-
-```bash
-# Start cluster
-./bin/agent --config=test-config.yaml
-
-# Load test with hey
-hey -n 10000 -c 100 -m POST -d '{"name":"test","command":"sleep 1"}' http://localhost:9080/v1/jobs
-
-# Monitor with pprof
-curl http://localhost:9080/debug/pprof/profile?seconds=30 > cpu.prof
-go tool pprof cpu.prof
 ```
 
 ## Known Bottlenecks
 
-1. **Job lookup by name**: O(n) linear scan
-   - Fix: Use map in JobStore interface
+1. **Job lookup by name**: O(n) linear scan — 586 ns at 100 jobs, 625 us at 100k jobs
+   - Fix: Add name index to JobStore
    - Impact: High with >10k jobs
 
-2. **Cluster status endpoint**: Fetches from all agents serially
-   - Fix: Parallel fetching (already implemented)
+2. **Status endpoint**: Fetches from all agents
    - Impact: High latency with >100 agents
 
-3. **JSON serialization**: High allocation rate
+3. **JSON serialization**: High allocation rate (102 allocs for 100 jobs)
    - Fix: Use sync.Pool for buffers
    - Impact: Moderate at >10k req/sec
 

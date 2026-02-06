@@ -26,18 +26,52 @@ Returns cluster overview:
   "agents": 3,
   "total_tasks": 5,
   "running_tasks": 5,
+  "settling": false,
   "tasks_by_agent": {
-    "agent-1": [{"id": "abc", "job_name": "web", "state": "running", ...}],
+    "agent-1": [{"id": "abc", "job_id": "def", "job_name": "web", "state": "running", ...}],
     "agent-2": [...]
   }
 }
 ```
 
+**settling:** `true` during the settle period after leader election (30s). During this period, jobs are stored but not dispatched until agents have registered with their placed counts.
+
 ### Agents
 
 ```
 GET  /v1/agents            # All registered agents
-DELETE /v1/agents/{id}     # Delete agent (redispatches jobs)
+POST /v1/agents            # Register agent (with placed counts)
+DELETE /v1/agents/{id}     # Unregister agent (triggers reconciliation)
+```
+
+#### Register Agent
+
+```
+POST /v1/agents
+```
+
+Called on agent startup and on leader change:
+```json
+{
+  "id": "agent-1",
+  "endpoint": "http://10.0.0.5:8080",
+  "version": "v0.5.8",
+  "placed": {
+    "job-id-abc": 2,
+    "job-id-def": 1
+  }
+}
+```
+
+**placed:** Map of jobID → count, telling the leader what this agent is already running. This prevents duplicate dispatches during leader failover.
+
+**Response:**
+```json
+{
+  "status": "registered",
+  "jobs": [...],
+  "state_time": "2025-01-31T12:00:00Z"
+}
 ```
 
 ### Heartbeat
@@ -46,17 +80,34 @@ DELETE /v1/agents/{id}     # Delete agent (redispatches jobs)
 POST /v1/heartbeat
 ```
 
-Agents send this every 10s to register/renew themselves:
+Agents send this every 10s to stay registered:
 ```json
 {
   "id": "agent-1",
-  "endpoint": "http://10.0.0.5:8080"
+  "endpoint": "http://10.0.0.5:8080",
+  "version": "v0.5.8",
+  "jobs": [...],
+  "state_time": "2025-01-31T12:00:00Z"
 }
 ```
+
+**Response (known agent):**
+```json
+{
+  "status": "ok",
+  "jobs": [...],
+  "state_time": "2025-01-31T12:00:00Z"
+}
+```
+
+**Response (unknown agent):** `404 Not Found` — agent should re-register via POST /v1/agents.
+
+**State sync:** If the agent's `state_time` is newer than the leader's, the leader syncs jobs from the agent. The response always includes the leader's current jobs for the agent to sync.
 
 ### Jobs
 
 ```
+GET    /v1/jobs            # All jobs
 POST   /v1/jobs            # Run or update job (upsert based on name)
 DELETE /v1/jobs/{name}     # Delete job and all its tasks
 ```
@@ -67,33 +118,21 @@ DELETE /v1/jobs/{name}     # Delete job and all its tasks
 - If job with this `name` exists → **UPDATE** (according to `update_policy`)
 - If job doesn't exist → **INSERT** (dispatch new job)
 
-This allows seamless deployments with a single command.
-
-**Simple example:**
+**Full example:**
 ```bash
 curl -X POST http://localhost:9080/v1/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "name": "api",
-    "command": "./my-binary",
-    "cpu_shares": 2000,
-    "memory_limit": 536870912
-  }'
-```
-
-**With all features:**
-```bash
-curl -X POST http://localhost:9080/v1/jobs \
-  -H "Content-Type: application/json" \
-  -d '{
-    "name": "api",
+    "agent_id": "",
     "artifact": {
       "url": "s3://mybucket/api-v2.0.tar.gz",
       "auth": {
         "access_key": "AKIAIOSFODNN7EXAMPLE",
         "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
         "region": "eu-west-1"
-      }
+      },
+      "extract": "tar.gz"
     },
     "command": "./server --http=$ER_PORT_HTTP --grpc=$ER_PORT_GRPC",
     "count": 3,
@@ -106,32 +145,44 @@ curl -X POST http://localhost:9080/v1/jobs \
     },
     "tags": {
       "service": "api",
-      "loadbalancer_domain": "*.example.com",
-      "env": "production"
+      "loadbalancer_domain": "*.example.com"
+    },
+    "volumes": {
+      "/data/shared": "data"
     },
     "health_check": {
       "path": "/health",
       "port": "http",
       "interval": "10s",
-      "timeout": "5s"
+      "timeout": "5s",
+      "initial_timeout": "30s"
     },
-    "max_restarts": 5
+    "max_restarts": 5,
+    "update_policy": "rolling"
   }'
 ```
 
 **Fields:**
-- `name` (string, **required**): Job name - **unique key for upsert**
+- `name` (string, **required**): Job name — **unique key for upsert**
+- `agent_id` (string): Pin to specific agent (optional)
 - `artifact` (object): Binary/assets to download (optional)
-  - `url` (string): URL with scheme - determines downloader (http://, s3://, file://)
+  - `url` (string): URL with scheme — determines downloader (http://, s3://)
   - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
-  - `auth` (map): Other credentials (S3: access_key/secret_key/region, HTTP helper: username/password)
+  - `auth` (map): Credentials (S3: access_key/secret_key/region, HTTP: username/password)
+  - `extract` (string): Archive type — `tar.gz`, `tar.bz2`, `zip`, or `""` (raw binary, auto chmod +x)
+- `command` (string, **required**): Command to execute
 - `count` (int): Number of instances (default 1, -1 = all agents)
 - `ports` (map): Port name → fixed port (0 = dynamic). ENV vars `ER_PORT_<NAME>`
+- `cpu_shares` (int): CPU priority (nice-based)
+- `memory_limit` (uint64): Memory limit in bytes
+- `env` (map): Environment variables
 - `tags` (map): Labels for service discovery
+- `volumes` (map): Host path → task path (symlinked)
 - `health_check`: HTTP health monitoring
   - `port` (string): Named port to check (default "http")
+  - `initial_timeout` (duration): Grace period for slow-starting services (default 30s)
 - `max_restarts` (int): Max restart attempts (0=default 5, -1=unlimited)
-- `update_policy` (string): How to update when redeployed - `rolling` (default), `recreate`, or `blue-green`
+- `update_policy` (string): `rolling` (default), `recreate`, or `blue-green`
 
 **Artifact Downloaders:**
 
@@ -167,37 +218,45 @@ URL scheme → downloader:
 
 | Policy | Downtime | Behavior |
 |--------|----------|----------|
-| `rolling` (default) | ❌ None | Replace instances 1 at a time with 2s delay |
-| `recreate` | ✅ Yes | Stop all → start new version (fast but downtime) |
-| `blue-green` | ❌ None | Start new alongside old → wait 5s → stop old (2x resources) |
-
-**Example: Deploy v1, then update to v2**
-```bash
-# Deploy v1
-POST /v1/jobs {"name": "api", "command": "./app-v1", "count": 3}
-→ {"status": "dispatched", "id": "abc123"}
-
-# Update to v2 (rolling - zero downtime, NEW ID generated)
-POST /v1/jobs {"name": "api", "command": "./app-v2", "count": 3}
-→ {"status": "updated", "id": "def456", "policy": "rolling"}
-
-# Update to v3 (recreate - with downtime, NEW ID again)
-POST /v1/jobs {"name": "api", "command": "./app-v3", "count": 3, "update_policy": "recreate"}
-→ {"status": "updated", "id": "ghi789", "policy": "recreate"}
-```
-
-**Scheduling:**
-- Count=3 → 3 instances via round-robin spreading
-- Agent returns 503 if no capacity → leader tries next agent
+| `rolling` (default) | None | Start new → stop old, 1 at a time with 2s delay |
+| `recreate` | Yes | Stop all → start new version |
+| `blue-green` | None | Start all new → stop all old (2x resources during switch) |
 
 ## Agent API
 
 Runs on each node. Default port: 8080.
 
+Agents also proxy `/v1/*` endpoints to the leader for cluster-wide operations.
+
 ### Health
 
 ```
 GET /health
+```
+
+### Leader
+
+```
+GET /leader
+```
+
+Returns the current leader address:
+```json
+{"leader": "10.0.0.5:9080"}
+```
+
+### Capacity
+
+```
+GET /capacity
+```
+
+Returns detected system resources:
+```json
+{
+  "cpu_cores": 14,
+  "memory_bytes": 51539607552
+}
 ```
 
 ### Tasks
@@ -212,14 +271,16 @@ GET /tasks                 # All tasks on this agent
 POST /run
 ```
 
-Start a job:
+Start a job. Returns 202 Accepted (fire-and-forget, artifact download + start happens async):
 ```json
 {
-  "id": "abc123",
-  "name": "api",
-  "command": "./my-binary"
+  "status": "accepted",
+  "job": "api",
+  "message": "job accepted, starting in background"
 }
 ```
+
+Returns 503 if no capacity.
 
 ### Delete (internal, called by leader)
 
@@ -247,14 +308,14 @@ data: [2025-01-31 12:00:00] Server starting...
 data: [2025-01-31 12:00:01] Listening on port 8080
 ```
 
-**Usage with CLI:**
-```bash
-orch logs abc123                    # Stream stdout
-orch logs abc123 --stream stderr    # Stream stderr
-```
+**No persistence** — logs are streamed live only.
 
-**No persistence** - logs are streamed live only. For permanent logging, pipe to external logger:
-```bash
-orch logs abc123 | tee /var/log/myapp.log
-orch logs abc123 | ./log-forwarder --destination loki://...
-```
+### Proxy Endpoints
+
+The agent proxies these paths to the current leader:
+- `/v1/agents`
+- `/v1/jobs`
+- `/v1/jobs/{name}`
+- `/v1/status`
+
+This means easydns/easylb/easyprom can query their local agent and automatically get cluster-wide data.

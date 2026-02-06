@@ -6,8 +6,9 @@ What the user wants to run.
 
 ```go
 type Job struct {
-    ID           string            // Unique identifier (auto-generated if not provided)
+    ID           string            // Unique identifier (auto-generated)
     Name         string            // Human-readable name (UNIQUE KEY for upsert)
+    AgentID      string            // Pin to specific agent (optional)
     Artifact     *Artifact         // Binary/assets to download (optional)
     Command      string            // Command to execute
     Count        int               // Number of instances (see below)
@@ -16,11 +17,27 @@ type Job struct {
     MemoryLimit  uint64            // Bytes (0 = no limiting)
     Env          map[string]string // Extra environment variables
     Tags         map[string]string // Labels for service discovery/grouping
+    Volumes      map[string]string // host_path → task_path (symlinked)
     HealthCheck  *HealthCheck      // HTTP health check config (optional)
     MaxRestarts  int               // Max restart attempts (0=default 5, -1=unlimited)
     UpdatePolicy UpdatePolicy      // How to update: rolling | recreate | blue-green
 }
 ```
+
+### AgentID (Node Pinning)
+
+Pin a job to a specific agent:
+
+```json
+{
+  "name": "monitoring",
+  "agent_id": "node-1",
+  "command": "./monitor",
+  "count": 1
+}
+```
+
+If the pinned agent is not found, dispatch returns an error.
 
 ### UpdatePolicy
 
@@ -38,9 +55,9 @@ const (
 
 | Policy | Downtime | Resources | Use Case |
 |--------|----------|-----------|----------|
-| `rolling` | ❌ None | Normal | Standard deployments |
-| `recreate` | ✅ Yes | Minimal | Breaking changes, DB migrations |
-| `blue-green` | ❌ None | 2x (temporary) | Canary testing, instant rollback |
+| `rolling` | None | Normal | Standard deployments |
+| `recreate` | Yes | Minimal | Breaking changes, DB migrations |
+| `blue-green` | None | 2x (temporary) | Canary testing, instant rollback |
 
 ### Count
 
@@ -70,6 +87,23 @@ Ports can be dynamic (assigned at runtime) or fixed:
 
 **Environment variables:** Task gets `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all ports.
 
+### Volumes
+
+Mount host directories into the task's working directory via symlinks:
+
+```json
+{
+  "volumes": {
+    "/data/shared": "data",
+    "/etc/ssl/certs": "certs"
+  }
+}
+```
+
+- Host paths must exist (validation at task start)
+- Target paths are relative to task directory
+- Mounted as symlinks, unmounted on task cleanup
+
 ### Artifact
 
 ```go
@@ -77,10 +111,17 @@ type Artifact struct {
     URL     string            // Download URL (http://, https://, s3://)
     Headers map[string]string // HTTP headers (Authorization, X-API-Key, etc.)
     Auth    map[string]string // Other credentials (S3, helpers)
+    Extract string            // "tar.gz", "tar.bz2", "zip", "" (empty = raw file)
 }
 ```
 
 **URL scheme determines which downloader to use.**
+
+**Extract field:**
+- `"tar.gz"` or `"tgz"` — extract tar.gz archive
+- `"tar.bz2"` or `"tbz2"` — extract tar.bz2 archive
+- `"zip"` — extract zip archive
+- `""` (empty) — raw file, automatically `chmod +x`
 
 **HTTP/HTTPS downloaders:**
 - Use `headers` for custom HTTP headers (direct pass-through)
@@ -97,32 +138,31 @@ Custom headers:
   "url": "https://artifacts.example.com/app.tar.gz",
   "headers": {
     "Authorization": "Bearer token123",
-    "X-API-Key": "secret",
-    "X-Tenant-ID": "123"
-  }
+    "X-API-Key": "secret"
+  },
+  "extract": "tar.gz"
 }
 ```
 
-Basic Auth helper:
+Raw binary (no extraction):
 ```json
 {
-  "url": "https://artifacts.example.com/app.zip",
-  "auth": {
-    "username": "deploy",
-    "password": "secret"
-  }
+  "url": "https://releases.example.com/myapp-v1.0",
+  "headers": { "Authorization": "Bearer token123" }
 }
 ```
+File is downloaded, `chmod +x`, ready to run.
 
 S3:
 ```json
 {
-  "url": "s3://bucket/key",
+  "url": "s3://bucket/key.tar.gz",
   "auth": {
     "access_key": "AKIA...",
     "secret_key": "...",
     "region": "eu-west-1"
-  }
+  },
+  "extract": "tar.gz"
 }
 ```
 
@@ -130,12 +170,15 @@ S3:
 
 ```go
 type HealthCheck struct {
-    Path     string        // HTTP path (e.g., "/health")
-    Port     string        // Named port (default "http")
-    Interval time.Duration // Check interval (default 10s)
-    Timeout  time.Duration // Request timeout (default 5s)
+    Path           string        // HTTP path (e.g., "/health")
+    Port           string        // Named port (default "http")
+    Interval       time.Duration // Check interval (default 10s)
+    Timeout        time.Duration // Request timeout (default 5s)
+    InitialTimeout time.Duration // Max time after start to become healthy (default 30s)
 }
 ```
+
+**InitialTimeout:** Allows slow-starting services time to initialize before health checks begin failing.
 
 ## Task
 
@@ -144,6 +187,7 @@ A running instance of a Job.
 ```go
 type Task struct {
     ID           string         // Unique identifier
+    JobID        string         // Job ID (which version of the job)
     JobName      string         // Job name (which job this task belongs to)
     Ports        map[string]int // Named port -> port number
     Pid          int            // Process ID
@@ -153,7 +197,7 @@ type Task struct {
 }
 ```
 
-**Note:** Task has `JobName` (not `JobID`). Use `task.JobName` to look up the job.
+**Note:** Task has both `JobID` and `JobName`. Use `task.JobName` to look up the job by name, `task.JobID` to reference the specific version.
 
 **Ports:** Task gets ENV vars `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all allocated ports.
 
@@ -173,6 +217,7 @@ A registered agent with the leader.
 type Agent struct {
     ID       string    // Unique identifier
     Endpoint string    // HTTP endpoint (http://ip:port)
+    Version  string    // Agent version (e.g., "v0.5.8")
     LastSeen time.Time // Last heartbeat
 }
 ```
@@ -181,9 +226,11 @@ type Agent struct {
 
 ```go
 type leaderState struct {
-    agents     map[string]*Agent    // Registered agents
-    placement  map[string][]string  // jobID -> []agentID (multiple instances)
-    roundRobin int                  // Counter for deterministic round-robin
+    agents      map[string]*Agent           // Registered agents
+    placed      map[string]map[string]int   // agentID → jobID → count
+    dispatching map[string]bool             // jobID → true if being dispatched
+    settled     bool                        // false during settle period
+    roundRobin  int                         // Counter for round-robin
 }
 ```
 
@@ -193,13 +240,15 @@ All state access goes through a single goroutine via the `ops` channel, using `d
 
 The leader tracks:
 - Which agents are online (via heartbeats)
-- Which job instances run on which agents (placement)
+- Which job instances run on which agents (`placed`: agentID → jobID → count)
+- Which jobs are being actively dispatched (`dispatching`: prevents double dispatch)
+- Whether the settle period has elapsed (`settled`: defers reconciliation until agents register)
 - Round-robin counter for deterministic agent selection (agents sorted by ID)
 
-**Multi-instance support:** A job with Count=3 has 3 entries in placement, spread across agents via deterministic round-robin.
+**Settle period:** After becoming leader, the leader waits for `agentTimeout` (30s) before reconciling. This allows agents to register with their `placed` counts, preventing duplicate dispatches.
 
-**Placement cleanup:** `cleanPlacementForAgent` removes a dead/unregistered agent from all placement entries. Shared by `checkDeadAgents` and `UnregisterAgent`.
+**Placement tracking:** `placed[agentID][jobID] = count` tracks how many instances of each job are on each agent. Updated on dispatch, cleared on agent death/unregister.
 
-**Reconciliation:** After agent changes, `reconcileJob` compares desired vs actual state and dispatches the difference. Single code path for daemon (count=-1) and regular jobs.
+**Reconciliation:** After agent changes, `reconcileJob` compares desired vs actual state and dispatches the difference. Single code path for daemon (count=-1) and regular jobs. Skips jobs that are actively being dispatched.
 
 **Delete:** `DeleteJobByID` uses two-phase approach (placement + cluster status) to catch orphaned tasks.

@@ -41,7 +41,9 @@
 │  │  ┌───────────┴───────────────┐      │   │
 │  │  │         Leader            │      │   │
 │  │  │  - agents map             │      │   │
-│  │  │  - placement map          │      │   │
+│  │  │  - placed map             │      │   │
+│  │  │  - dispatching map        │      │   │
+│  │  │  - settled flag           │      │   │
 │  │  │  - round robin state      │      │   │
 │  │  └───────────────────────────┘      │   │
 │  └─────────────────────────────────────┘   │
@@ -76,36 +78,59 @@ No sync needed! The agent BECOMES leader, not a separate entity.
 Leader has ALL jobs (single source of truth)
 
 Agent 1 ──heartbeat──► Leader
-         {my jobs: [job-3]}
+         {my jobs: [...], state_time: T}
 
          ◄────────────────────
-         response: {all jobs: [job-1, job-2, job-3]}
+         response: {all jobs: [...], state_time: T}
 
-         Agent 1 saves job-1, job-2 via SyncJobs()
-
+         Agent 1 saves new jobs via SyncJobs()
 
 Each agent has a COPY of all jobs.
 When an agent becomes leader, it already knows them!
 ```
 
-## Leader Failover
+## Registration Protocol
 
 ```
-BEFORE:                            AFTER:
-Leader on Node 2                   Leader on Node 1
+Agent startup or leader change:
 
-Node 1 (agent)                     Node 1 (agent + leader)
-┌────────────────────┐             ┌────────────────────┐
-│ jobs (via sync):   │             │ jobs:              │
-│  - job-1           │  ────────►  │  - job-1           │
-│  - job-2           │             │  - job-2           │
-│  - job-3           │             │  - job-3           │
-└────────────────────┘             │                    │
-                                   │ Leader uses        │
-Already knows ALL jobs!            │ same jobs map      │
-                                   └────────────────────┘
+Agent ──POST /v1/agents──► Leader
+        {id, endpoint, version, placed: {jobID: count}}
 
-No bootstrap, no recovery delay. Ready immediately.
+        ◄──────────────────────
+        {status: "registered", jobs: [...], state_time: T}
+
+Subsequent heartbeats:
+
+Agent ──POST /v1/heartbeat──► Leader
+        {id, endpoint, version, jobs: [...], state_time: T}
+
+        ◄────────────────────────
+        {status: "ok", jobs: [...], state_time: T}
+
+If leader returns 404: agent is unknown → re-register next tick
+```
+
+**Registration vs Heartbeat:**
+- Registration (POST /v1/agents): includes `placed` counts, triggers reconciliation
+- Heartbeat (POST /v1/heartbeat): updates LastSeen, syncs job state, no reconciliation
+
+## Settle Period
+
+```
+Leader elected at T=0
+
+T=0s:  Leader starts, settled=false
+       Agents register with placed counts
+       Jobs stored but NOT dispatched
+
+T=30s: Settle delay expires, settled=true
+       reconcileJobs() runs
+       Compares desired vs actual (from placed counts)
+       Only dispatches truly missing instances
+
+Without settle:
+  Leader doesn't know what agents are running → dispatches everything → duplicates!
 ```
 
 ## Components
@@ -121,7 +146,8 @@ No bootstrap, no recovery delay. Ready immediately.
 - Receives heartbeats from agents
 - Dispatches regular jobs via deterministic round-robin (agents sorted by ID)
 - Dispatches daemon jobs (count=-1) via reconcile-based dispatch
-- Tracks which job instances run on which agents (placement map)
+- Supports agent pinning (job.AgentID dispatches only to that agent)
+- Tracks which job instances run on which agents (placed map: agentID → jobID → count)
 - On agent failure: cleans stale placement, reconciles all jobs
 - Runs on port+1000 (default 9080)
 
@@ -131,6 +157,10 @@ No bootstrap, no recovery delay. Ready immediately.
 - On 503 (full) → leader tries next agent
 - Automatic spreading over agents
 
+**Agent Pinning:**
+- Job with AgentID set → dispatches only to that specific agent
+- If agent not found → returns error
+
 **Daemon Scheduling (count=-1):**
 - Uses reconcile-based dispatch (same code path as periodic reconciliation)
 - Checks which agents already run the job, dispatches to missing agents
@@ -138,29 +168,33 @@ No bootstrap, no recovery delay. Ready immediately.
 
 **Reconciliation:**
 - Triggered after agent death, new agent registration, or agent unregister
+- Skips jobs that are actively being dispatched (prevents double dispatch)
 - `reconcileJob` is the single function for both daemon and regular job reconciliation
 - Daemon jobs: check all agents, dispatch to missing, rebuild placement atomically
-- Regular jobs: count running instances, dispatch missing via round-robin
+- Regular jobs: sum placed counts across live agents, dispatch missing via round-robin
 
 ### Agent
 - Runs on each node (including leader node)
 - Sends heartbeat to leader every 10s
+- First contact after startup or leader change: registers with placed counts
 - Receives jobs from leader, starts processes
-- On leader failure: try to become leader itself
-- On isolation (no leader, can't become leader): stop all tasks
+- On leader failure (3 ticks): try to become leader itself
+- On isolation (6 ticks, no leader, can't become leader): stop all tasks
 - Runs on port 8080
+- CORS enabled for browser access
 
 ### ProcessRunner
 - Starts processes with optional resource limits
 - Each task gets its own directory with:
-  - `app/` - application files
   - `tmp/` - temporary files
   - `resolv.conf` - DNS
+  - Volume mounts (symlinked from host paths)
 - CPU limiting via nice (if `CPUShares > 0`)
 - Memory limiting:
   - Linux: cgroups v2
   - macOS: ulimit -v wrapper
-- Optional chroot isolation
+- Optional isolation (chroot on Linux)
+- Artifact download with extraction support (tar.gz, tar.bz2, zip, raw binary)
 
 ## Named Ports
 
@@ -169,19 +203,38 @@ Jobs can request multiple named ports:
 ```json
 {
   "command": "./server --http=$ER_PORT_HTTP --grpc=$ER_PORT_GRPC",
-  "ports": ["http", "grpc", "metrics"]
+  "ports": {"http": 0, "grpc": 0, "metrics": 9090}
 }
 ```
 
 **Per task:**
-1. Agent allocates free port for each named port
-2. Sets ENV vars: `ER_PORT_HTTP=8080`, `ER_PORT_GRPC=9090`, etc.
-3. Task struct has `Ports map[string]int`
+1. Agent allocates free port for each dynamic port (value=0)
+2. Fixed ports (value>0) are used directly after availability check
+3. Sets ENV vars: `ER_PORT_HTTP=8080`, `ER_PORT_GRPC=9090`, etc.
+4. Task struct has `Ports map[string]int`
 
 **No ports = no ports:**
 - Jobs without `ports` field get empty ports map
 - No default ports (KISS)
 - Batch jobs / workers often don't need ports
+
+## Volumes
+
+Jobs can mount host directories:
+
+```json
+{
+  "volumes": {
+    "/data/shared": "data",
+    "/etc/ssl/certs": "certs"
+  }
+}
+```
+
+- Host paths are validated (must exist)
+- Target paths are relative to task directory
+- Implemented via symlinks (platform-agnostic)
+- Cleaned up (unmounted) on task stop
 
 ## Service Discovery via Tags
 
@@ -190,20 +243,13 @@ Jobs have `tags` field for external tooling:
 ```json
 {
   "name": "api",
-  "ports": ["http"],
+  "ports": {"http": 0},
   "tags": {
     "loadbalancer_domain": "*.example.com",
     "service": "api",
     "env": "production"
   }
 }
-```
-
-**External load balancer:**
-```bash
-curl http://leader:9080/v1/status | jq '.tasks_by_agent'
-# Parse tasks with tag loadbalancer_domain
-# Generate Nginx/Caddy upstream config
 ```
 
 Easyrun only stores tags - external tooling does the discovery logic.
@@ -216,50 +262,40 @@ Easyrun only stores tags - external tooling does the discovery logic.
     "path": "/health",
     "port": "http",
     "interval": "10s",
-    "timeout": "5s"
+    "timeout": "5s",
+    "initial_timeout": "30s"
   }
 }
 ```
 
 **Agent monitoring loop (5s):**
 1. Check if process is still alive
-2. If health_check: HTTP GET to `http://localhost:{port}{path}`
+2. If health_check: HTTP GET to `http://127.0.0.1:{port}{path}`
 3. On failure: kill + restart (max_restarts limit)
 
-**Named port support:** Health check uses `port` field for which port to check.
+**Initial timeout:** New tasks get `initial_timeout` (default 30s) grace period before health checks start failing.
 
 ## Failure Scenarios
 
 ### Agent fails
 1. Leader sees no heartbeat (30s timeout)
-2. Leader marks agent as dead and cleans its placement entries (`cleanPlacementForAgent`)
-3. Leader reconciles all jobs: queries actual cluster state, dispatches missing instances
+2. Leader marks agent as dead and cleans its placement entries
+3. Leader reconciles all jobs: compares placed vs desired, dispatches missing
 4. For daemon jobs: dispatches to all agents missing the job
-5. For regular jobs: counts running instances, dispatches the difference
-
-**Example:** Job with Count=5 on [A,B,B,C,C]. Agent B fails:
-- Leader cleans B from all placement entries
-- Reconciliation sees 3 running (on A,C,C), dispatches 2 more via round-robin
-- Result: Job now runs on [A,C,C,D,E] (still 5 instances)
-
-**Delete robustness:** `DeleteJobByID` uses two-phase approach:
-1. Read + clear placement entries (atomic)
-2. Check `GetClusterStatus()` for orphaned tasks not in placement
-3. Send delete to the union of both sets (catches stale placement)
+5. For regular jobs: sums placed across live agents, dispatches the difference
 
 ### Leader fails
 1. Agents get heartbeat timeout
 2. After 3 failures: agents try to become leader via EasyRaft
-3. First to get lease becomes new leader
-4. Other agents send heartbeat to new leader
+3. First to get lease becomes new leader with settle period (30s)
+4. Agents re-register with placed counts (leader returns 404 → triggers re-registration)
+5. After settle: reconciliation dispatches only truly missing instances
 
 ### Task fails (process crash)
 1. Agent detects via monitor loop (5s)
 2. Agent restarts task **locally** (same agent)
-3. Max restart limit prevents infinite loops
+3. Max restart limit prevents infinite loops (default 5, -1 = unlimited)
 4. On health check failure: kill + restart
-
-**Local restart is faster and preserves locality.**
 
 ### Agent isolated (network partition)
 1. Agent can't reach leader

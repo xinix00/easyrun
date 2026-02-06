@@ -19,7 +19,7 @@ Catastrophic failure scenarios to ensure system resilience.
 | `TestChaos_MultipleJobUpdatesDuringFailover` | Concurrent updates + failover | Mixed versions preserved, no data loss |
 | `TestChaos_LeaderMemoryPressure` | 10k agents, 100k jobs | System survives (slow but functional) |
 | `TestChaos_SimultaneousLeaderAndAgentCrash` | Double failure | Survivors recover gracefully |
-| `TestChaos_HeartbeatStorm` | 100 agents × 100 HB each | System handles 10k+ heartbeats/sec |
+| `TestChaos_HeartbeatStorm` | 100 agents x 100 HB each | System handles 10k+ heartbeats/sec |
 | `TestChaos_ZeroAgentsAvailable` | No agents to dispatch to | Graceful error, no crash |
 | `TestChaos_AgentFlapping` | Agent up/down repeatedly | Detected and handled over 5 cycles |
 
@@ -58,45 +58,51 @@ go test -run=TestChaos -v -race ./internal/...
 
 ### Leader Resilience
 
-**Split-brain recovery:** ✅ PASS
+**Cascading failures:** PASS
+- 3/5 agents down -> survivors take over
+- Jobs redispatched automatically via reconciliation
+
+**Leader crash during update:** PASS (with mixed state)
+- Partial updates preserved
+- Old and new versions coexist until new leader reconciles
+- Settle period prevents premature reconciliation
+
+**Network partitions:** PASS
+- Slow/unreachable agents skipped
+- Retries on healthy agents
+- Agents stop tasks after 6 failed heartbeats (prevent duplicates)
+
+**Split-brain recovery:** PASS
 - Two leaders merge state when partition heals
 - No data loss
 
-**Cascading failures:** ✅ Handles gracefully
-- 3/5 agents down → survivors take over
-- Jobs redispatched automatically
-
-**Leader crash during update:** ⚠️ PASS (with mixed state)
-- Partial updates preserved
-- Old and new versions coexist until reconciliation
-
-**Network partitions:** ✅ PASS
-- Slow/unreachable agents skipped
-- Retries on healthy agents
-
-**Heartbeat storm:** ✅ PASS
+**Heartbeat storm:** PASS
 - 10k+ heartbeats/sec handled
-- No crashes under load
+- Channel-based state loop prevents lock contention
+
+**Agent returns after downtime:** PASS
+- Agent re-registers with placed counts
+- Leader updates placement tracking accordingly
 
 ### Agent Resilience
 
-**Mass task failure:** ✅ PASS
-- 10 tasks crash → all restarted
-- Up to max_restarts limit
+**Mass task failure:** PASS
+- 10 tasks crash -> all restarted
+- Up to max_restarts limit (0 = unlimited)
 
-**Crash loops:** ✅ PASS
+**Crash loops:** PASS
 - Agent gives up after max attempts
 - No infinite restart loops
 
-**Capacity exhaustion:** ✅ PASS
-- Jobs rejected with clear error
+**Capacity exhaustion:** PASS
+- Jobs rejected with clear error (503)
 - No over-commitment
 
-**Rapid churn:** ✅ PASS
-- 100 create/delete cycles: **0.01 seconds**
+**Rapid churn:** PASS
+- 100 create/delete cycles: ~0.01 seconds
 - No memory leaks
 
-**State corruption:** ✅ PASS
+**State corruption:** PASS
 - Orphan tasks handled gracefully
 - No crashes
 
@@ -115,7 +121,7 @@ Before:
 After:
   Node 3 (DC2): 30 tasks (took over all work)
 
-Result: ✅ Zero downtime (if Node 3 has capacity)
+Result: Zero downtime (if Node 3 has capacity)
 ```
 
 **Test:** `TestChaos_AllAgentsDownExceptOne`
@@ -127,7 +133,12 @@ Rolling update in progress: 5/10 instances updated
 Leader crashes
 New leader elected
 
-Result: ✅ Partial update preserved, can continue or rollback
+New leader behavior:
+1. Enters settle period (30s)
+2. Surviving agents register with placed counts
+3. After settle, reconciles with accurate placement data
+
+Result: Partial update preserved, can continue or rollback
 ```
 
 **Test:** `TestChaos_LeaderCrashDuringRollingUpdate`
@@ -140,18 +151,19 @@ Result: ✅ Partial update preserved, can continue or rollback
 Partition A+B (has leader):
   - Continues dispatching
   - Marks C as dead after 30s
+  - Reconciles C's jobs to A/B
 
-Partition C:
-  - Loses leader connection
-  - Stops dispatching (safety)
-  - Keeps running existing tasks
+Partition C (isolated):
+  - Heartbeats fail, failCount increases
+  - After 6 failures: stops all tasks (prevent duplicates)
+  - Keeps trying to reach leader or become one
 
 When healed:
-  - C rejoins
-  - Gets latest job state
-  - Receives any new jobs
+  - C registers with new leader (placed counts)
+  - Leader updates placement tracking
+  - C receives jobs during reconciliation
 
-Result: ✅ No split-brain, safe isolation
+Result: No split-brain, safe isolation
 ```
 
 **Test:** `TestChaos_SplitBrainScenario`, `TestChaos_NetworkPartition`
@@ -163,11 +175,11 @@ Agent runs out of memory
 Linux OOM killer terminates tasks
 
 Agent behavior:
-  - Detects crashed tasks
-  - Restarts up to max_restarts
-  - If keeps OOMing, marks as failed
+  - Monitor detects crashed tasks (5s check interval)
+  - Restarts up to max_restarts (0 = unlimited)
+  - Health check initial_timeout gives grace period after restart
 
-Result: ✅ Prevents infinite crash loops
+Result: Prevents infinite crash loops (when max_restarts > 0)
 ```
 
 **Test:** `TestChaos_TaskExceedsMaxRestarts`
@@ -180,11 +192,11 @@ Cannot write state.json
 
 Behavior:
   - Log error
-  - Continue in-memory
+  - Continue in-memory (debounced save retries)
   - Jobs survive (in leader's memory)
   - Recovers when disk space freed
 
-Result: ✅ Degrades gracefully
+Result: Degrades gracefully
 ```
 
 *Not yet tested - TODO*
@@ -196,40 +208,37 @@ Result: ✅ Degrades gracefully
 ```bash
 # Test failover on staging
 1. Run chaos tests: go test -run=TestChaos -v ./internal/...
-2. Kill leader manually, observe recovery
+2. Kill leader manually, observe recovery + settle period
 3. Simulate network partition with iptables
 4. Monitor metrics during chaos
-
-# Production chaos (use with caution)
-# Randomly kill 1 agent per hour
-*/60 * * * * systemctl stop easyrun-agent && sleep 300 && systemctl start easyrun-agent
 ```
 
 ### Metrics to Monitor
 
 ```prometheus
-# Job recovery rate after failures
+# Task recovery rate
 rate(easyrun_task_failures_total[5m]) / rate(easyrun_task_starts_total[5m])
 
-# Leader failover detection
-changes(easyrun_leader_epoch[1h]) > 0
+# Agent health
+easyrun_agents_healthy / easyrun_agents_total
 
-# Agent churn
-rate(easyrun_agent_deregistrations[10m])
+# Job degradation
+easyrun_job_instances_running < easyrun_job_instances_expected
 ```
 
 ### What We Test vs Don't Test
 
-**✅ Tested:**
-- Leader crashes
+**Tested:**
+- Leader crashes (with settle period recovery)
 - Agent crashes (single and multiple)
 - Network timeouts
 - Split-brain scenarios
 - State corruption
 - Resource exhaustion
 - Rapid churn
+- Agent flapping
 
-**❌ Not tested (yet):**
+**Not tested (yet):**
 - Disk full scenarios
 - Byzantine failures (malicious agents)
 - Clock skew between nodes
@@ -243,13 +252,14 @@ rate(easyrun_agent_deregistrations[10m])
 - If leader dies, no dispatching until failover
 - Existing tasks keep running (agents are autonomous)
 - Failover typically <5 seconds with EasyRaft
+- New leader needs settle period (30s) before reconciling
 
 **No quorum:**
-- Unlike k8s (which needs etcd quorum), easyrun survives with 1 node
+- Unlike k8s (etcd quorum), easyrun survives with 1 node
 - Leader election requires EasyRaft quorum (3+ nodes)
 
 **State eventually consistent:**
-- 5 second heartbeat interval = 5s propagation delay
+- 10 second heartbeat interval = 10s propagation delay
 - Acceptable for most workloads
 - Not suitable for sub-second coordination
 
@@ -266,43 +276,19 @@ rate(easyrun_agent_deregistrations[10m])
 3 nodes minimum for HA:
 - EasyRaft elects leader
 - If leader dies, new leader in <5s
-- All agents sync with new leader
+- Settle period (30s) for agents to register
+- Reconciliation restores desired state
 ```
 
 ### Disaster Recovery
 
 ```bash
 # Backup leader state
-cp /var/lib/easyrun/state.json /backup/state-$(date +%s).json
+cp /var/lib/easyrun/state-{cluster}.json /backup/state-$(date +%s).json
 
 # Restore after catastrophic failure
 1. Stop all agents
 2. Restore state.json on new leader
 3. Start leader
-4. Start agents (they sync from leader)
+4. Start agents (they register with placed counts)
 ```
-
-### Monitoring
-
-```bash
-# Alert on leader failures
-easyrun_leader_epoch changes > 2 in 1 hour = flapping
-
-# Alert on mass agent failure
-easyrun_agents_healthy < 50% of easyrun_agents_total
-
-# Alert on job degradation
-easyrun_job_instances_running < easyrun_job_instances_expected
-```
-
-## Future Chaos Tests
-
-Ideas for more tests:
-
-- `TestChaos_DiskFullDuringStateSave` - state.json write fails
-- `TestChaos_EasyRaftSplitBrain` - two leaders elected simultaneously
-- `TestChaos_ClockSkew` - nodes with different system times
-- `TestChaos_MaliciousAgent` - agent reports fake tasks
-- `TestChaos_MemoryLeak` - slowly growing memory usage
-- `TestChaos_NetworkFlapping` - intermittent connectivity
-- `TestChaos_DNSFailure` - agent endpoints unresolvable

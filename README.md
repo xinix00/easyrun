@@ -6,15 +6,18 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
 - **Multi-instance jobs**: Deploy N copies with automatic spreading
 - **Smart scheduling**: Round-robin with capacity-aware placement
+- **Agent pinning**: Pin jobs to specific nodes via `agent_id`
 - **Job updates**: Rolling, recreate, or blue-green deployments
 - **Named ports**: Flexible port allocation per service
 - **Service discovery**: Tags for external load balancers
-- **Health checks**: HTTP-based monitoring with auto-restart
+- **Health checks**: HTTP-based monitoring with auto-restart and initial grace period
 - **Live log streaming**: Real-time stdout/stderr via SSE (no persistence)
-- **Artifact downloads**: HTTP and S3 with flexible auth
-- **Fault tolerance**: Automatic failover on node crashes
+- **Artifact downloads**: HTTP and S3 with extraction support (tar.gz, tar.bz2, zip, raw binary)
+- **Volume mounts**: Host paths symlinked into task directories
+- **Fault tolerance**: Automatic failover on node crashes with settle period
 - **Resource limits**: CPU shares and memory limiting
 - **State persistence**: Jobs survive agent restarts
+- **Process isolation**: Optional chroot (Linux) / sandbox (macOS)
 
 ## Quick Start
 
@@ -22,31 +25,31 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
 ```bash
 go build -o bin/agent ./cmd/agent
-go build -o bin/orch ./cmd/cli
+go build -o bin/easyrun ./cmd/cli
 ```
 
 ### Run Standalone
 
 ```bash
-./bin/agent --standalone --config ./dev-config.yaml
+./bin/agent --standalone --cluster=dev
 ```
 
 ### Deploy Job
 
 ```bash
 # Single instance
-./bin/orch run --name web --command "python app.py"
+./bin/easyrun run --name web --command "python app.py"
 
 # Multiple instances with spreading
-./bin/orch run --name api --command "./server" --count 3
+./bin/easyrun run --name api --command "./server" --count 3
 
-# With ports and tags
-./bin/orch run \
+# With artifact and resource limits
+./bin/easyrun run \
   --name api \
-  --command "./server --http=\$ER_PORT_HTTP --grpc=\$ER_PORT_GRPC" \
-  --ports http,grpc \
-  --tags service=api,env=prod \
-  --count 3
+  --command "./server" \
+  --artifact "s3://bucket/app-v1.2.tar.gz" \
+  --cpu 2000 \
+  --memory 512M
 ```
 
 ### Update Job (Upsert)
@@ -55,38 +58,22 @@ go build -o bin/orch ./cmd/cli
 
 ```bash
 # Update to new version (rolling by default - zero downtime)
-./bin/orch run --name api --command "./server-v2" --count 3
+./bin/easyrun run --name api --command "./server-v2"
 
 # Update with specific policy
-./bin/orch run --name api --command "./server-v2" --count 3 --update-policy recreate
+./bin/easyrun run --name api --command "./server-v2" --update-policy recreate
 
-# Update artifact (blue-green deployment)
-./bin/orch run --name api \
-  --artifact "s3://bucket/app-v2.tar.gz" \
-  --command "./server" \
-  --count 3 \
-  --update-policy blue-green
+# Blue-green deployment
+./bin/easyrun run --name api --command "./server-v2" --update-policy blue-green
 ```
 
 #### Update Policies
 
 | Policy | Downtime | Resources | Use Case |
 |--------|----------|-----------|----------|
-| **rolling** (default) | ❌ None | Normal | Standard updates, zero downtime |
-| **recreate** | ✅ Yes | Minimal | Database migrations, breaking changes |
-| **blue-green** | ❌ None | 2x during switch | Canary testing, instant rollback |
-
-**rolling**: Replaces instances one at a time with 2s delay
-- Maintains count-1 instances during update
-- Safe for stateless services
-
-**recreate**: Stops all instances, then starts new version
-- Fastest update (no waiting)
-- Use when downtime is acceptable
-
-**blue-green**: Starts new version alongside old, then switches
-- Uses 2x resources temporarily
-- Best for testing before full cutover
+| **rolling** (default) | None | Normal | Standard updates, zero downtime |
+| **recreate** | Yes | Minimal | Database migrations, breaking changes |
+| **blue-green** | None | 2x during switch | Canary testing, instant rollback |
 
 ## Architecture
 
@@ -97,39 +84,43 @@ go build -o bin/orch ./cmd/cli
 └─────────┘      └─────────┘      └─────────┘
      │                │                │
      └────────────────┴────────────────┘
-              Heartbeats
+              Heartbeats (10s)
 ```
 
 - **Leader**: Dispatches jobs, monitors agent health, reconciles on changes
 - **Agents**: Run tasks, report status, auto-restart failures
+- **Registration**: Agents register with `placed` counts on startup/leader change
+- **Settle period**: New leader waits 30s before reconciling to let agents register
 - **Deterministic round-robin**: Spreading across nodes (agents sorted by ID)
 - **Capacity-aware**: Agents reject when full, leader tries next
-- **Reconcile-based**: Single code path for daemon dispatch and periodic reconciliation
 
 ## Job Spec
 
 ```json
 {
   "name": "api-service",
-  "command": "./server --http=$ER_PORT_HTTP --grpc=$ER_PORT_GRPC",
+  "command": "./server --http=$ER_PORT_HTTP",
   "count": 3,
-  "ports": {"http": 0, "grpc": 0, "metrics": 0},
+  "agent_id": "",
+  "artifact": {
+    "url": "s3://bucket/app.tar.gz",
+    "extract": "tar.gz",
+    "auth": {"access_key": "...", "secret_key": "...", "region": "eu-west-1"}
+  },
+  "ports": {"http": 0, "grpc": 0},
   "cpu_shares": 2048,
   "memory_limit": 536870912,
-  "env": {
-    "DB_HOST": "postgres.internal"
-  },
-  "tags": {
-    "service": "api",
-    "loadbalancer_domain": "*.example.com"
-  },
+  "env": {"DB_HOST": "postgres.internal"},
+  "tags": {"service": "api", "urlprefix": "urlprefix:*.api.example.com"},
+  "volumes": {"/data/shared": "data"},
   "health_check": {
     "path": "/health",
     "port": "http",
     "interval": "10s",
-    "timeout": "5s"
+    "timeout": "5s",
+    "initial_timeout": "30s"
   },
-  "max_restarts": 5,
+  "max_restarts": 0,
   "update_policy": "rolling"
 }
 ```
@@ -137,202 +128,103 @@ go build -o bin/orch ./cmd/cli
 ### Fields
 
 - **name**: Job identifier (unique key for upsert)
+- **command**: Command to execute (shell syntax supported)
+- **count**: Number of instances (default 1, -1 = all agents)
+- **agent_id**: Pin to specific agent (optional)
 - **artifact**: Binary/assets to download (optional)
   - **url**: Download URL - scheme determines downloader (http://, https://, s3://)
+  - **extract**: Extraction format: `tar.gz`, `tar.bz2`, `zip`, or empty for raw binary (chmod +x)
   - **headers**: HTTP headers map (Authorization, X-API-Key, etc.)
-  - **auth**: Other credentials (S3: access_key/secret_key/region, HTTP helper: username/password)
-- **command**: Command to execute
-- **count**: Number of instances (default: 1, -1 = all agents)
-- **ports**: Port name → fixed port (0 = dynamic) - generates ENV vars `ER_PORT_HTTP`, etc.
+  - **auth**: Credentials (S3: access_key/secret_key/region, HTTP: username/password for Basic Auth)
+- **ports**: Port name -> fixed port (0 = dynamic) - generates ENV vars `ER_PORT_HTTP`, etc.
 - **cpu_shares**: CPU priority (higher = more CPU time)
 - **memory_limit**: Memory limit in bytes
 - **env**: Environment variables
 - **tags**: Labels for service discovery / grouping
-- **health_check**: HTTP health check configuration (optional)
-  - **port**: Named port to check (e.g., "http")
-- **max_restarts**: Max restart attempts (0 = default 5, -1 = unlimited)
-- **update_policy**: How to update job when redeployed (rolling | recreate | blue-green, default: rolling)
-
-## Scheduling
-
-### Multi-instance Spreading
-
-```bash
-# Deploy 3 instances
-orch job run --name web --command "..." --count 3
-
-# Automatic round-robin spreading:
-# - Instance 1 → Agent A
-# - Instance 2 → Agent B
-# - Instance 3 → Agent C
-```
-
-### Capacity Checking
-
-Agents check resources before accepting:
-```
-Leader dispatches → Agent A (full) → 503
-                 → Agent B (space) → 200 ✓
-```
+- **volumes**: Host path -> task path mappings (symlinked into task directory)
+- **health_check**: HTTP health check (optional)
+  - **initial_timeout**: Grace period after start to become healthy (default 30s)
+- **max_restarts**: Max restart attempts (0 = unlimited)
+- **update_policy**: rolling (default), recreate, or blue-green
 
 ## Named Ports
 
 ```json
 {
-  "command": "cloudflared --url http://localhost:$ER_PORT_HTTP --metrics :$ER_PORT_METRICS",
+  "command": "./server --http=:$ER_PORT_HTTP --metrics=:$ER_PORT_METRICS",
   "ports": {"http": 0, "metrics": 0}
 }
 ```
 
 Task gets:
 ```bash
-ER_PORT_HTTP=8080
-ER_PORT_METRICS=9091
+ER_PORT_HTTP=54321
+ER_PORT_METRICS=54322
 ```
 
 **No ports = no ports:** Jobs without `ports` field get no port ENV vars.
 
 ## Artifact Downloads
 
-Jobs can download binaries/assets before starting. URL scheme determines downloader.
+URL scheme determines downloader. `extract` field determines extraction method.
 
-### S3 with credentials
 ```json
-{
-  "artifact": {
-    "url": "s3://mybucket/myapp-v1.2.3.tar.gz",
-    "auth": {
-      "access_key": "AKIAIOSFODNN7EXAMPLE",
-      "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-      "region": "eu-west-1"
-    }
-  },
-  "command": "./myapp"
-}
+{"artifact": {"url": "s3://bucket/app.tar.gz", "extract": "tar.gz"}}
+{"artifact": {"url": "https://example.com/app.zip", "extract": "zip"}}
+{"artifact": {"url": "https://example.com/binary", "extract": ""}}
 ```
 
-### HTTP with custom headers
+Empty `extract` = raw file download with chmod +x (single binary).
+
+## Volume Mounts
+
 ```json
 {
-  "artifact": {
-    "url": "https://artifacts.example.com/app.tar.gz",
-    "headers": {
-      "Authorization": "Bearer token123",
-      "X-API-Key": "secret-key",
-      "X-Tenant-ID": "tenant-123"
-    }
+  "volumes": {
+    "/host/data": "data",
+    "/host/config": "config"
   }
 }
 ```
 
-### HTTP with Basic Auth (helper)
-```json
-{
-  "artifact": {
-    "url": "https://artifacts.example.com/app.zip",
-    "auth": {
-      "username": "deploy",
-      "password": "secret123"
-    }
-  }
-}
-```
-Agent generates: `Authorization: Basic base64(username:password)`
-
-### Public HTTP (no auth)
-```json
-{
-  "artifact": {
-    "url": "https://github.com/user/repo/releases/download/v1.0.0/app.tar.gz"
-  }
-}
-```
-
-**Download process:**
-1. Parse URL scheme (`http://`, `s3://`)
-2. Route to appropriate downloader
-3. Download to task's `/app` directory
-4. Extract .tar.gz
-5. Execute command
+Host paths are symlinked into the task's working directory.
 
 ## Live Log Streaming
 
-**Stream task logs in real-time** (no persistence):
-
 ```bash
 # Via CLI
-orch logs <task-id>                    # stdout
-orch logs <task-id> --stream stderr    # stderr
+./bin/easyrun logs <task-id>                    # stdout
+./bin/easyrun logs <task-id> --stream stderr    # stderr
 
 # Via API
 curl http://agent:8080/logs/{task-id}/stdout
 ```
 
-**SSE format** - live stream only, no storage:
-```
-data: [2025-01-31 12:00:00] Server starting...
-data: [2025-01-31 12:00:01] Listening on :8080
-```
-
-**External logging:**
-```bash
-# Pipe to file
-orch logs abc123 | tee /var/log/app.log
-
-# Forward to Loki/Elasticsearch
-orch logs abc123 | ./log-forwarder --dest loki://...
-```
-
-**KISS:** Easyrun streams logs, external tools handle persistence/aggregation.
-
-## Service Discovery via Tags
-
-```json
-{
-  "name": "api",
-  "ports": {"http": 0},
-  "tags": {
-    "loadbalancer_domain": "*.example.com",
-    "service": "api"
-  }
-}
-```
-
-External tooling queries leader API:
-```bash
-curl http://leader:8080/v1/status | jq '.tasks_by_agent'
-# Generate load balancer config based on tags
-```
+SSE format, live stream only, no storage. Pipe to external tools for persistence.
 
 ## Fault Tolerance
 
 ### Task Failures
 - Agent detects crash
-- Auto-restart locally (up to max_restarts)
-- Health check failures → kill + restart
+- Auto-restart locally (up to max_restarts, 0 = unlimited)
+- Health check failures -> kill + restart
 
 ### Agent Failures
 - Leader detects missing heartbeat (30s timeout)
 - Cleans stale placement entries for dead agent
-- Reconciles all jobs: compares desired vs actual, dispatches missing
-- Count preserved: 3 instances stay 3 instances
+- Reconciles: compares desired vs actual, dispatches missing
+
+### Leader Failover
+- New leader enters settle period (30s)
+- Agents register with placed counts during settle
+- After settle, leader reconciles with accurate placement data
 
 ## Resource Limits
 
-```json
-{
-  "cpu_shares": 2048,
-  "memory_limit": 536870912
-}
-```
+- **CPU shares**: Nice-based priority (higher shares = lower nice = more CPU time)
+- **Memory limit**: Linux cgroups v2, macOS ulimit
 
-### CPU Shares
-- Nice-based priority (Linux/macOS)
-- Higher shares = lower nice = more CPU time
-
-### Memory Limit
-- **Linux**: cgroups v2
-- **macOS**: ulimit
+Capacity-aware: agents have `cpu_cores * 1024` total shares and total system memory. Requests exceeding available resources are rejected (503).
 
 ## Documentation
 
@@ -347,11 +239,11 @@ See `/docs` for details:
 
 ## Design Principles
 
-- **Simplicity over features**
-- **KISS**: Keep It Simple, Stupid
-- **One ProcessRunner** - no separate runner types
-- **States**: running, stopped, failed (details in logs)
-- **Explicit > implicit**: No defaults, WYSIWYG
+- **Simplicity over features** - KISS
+- **One ProcessRunner** with optional limits
+- **States**: running, stopped, failed
+- **Polling over events** - 10s heartbeat, simple and robust
+- **Channel-based state** - Single goroutine owns mutable state
 
 ## License
 
