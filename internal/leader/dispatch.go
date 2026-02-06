@@ -73,28 +73,17 @@ func (l *Leader) dispatchInstances(job *types.Job, count int) error {
 	return nil
 }
 
-// dispatchToAgent dispatches to specific agent (count=-1) or finds one via round-robin (normal count)
-func (l *Leader) dispatchToAgent(agent *types.Agent, job *types.Job) error {
-	if agent == nil {
-		// No specific agent: find one via round-robin
-		return l.dispatchToAvailableAgent(job)
-	}
-
-	// Specific agent: dispatch directly
-	if err := l.sendJobToAgent(agent, job); err != nil {
-		return err
-	}
-
+// trackPlacement records that an agent is running an instance of a job
+func (l *Leader) trackPlacement(agentID, jobID string) {
 	l.do(func(s *leaderState) {
-		if s.placed[agent.ID] == nil {
-			s.placed[agent.ID] = make(map[string]int)
+		if s.placed[agentID] == nil {
+			s.placed[agentID] = make(map[string]int)
 		}
-		s.placed[agent.ID][job.ID]++
+		s.placed[agentID][jobID]++
 	})
-	return nil
 }
 
-// dispatchToAvailableAgent tries agents until one accepts the job AND task is running
+// dispatchToAvailableAgent tries agents until one accepts the job
 func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 	// If job is pinned to specific node, dispatch only to that node
 	if job.AgentID != "" {
@@ -106,7 +95,11 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 			return fmt.Errorf("node %s not found (job %s requires this node)", job.AgentID, job.Name)
 		}
 
-		return l.dispatchToAgent(agent, job)
+		if err := l.sendJobToAgent(agent, job); err != nil {
+			return err
+		}
+		l.trackPlacement(agent.ID, job.ID)
+		return nil
 	}
 
 	// No node constraint, try all agents
@@ -133,12 +126,7 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 			continue
 		}
 
-		l.do(func(s *leaderState) {
-			if s.placed[agent.ID] == nil {
-				s.placed[agent.ID] = make(map[string]int)
-			}
-			s.placed[agent.ID][job.ID]++
-		})
+		l.trackPlacement(agent.ID, job.ID)
 		return nil
 	}
 
@@ -147,10 +135,8 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 
 
 // DeleteJobByID sends delete requests to all agents running instances of this job.
-// Uses placed to find agents, plus GetClusterStatus as safety net for orphaned tasks.
 func (l *Leader) DeleteJobByID(job *types.Job) {
-	// Phase 1: Get agents from placed (atomic read + clear)
-	placedAgents := query(l, func(s *leaderState) []*types.Agent {
+	agents := query(l, func(s *leaderState) []*types.Agent {
 		var result []*types.Agent
 		for agentID, jobs := range s.placed {
 			if jobs[job.ID] > 0 {
@@ -163,47 +149,11 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 		return result
 	})
 
-	// Phase 2: Check cluster status for orphaned tasks not in placed
-	status := l.GetClusterStatus()
-	seen := make(map[string]bool)
-	for _, a := range placedAgents {
-		seen[a.ID] = true
+	for _, agent := range agents {
+		l.deleteTaskOnAgent(agent, job.ID)
 	}
-
-	var extraAgents []*types.Agent
-	for agentID, tasks := range status {
-		if seen[agentID] {
-			continue
-		}
-		for _, task := range tasks {
-			if task.JobID == job.ID {
-				agent := query(l, func(s *leaderState) *types.Agent {
-					return s.agents[agentID]
-				})
-				if agent != nil {
-					extraAgents = append(extraAgents, agent)
-				}
-				break
-			}
-		}
-	}
-
-	// Send delete to union of both sets
-	allAgents := append(placedAgents, extraAgents...)
-	if len(allAgents) > 0 {
-		ctx := context.Background()
-		for _, agent := range allAgents {
-			url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, job.ID)
-			req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
-			if err != nil {
-				log.Printf("Failed to create delete request for agent %s: %v", agent.ID, err)
-				continue
-			}
-			if _, err := l.httpClient.Do(req); err != nil {
-				log.Printf("Failed to delete job %s on agent %s: %v", job.Name, agent.ID, err)
-			}
-		}
-		log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(allAgents))
+	if len(agents) > 0 {
+		log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(agents))
 	}
 
 	l.jobStore.DeleteJob(job.ID)

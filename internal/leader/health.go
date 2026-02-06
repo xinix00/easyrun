@@ -107,12 +107,7 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 			if err := l.sendJobToAgent(agent, job); err != nil {
 				log.Printf("Failed to dispatch daemon %s to %s: %v", job.Name, agent.ID, err)
 			} else {
-				l.do(func(s *leaderState) {
-					if s.placed[agent.ID] == nil {
-						s.placed[agent.ID] = make(map[string]int)
-					}
-					s.placed[agent.ID][job.ID] = 1
-				})
+				l.trackPlacement(agent.ID, job.ID)
 				dispatched++
 			}
 		}
