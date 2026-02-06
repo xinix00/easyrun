@@ -268,6 +268,7 @@ func TestHandleDeleteSuccess(t *testing.T) {
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
 			ID:      "task-1",
+			JobID:   "test-id",
 			JobName: "test",
 			State:   types.TaskRunning,
 		}
@@ -275,7 +276,7 @@ func TestHandleDeleteSuccess(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	req := httptest.NewRequest(http.MethodDelete, "/delete/test", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/delete/test-id", nil)
 	w := httptest.NewRecorder()
 
 	agent.handleDelete(w, req)
@@ -309,7 +310,7 @@ func TestHandleDeleteMethodNotAllowed(t *testing.T) {
 	}
 }
 
-func TestHandleDeleteMissingJobName(t *testing.T) {
+func TestHandleDeleteMissingJobID(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)

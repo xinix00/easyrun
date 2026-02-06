@@ -305,7 +305,9 @@ func TestChaos_RapidJobDeletionAndCreation(t *testing.T) {
 
 	// Rapidly create and delete jobs
 	for i := 0; i < 100; i++ {
+		jobID := fmt.Sprintf("churning-job-id-%d", i)
 		job := &types.Job{
+			ID:      jobID,
 			Name:    "churning-job",
 			Command: fmt.Sprintf("./app-v%d", i),
 		}
@@ -316,7 +318,7 @@ func TestChaos_RapidJobDeletionAndCreation(t *testing.T) {
 		}
 
 		// Immediately delete
-		agent.deleteJob("churning-job")
+		agent.deleteJobByID(jobID)
 	}
 
 	// Agent should be stable

@@ -130,20 +130,20 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// handleDelete deletes a job and cleans up all its tasks
+// handleDelete deletes a job and cleans up all its tasks (by job ID)
 func (a *Agent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	jobName := strings.TrimPrefix(r.URL.Path, "/delete/")
-	if jobName == "" {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job name required"})
+	jobID := strings.TrimPrefix(r.URL.Path, "/delete/")
+	if jobID == "" {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job id required"})
 		return
 	}
 
-	deleted := a.deleteJob(jobName)
+	deleted := a.deleteJobByID(jobID)
 	httputil.WriteJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
 }
 
@@ -273,13 +273,13 @@ func (a *Agent) restartTask(task *types.Task) {
 	log.Printf("Restarted task %s (job %s), restart #%d", task.ID, job.Name, restartCount+1)
 }
 
-// deleteJob removes job definition AND cleans up all tasks (stops running, removes all)
-func (a *Agent) deleteJob(jobName string) int {
+// deleteJobByID removes job definition AND cleans up all tasks by job ID
+func (a *Agent) deleteJobByID(jobID string) int {
 	// Get running tasks to stop
 	tasksToStop := query(a, func(s *agentState) []*types.Task {
 		var tasks []*types.Task
 		for _, task := range s.tasks {
-			if task.JobName == jobName && task.State == types.TaskRunning {
+			if task.JobID == jobID && task.State == types.TaskRunning {
 				tasks = append(tasks, task)
 			}
 		}
@@ -294,19 +294,12 @@ func (a *Agent) deleteJob(jobName string) int {
 	}
 
 	// Remove job and ALL its tasks from state
-	// Jobs are stored by ID, so find by name first then delete by ID
 	deleted := query(a, func(s *agentState) int {
-		// Find and delete job by name (jobs stored by ID)
-		for id, job := range s.jobs {
-			if job.Name == jobName {
-				delete(s.jobs, id)
-				break
-			}
-		}
+		delete(s.jobs, jobID)
 
 		count := 0
 		for id, task := range s.tasks {
-			if task.JobName == jobName {
+			if task.JobID == jobID {
 				delete(s.tasks, id)
 				count++
 			}
@@ -315,7 +308,7 @@ func (a *Agent) deleteJob(jobName string) int {
 	})
 
 	a.scheduleSave()
-	log.Printf("Deleted job %s: %d tasks cleaned up", jobName, deleted)
+	log.Printf("Deleted job %s: %d tasks cleaned up", jobID, deleted)
 	return deleted
 }
 

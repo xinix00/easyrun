@@ -101,17 +101,17 @@ func (l *Leader) stopOneInstance(job *types.Job) {
 	})
 
 	if agent != nil {
-		l.deleteTaskOnAgent(agent, job.Name)
+		l.deleteTaskOnAgent(agent, job.ID)
 	}
 }
 
-// deleteTaskOnAgent deletes a job on specific agent
-func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobName string) {
-	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobName)
+// deleteTaskOnAgent deletes a job on specific agent (by job ID)
+func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobID string) {
+	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobID)
 	req, _ := http.NewRequest(http.MethodDelete, url, nil)
 	resp, err := l.httpClient.Do(req)
 	if err != nil {
-		log.Printf("Failed to delete %s on %s: %v", jobName, agent.ID, err)
+		log.Printf("Failed to delete %s on %s: %v", jobID, agent.ID, err)
 		return
 	}
 	resp.Body.Close()

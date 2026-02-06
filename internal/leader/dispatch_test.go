@@ -137,7 +137,7 @@ func TestLeaderDeleteJobOnMultipleAgents(t *testing.T) {
 	var mu sync.Mutex
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete && r.URL.Path == "/delete/test-job" {
+		if r.Method == http.MethodDelete && r.URL.Path == "/delete/test-job-id" {
 			mu.Lock()
 			deleteCount++
 			mu.Unlock()

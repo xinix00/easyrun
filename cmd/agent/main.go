@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.5.8" // Agent version - placed in RegisterAgent, not heartbeat
+const version = "v0.5.9" // Agent version - placed in RegisterAgent, not heartbeat
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
@@ -121,34 +121,36 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 		log.Printf("Warning: failed to load state: %v", err)
 	}
 
-	var leaderSrv *api.Server
 	var l *leader.Leader
-	var leaderCancel context.CancelFunc // cancels leader goroutines on leadership loss
-	var isLeader bool
+	var leaderCancel context.CancelFunc // non-nil = we are leader
 	var failCount int
-	var registered bool // false on startup → first contact = register with placed counts
+	var registered bool      // false on startup → first contact = register with placed counts
+	var lastLeaderAddr string // cached leader address — fallback when raft is down
 
 	// Main loop: heartbeat to leader, handle leader election
 	go func() {
 		tick := func() {
-			// Always try to find/contact leader
-			leaderAddr := disc.GetLeader()
+			// Use cached leader, only ask raft when unknown
+			leaderAddr := lastLeaderAddr
+			if leaderAddr == "" {
+				leaderAddr = disc.GetLeader()
+			}
 
-			if isLeader {
+			if leaderCancel != nil {
 				// We are leader, renew lease AND send heartbeat to ourselves
 				if !disc.RenewLease() {
-					log.Println("Lost leadership")
-					isLeader = false
-					registered = false // Must re-register with new leader
-					if leaderCancel != nil {
-						leaderCancel() // stops leader stateLoop + checkDeadAgents
+					// Raft unreachable — but are agents still alive?
+					agents := l.GetAgents()
+					if len(agents) > 0 {
+						log.Printf("Raft unreachable but %d agents still connected, staying leader", len(agents))
+					} else {
+						log.Println("Lost leadership (raft unreachable + no agents)")
+						registered = false
+						lastLeaderAddr = ""
+						leaderCancel()
 						leaderCancel = nil
+						l = nil
 					}
-					if leaderSrv != nil {
-						leaderSrv.Stop()
-						leaderSrv = nil
-					}
-					l = nil
 				} else {
 					failCount = 0
 					leaderAddr = fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
@@ -161,10 +163,14 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 					if err := registerAgent(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetPlacedTaskCounts()); err != nil {
 						failCount++
 						log.Printf("Register failed (%d): %v", failCount, err)
+						if failCount >= 3 {
+							lastLeaderAddr = ""
+						}
 					} else {
 						log.Printf("Registered with leader %s", leaderAddr)
 						registered = true
 						failCount = 0
+						lastLeaderAddr = leaderAddr
 					}
 					return
 				}
@@ -176,6 +182,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 						// Leader doesn't know us (new leader?) → re-register next tick
 						log.Printf("Not registered with leader, will re-register...")
 						registered = false
+						lastLeaderAddr = "" // force raft lookup for new leader
 					} else {
 						failCount++
 						log.Printf("Heartbeat failed (%d): %v", failCount, err)
@@ -183,8 +190,9 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 						// After 3 failures, try to become leader
 						if failCount >= 3 {
 							log.Println("Leader seems dead, trying to become leader...")
+							lastLeaderAddr = ""
 							if disc.TryBecomeLeader() {
-								becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader, &leaderCancel)
+								becomeLeader(ctx, cfg, ag, &l, &leaderCancel)
 								failCount = 0
 							}
 							// If we couldn't become leader, failCount keeps incrementing
@@ -192,6 +200,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 					}
 				} else {
 					failCount = 0
+					lastLeaderAddr = leaderAddr
 					// Sync jobs from leader with their state time
 					if len(resp.Jobs) > 0 {
 						ag.SyncJobs(resp.Jobs, resp.StateTime)
@@ -202,7 +211,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				failCount++
 				log.Printf("No leader found (%d), trying to become leader...", failCount)
 				if disc.TryBecomeLeader() {
-					becomeLeader(ctx, cfg, ag, &l, &leaderSrv, &isLeader, &leaderCancel)
+					becomeLeader(ctx, cfg, ag, &l, &leaderCancel)
 					failCount = 0
 				}
 			}
@@ -226,7 +235,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 		for {
 			select {
 			case <-ctx.Done():
-				if isLeader {
+				if leaderCancel != nil {
 					disc.ReleaseLeadership()
 				}
 				return
@@ -242,9 +251,8 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	}
 }
 
-func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, srv **api.Server, isLeader *bool, cancelOut *context.CancelFunc) {
+func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, cancelOut *context.CancelFunc) {
 	log.Println("Became leader!")
-	*isLeader = true
 
 	// Leader gets its own context — cancelled on leadership loss (not just shutdown)
 	leaderCtx, cancel := context.WithCancel(ctx)
@@ -260,9 +268,9 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 
 	// Start API server so other agents can register/heartbeat
 	leaderAddr := fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
-	*srv = api.NewServer(*l, leaderAddr)
+	srv := api.NewServer(*l, leaderAddr)
 	go func() {
-		if err := (*srv).Run(leaderCtx); err != nil {
+		if err := srv.Run(leaderCtx); err != nil {
 			log.Printf("Leader API error: %v", err)
 		}
 	}()

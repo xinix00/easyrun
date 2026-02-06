@@ -156,19 +156,20 @@ func (ma *mockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobName := r.URL.Path[len("/delete/"):]
+	jobID := r.URL.Path[len("/delete/"):]
 
 	ma.mu.Lock()
-	// Remove ONE task with this jobName
 	deleted := 0
-	for i, task := range ma.tasks {
-		if task.JobName == jobName {
-			ma.tasks = append(ma.tasks[:i], ma.tasks[i+1:]...)
-			deleted = 1
-			break
+	filtered := make([]*types.Task, 0, len(ma.tasks))
+	for _, task := range ma.tasks {
+		if task.JobID == jobID {
+			deleted++
+		} else {
+			filtered = append(filtered, task)
 		}
 	}
-	delete(ma.jobs, jobName)
+	ma.tasks = filtered
+	delete(ma.jobs, jobID)
 	ma.mu.Unlock()
 
 	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})

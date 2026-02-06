@@ -176,7 +176,7 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 			continue
 		}
 		for _, task := range tasks {
-			if task.JobName == job.Name {
+			if task.JobID == job.ID {
 				agent := query(l, func(s *leaderState) *types.Agent {
 					return s.agents[agentID]
 				})
@@ -193,7 +193,7 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 	if len(allAgents) > 0 {
 		ctx := context.Background()
 		for _, agent := range allAgents {
-			url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, job.Name)
+			url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, job.ID)
 			req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
 			if err != nil {
 				log.Printf("Failed to create delete request for agent %s: %v", agent.ID, err)

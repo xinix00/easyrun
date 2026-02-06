@@ -115,10 +115,11 @@ func TestAgentDeleteJob(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// Store job and task
-	agent.StoreJob(&types.Job{Name: "test-job", Command: "echo"})
+	agent.StoreJob(&types.Job{ID: "test-job-id", Name: "test-job", Command: "echo"})
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
 			ID:      "task-1",
+			JobID:   "test-job-id",
 			JobName: "test-job",
 			State:   types.TaskRunning,
 		}
@@ -126,14 +127,14 @@ func TestAgentDeleteJob(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	deleted := agent.deleteJob("test-job")
+	deleted := agent.deleteJobByID("test-job-id")
 
 	if deleted != 1 {
-		t.Errorf("deleteJob returned %d, want 1", deleted)
+		t.Errorf("deleteJobByID returned %d, want 1", deleted)
 	}
 
 	// Job should be removed
-	if agent.GetJobByName("test-job") != nil {
+	if agent.GetJob("test-job-id") != nil {
 		t.Error("Job should be removed after delete")
 	}
 }
@@ -208,11 +209,12 @@ func TestAgentDeleteJobWithMultipleTasks(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// One job, multiple tasks
-	agent.StoreJob(&types.Job{Name: "test-job", Command: "echo"})
+	agent.StoreJob(&types.Job{ID: "test-job-id", Name: "test-job", Command: "echo"})
 	agent.do(func(s *agentState) {
 		for i := 0; i < 3; i++ {
 			s.tasks["task-"+string(rune('a'+i))] = &types.Task{
 				ID:      "task-" + string(rune('a'+i)),
+				JobID:   "test-job-id",
 				JobName: "test-job",
 				State:   types.TaskRunning,
 			}
@@ -221,10 +223,10 @@ func TestAgentDeleteJobWithMultipleTasks(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	deleted := agent.deleteJob("test-job")
+	deleted := agent.deleteJobByID("test-job-id")
 
 	if deleted != 3 {
-		t.Errorf("deleteJob returned %d, want 3", deleted)
+		t.Errorf("deleteJobByID returned %d, want 3", deleted)
 	}
 }
 
@@ -239,9 +241,9 @@ func TestAgentDeleteJobNonExistent(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	deleted := agent.deleteJob("nonexistent")
+	deleted := agent.deleteJobByID("nonexistent")
 
 	if deleted != 0 {
-		t.Errorf("deleteJob returned %d, want 0", deleted)
+		t.Errorf("deleteJobByID returned %d, want 0", deleted)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"easyrun/internal/types"
 )
@@ -128,7 +129,7 @@ func extractTar(r io.Reader, destDir string) error {
 		target := filepath.Join(destDir, header.Name)
 
 		// Security: prevent path traversal
-		if !filepath.HasPrefix(target, filepath.Clean(destDir)+string(os.PathSeparator)) {
+		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(os.PathSeparator)) {
 			return fmt.Errorf("illegal file path in tar: %s", header.Name)
 		}
 
@@ -170,7 +171,7 @@ func extractZip(zipPath, destDir string) error {
 		target := filepath.Join(destDir, f.Name)
 
 		// Security: prevent path traversal
-		if !filepath.HasPrefix(target, filepath.Clean(destDir)+string(os.PathSeparator)) {
+		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(destDir)+string(os.PathSeparator)) {
 			return fmt.Errorf("illegal file path in zip: %s", f.Name)
 		}
 

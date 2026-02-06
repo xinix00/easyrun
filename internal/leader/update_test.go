@@ -2,6 +2,12 @@ package leader
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -404,4 +410,209 @@ func TestFindJobByName(t *testing.T) {
 // Helper for creating test context with timeout
 func newTestContext() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 30*time.Second)
+}
+
+// realisticMockAgent simulates real agent behavior: DELETE /delete/{name} kills ALL tasks
+// with that name, not just one. This is how the real agent's deleteJob() works.
+type realisticMockAgent struct {
+	server  *httptest.Server
+	mu      sync.Mutex
+	tasks   []*types.Task
+	taskSeq int
+}
+
+func newRealisticMockAgent() *realisticMockAgent {
+	ma := &realisticMockAgent{}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/run", ma.handleRun)
+	mux.HandleFunc("/tasks", ma.handleTasks)
+	mux.HandleFunc("/delete/", ma.handleDelete)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	ma.server = httptest.NewServer(mux)
+	return ma
+}
+
+func (ma *realisticMockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
+	var job types.Job
+	json.NewDecoder(r.Body).Decode(&job)
+
+	ma.mu.Lock()
+	ma.taskSeq++
+	task := &types.Task{
+		ID:      fmt.Sprintf("task-%d", ma.taskSeq),
+		JobID:   job.ID,
+		JobName: job.Name,
+		State:   types.TaskRunning,
+	}
+	ma.tasks = append(ma.tasks, task)
+	ma.mu.Unlock()
+
+	json.NewEncoder(w).Encode(task)
+}
+
+func (ma *realisticMockAgent) handleTasks(w http.ResponseWriter, r *http.Request) {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	json.NewEncoder(w).Encode(ma.tasks)
+}
+
+func (ma *realisticMockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimPrefix(r.URL.Path, "/delete/")
+
+	ma.mu.Lock()
+	deleted := 0
+	filtered := make([]*types.Task, 0, len(ma.tasks))
+	for _, task := range ma.tasks {
+		if task.JobID == jobID {
+			deleted++
+		} else {
+			filtered = append(filtered, task)
+		}
+	}
+	ma.tasks = filtered
+	ma.mu.Unlock()
+
+	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+}
+
+func (ma *realisticMockAgent) URL() string  { return ma.server.URL }
+func (ma *realisticMockAgent) Close()       { ma.server.Close() }
+func (ma *realisticMockAgent) TaskCount() int {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	return len(ma.tasks)
+}
+func (ma *realisticMockAgent) TasksByJobID(jobID string) int {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	count := 0
+	for _, t := range ma.tasks {
+		if t.JobID == jobID {
+			count++
+		}
+	}
+	return count
+}
+
+// BUG: Rolling update kills new tasks when co-located with old tasks.
+//
+// During rolling update, stopOneInstance sends DELETE /delete/{name} to the agent.
+// The agent's deleteJob() removes ALL tasks matching that name — including the
+// just-deployed new version (same name, different job ID).
+//
+// With 1 agent this is 100% reproducible. With N agents it depends on round-robin landing.
+func TestUpdateRollingDeleteByNameBug(t *testing.T) {
+	oldDelay := RollingUpdateDelay
+	RollingUpdateDelay = 10 * time.Millisecond
+	defer func() { RollingUpdateDelay = oldDelay }()
+
+	// Single agent → old and new tasks always co-located
+	agent := newRealisticMockAgent()
+	defer agent.Close()
+
+	store := NewMockJobStore()
+	l := New("local", store, nil)
+
+	ctx, cancel := newTestContext()
+	defer cancel()
+	go l.Run(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	l.RegisterAgent("agent-1", agent.URL(), "", nil)
+
+	// Deploy v1 with count=1
+	oldJob := &types.Job{
+		ID:      "my-app-v1",
+		Name:    "my-app",
+		Command: "./app-v1",
+		Count:   1,
+	}
+	if err := l.DispatchJob(oldJob); err != nil {
+		t.Fatalf("Dispatch failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if agent.TaskCount() != 1 {
+		t.Fatalf("Expected 1 task before update, got %d", agent.TaskCount())
+	}
+
+	// Rolling update to v2
+	newJob := &types.Job{
+		ID:           "my-app-v2",
+		Name:         "my-app",
+		Command:      "./app-v2",
+		Count:        1,
+		UpdatePolicy: types.UpdateRolling,
+	}
+	l.UpdateJob(newJob)
+	time.Sleep(50 * time.Millisecond)
+
+	// BUG: DELETE /delete/my-app killed BOTH v1 and v2 tasks
+	// Expected: 1 task (v2 surviving), Actual: 0
+	if agent.TaskCount() != 1 {
+		t.Errorf("BUG: Expected 1 task after rolling update, got %d (delete-by-name killed new task too)", agent.TaskCount())
+	}
+	if agent.TasksByJobID("my-app-v2") != 1 {
+		t.Errorf("BUG: Expected 1 v2 task, got %d", agent.TasksByJobID("my-app-v2"))
+	}
+}
+
+// BUG: Blue-green update kills new tasks via same delete-by-name issue.
+//
+// Blue-green dispatches all new instances, then calls DeleteJobByID(old) which
+// sends DELETE /delete/{name} to every agent with old tasks. Since old and new share
+// the same name, the new tasks get killed too.
+func TestUpdateBlueGreenDeleteByNameBug(t *testing.T) {
+	agent := newRealisticMockAgent()
+	defer agent.Close()
+
+	store := NewMockJobStore()
+	l := New("local", store, nil)
+
+	ctx, cancel := newTestContext()
+	defer cancel()
+	go l.Run(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	l.RegisterAgent("agent-1", agent.URL(), "", nil)
+
+	// Deploy v1
+	oldJob := &types.Job{
+		ID:      "my-app-v1",
+		Name:    "my-app",
+		Command: "./app-v1",
+		Count:   1,
+	}
+	if err := l.DispatchJob(oldJob); err != nil {
+		t.Fatalf("Dispatch failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	if agent.TaskCount() != 1 {
+		t.Fatalf("Expected 1 task before update, got %d", agent.TaskCount())
+	}
+
+	// Blue-green update to v2
+	newJob := &types.Job{
+		ID:           "my-app-v2",
+		Name:         "my-app",
+		Command:      "./app-v2",
+		Count:        1,
+		UpdatePolicy: types.UpdateBlueGreen,
+	}
+	l.UpdateJob(newJob)
+	time.Sleep(50 * time.Millisecond)
+
+	// BUG: DeleteJobByID(old) sends DELETE /delete/my-app which kills v2 too
+	// Expected: 1 task (v2), Actual: 0
+	if agent.TaskCount() != 1 {
+		t.Errorf("BUG: Expected 1 task after blue-green, got %d (delete-by-name killed new task too)", agent.TaskCount())
+	}
+	if agent.TasksByJobID("my-app-v2") != 1 {
+		t.Errorf("BUG: Expected 1 v2 task, got %d", agent.TasksByJobID("my-app-v2"))
+	}
 }
