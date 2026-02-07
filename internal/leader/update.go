@@ -47,11 +47,18 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 		count = 1
 	}
 
+	// Remove old job from store immediately so reconcileJobs won't
+	// try to re-dispatch old instances during the rolling update.
+	// We still have the old Job in memory for stopOneInstance.
+	l.jobStore.DeleteJob(old.ID)
+
 	for i := 0; i < count; i++ {
 		log.Printf("Rolling update %d/%d (old ID %s → new ID %s)", i+1, count, old.ID, new.ID)
 
 		// Start new instance first (tracked under new.ID)
 		if err := l.dispatchToAvailableAgent(new); err != nil {
+			// Restore old job — its instances are still running
+			l.jobStore.StoreJob(old)
 			return fmt.Errorf("failed at instance %d/%d: %w", i+1, count, err)
 		}
 
@@ -63,9 +70,8 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 		}
 	}
 
-	// Replace old job with new in store
+	// Store new job definition
 	l.jobStore.StoreJob(new)
-	l.jobStore.DeleteJob(old.ID) // Always delete old - IDs are always different (generated UUIDs)
 	return nil
 }
 
