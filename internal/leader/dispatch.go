@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"sync"
 	"time"
 
 	"easyrun/internal/types"
@@ -139,7 +140,8 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 }
 
 
-// DeleteJobByID sends delete requests to all agents running instances of this job.
+// DeleteJobByID sends delete requests to all agents in parallel, waits for
+// all stops to complete, then reconciles so freed capacity is immediately usable.
 func (l *Leader) DeleteJobByID(job *types.Job) {
 	agents := query(l, func(s *leaderState) []*types.Agent {
 		var result []*types.Agent
@@ -154,14 +156,27 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 		return result
 	})
 
+	// Delete on all agents in parallel (each agent blocks until stops complete)
+	var wg sync.WaitGroup
 	for _, agent := range agents {
-		l.deleteTaskOnAgent(agent, job.ID)
+		wg.Add(1)
+		go func(a *types.Agent) {
+			defer wg.Done()
+			l.deleteTaskOnAgent(a, job.ID)
+		}(agent)
 	}
+	wg.Wait()
+
 	if len(agents) > 0 {
 		log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(agents))
 	}
 
 	l.jobStore.DeleteJob(job.ID)
+
+	// Reconcile immediately — all capacity is freed
+	if len(agents) > 0 {
+		l.reconcileJobs()
+	}
 }
 
 // DeleteJob finds a job by name and deletes it (for API compatibility)

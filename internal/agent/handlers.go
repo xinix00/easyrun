@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
 	"easyrun/internal/runner"
 	"easyrun/internal/types"
@@ -332,19 +333,23 @@ func (a *Agent) deleteJobByID(jobID string) int {
 	})
 	a.scheduleSave()
 
-	// Stop runners in background (docker stop ~10s per container, don't block HTTP response)
-	go func() {
-		for _, task := range tasksToStop {
-			if err := a.runnerFor(task.Driver).Stop(task); err != nil {
-				log.Printf("Failed to stop task %s: %v", task.ID, err)
+	// Stop all runners in parallel (docker stop ~10s, but all at once)
+	var wg sync.WaitGroup
+	for _, task := range tasksToStop {
+		wg.Add(1)
+		go func(t *types.Task) {
+			defer wg.Done()
+			if err := a.runnerFor(t.Driver).Stop(t); err != nil {
+				log.Printf("Failed to stop task %s: %v", t.ID, err)
 			}
 			a.do(func(s *agentState) {
-				delete(s.tasks, task.ID)
+				delete(s.tasks, t.ID)
 			})
-		}
-		a.scheduleSave()
-		log.Printf("Deleted job %s: %d tasks stopped", jobID, len(tasksToStop))
-	}()
+		}(task)
+	}
+	wg.Wait()
+	a.scheduleSave()
+	log.Printf("Deleted job %s: %d tasks stopped", jobID, len(tasksToStop))
 
 	return len(tasksToStop)
 }

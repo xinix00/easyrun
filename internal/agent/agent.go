@@ -436,13 +436,13 @@ func findJobByName(s *agentState, jobName string) *types.Job {
 	return nil
 }
 
-// resourceUsage returns total CPU shares and memory used by running tasks + reservations.
-// Stopping tasks are excluded — OS cgroups enforce actual limits during brief overlap.
+// resourceUsage returns total CPU shares and memory used by running/stopping tasks + reservations.
+// Stopping tasks count because they still consume resources until fully stopped.
 func (s *agentState) resourceUsage() (cpu int, mem uint64) {
 	cpu = s.reservedCPU
 	mem = s.reservedMem
 	for _, task := range s.tasks {
-		if task.State == types.TaskRunning {
+		if task.State == types.TaskRunning || task.State == types.TaskStopping {
 			cpu += task.CPUShares
 			mem += task.MemoryLimit
 		}

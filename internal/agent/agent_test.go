@@ -288,18 +288,12 @@ func TestDeleteJobRemovesTasksBeforeStop(t *testing.T) {
 				t.Fatalf("deleteJobByID returned %d, want 3", deleted)
 			}
 
-			// Tasks should be in stopping state immediately
-			stoppingCount := query(agent, func(s *agentState) int {
-				count := 0
-				for _, t := range s.tasks {
-					if t.State == types.TaskStopping {
-						count++
-					}
-				}
-				return count
+			// deleteJobByID blocks until all stops complete — tasks should be gone
+			remainingTasks := query(agent, func(s *agentState) int {
+				return len(s.tasks)
 			})
-			if stoppingCount != 3 {
-				t.Errorf("Expected 3 stopping tasks, got %d", stoppingCount)
+			if remainingTasks != 0 {
+				t.Errorf("Expected 0 tasks after delete, got %d", remainingTasks)
 			}
 
 			// Job should be gone
@@ -307,11 +301,8 @@ func TestDeleteJobRemovesTasksBeforeStop(t *testing.T) {
 				t.Error("Job should be removed from state after delete")
 			}
 
-			// checkTasks should skip stopping tasks (no restarts)
+			// checkTasks should be a no-op (nothing left)
 			agent.checkTasks()
-
-			// Wait for async stops to complete
-			time.Sleep(50 * time.Millisecond)
 
 			// The correct runner should have been called to stop, not the other
 			runner := mockExec
@@ -329,14 +320,6 @@ func TestDeleteJobRemovesTasksBeforeStop(t *testing.T) {
 				if other.WasStopped(tid) {
 					t.Errorf("Other runner should NOT have stopped %s", tid)
 				}
-			}
-
-			// Tasks should be removed from state after async stop completes
-			remainingTasks := query(agent, func(s *agentState) int {
-				return len(s.tasks)
-			})
-			if remainingTasks != 0 {
-				t.Errorf("Expected 0 tasks after async stop, got %d", remainingTasks)
 			}
 		})
 	}
