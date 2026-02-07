@@ -190,15 +190,18 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Job %s exists (old ID %s), updating to new ID %s (policy=%s)",
 			job.Name, existingJob.ID, job.ID, job.UpdatePolicy)
 
-		if err := s.leader.UpdateJob(&job); err != nil {
-			httputil.WriteError(w, http.StatusServiceUnavailable, err.Error())
-			return
-		}
+		// Fire-and-forget: rolling updates can take seconds per instance
+		jobCopy := job
+		go func() {
+			if err := s.leader.UpdateJob(&jobCopy); err != nil {
+				log.Printf("Update job %s failed: %v", jobCopy.Name, err)
+			}
+		}()
 
-		httputil.WriteJSON(w, http.StatusOK, map[string]string{
+		httputil.WriteJSON(w, http.StatusAccepted, map[string]string{
 			"id":     job.ID,
 			"name":   job.Name,
-			"status": "updated",
+			"status": "updating",
 			"policy": string(job.UpdatePolicy),
 		})
 		return

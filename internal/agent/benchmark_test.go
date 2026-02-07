@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -234,6 +235,7 @@ func BenchmarkConcurrentStateAccess(b *testing.B) {
 
 // Mock runner for benchmarks
 type mockRunner struct {
+	mu    sync.Mutex
 	tasks map[string]*types.Task
 }
 
@@ -248,17 +250,24 @@ func (m *mockRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 		CPUShares:   job.CPUShares,
 		MemoryLimit: job.MemoryLimit,
 	}
+	m.mu.Lock()
 	m.tasks[task.ID] = task
+	m.mu.Unlock()
 	return task, nil
 }
 
 func (m *mockRunner) Stop(task *types.Task) error {
+	m.mu.Lock()
 	delete(m.tasks, task.ID)
+	m.mu.Unlock()
 	return nil
 }
 
 func (m *mockRunner) Status(task *types.Task) (types.TaskState, error) {
-	if t, ok := m.tasks[task.ID]; ok {
+	m.mu.Lock()
+	t, ok := m.tasks[task.ID]
+	m.mu.Unlock()
+	if ok {
 		return t.State, nil
 	}
 	return types.TaskStopped, nil

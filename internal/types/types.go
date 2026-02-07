@@ -6,9 +6,10 @@ import "time"
 type TaskState string
 
 const (
-	TaskRunning TaskState = "running"
-	TaskFailed  TaskState = "failed"
-	TaskStopped TaskState = "stopped"
+	TaskRunning  TaskState = "running"
+	TaskStopping TaskState = "stopping"
+	TaskFailed   TaskState = "failed"
+	TaskStopped  TaskState = "stopped"
 )
 
 // Artifact describes where to download the application binary/assets

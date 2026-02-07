@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -245,5 +246,98 @@ func TestAgentDeleteJobNonExistent(t *testing.T) {
 
 	if deleted != 0 {
 		t.Errorf("deleteJobByID returned %d, want 0", deleted)
+	}
+}
+
+func TestDeleteJobRemovesTasksBeforeStop(t *testing.T) {
+	// Verify that deleteJobByID removes tasks from state immediately,
+	// so checkTasks() won't see them and try to restart during shutdown.
+	// This prevents the race: monitor detects "crashed" tasks while
+	// docker stop is still running on other tasks.
+	for _, driver := range []string{types.DriverExec, types.DriverDocker} {
+		t.Run(driver, func(t *testing.T) {
+			cfg := testConfig()
+			mockExec := NewMockRunner()
+			mockDocker := NewMockRunner()
+
+			agent := New(cfg, "test-agent", mockExec)
+			agent.dockerRunner = mockDocker
+
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			go agent.stateLoop(ctx)
+
+			agent.StoreJob(&types.Job{ID: "job-1", Name: "del-test", Driver: driver, Command: "echo"})
+			agent.do(func(s *agentState) {
+				for i := 0; i < 3; i++ {
+					tid := fmt.Sprintf("task-%d", i)
+					s.tasks[tid] = &types.Task{
+						ID:      tid,
+						JobID:   "job-1",
+						JobName: "del-test",
+						Driver:  driver,
+						State:   types.TaskRunning,
+					}
+				}
+			})
+			time.Sleep(10 * time.Millisecond)
+
+			// Delete the job
+			deleted := agent.deleteJobByID("job-1")
+			if deleted != 3 {
+				t.Fatalf("deleteJobByID returned %d, want 3", deleted)
+			}
+
+			// Tasks should be in stopping state immediately
+			stoppingCount := query(agent, func(s *agentState) int {
+				count := 0
+				for _, t := range s.tasks {
+					if t.State == types.TaskStopping {
+						count++
+					}
+				}
+				return count
+			})
+			if stoppingCount != 3 {
+				t.Errorf("Expected 3 stopping tasks, got %d", stoppingCount)
+			}
+
+			// Job should be gone
+			if agent.GetJob("job-1") != nil {
+				t.Error("Job should be removed from state after delete")
+			}
+
+			// checkTasks should skip stopping tasks (no restarts)
+			agent.checkTasks()
+
+			// Wait for async stops to complete
+			time.Sleep(50 * time.Millisecond)
+
+			// The correct runner should have been called to stop, not the other
+			runner := mockExec
+			other := mockDocker
+			if driver == types.DriverDocker {
+				runner = mockDocker
+				other = mockExec
+			}
+
+			for i := 0; i < 3; i++ {
+				tid := fmt.Sprintf("task-%d", i)
+				if !runner.WasStopped(tid) {
+					t.Errorf("Runner should have stopped %s", tid)
+				}
+				if other.WasStopped(tid) {
+					t.Errorf("Other runner should NOT have stopped %s", tid)
+				}
+			}
+
+			// Tasks should be removed from state after async stop completes
+			remainingTasks := query(agent, func(s *agentState) int {
+				return len(s.tasks)
+			})
+			if remainingTasks != 0 {
+				t.Errorf("Expected 0 tasks after async stop, got %d", remainingTasks)
+			}
+		})
 	}
 }

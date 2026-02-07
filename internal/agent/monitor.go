@@ -87,14 +87,16 @@ func (a *Agent) checkTasks() {
 			if !a.checkHealth(task, job.HealthCheck) {
 				log.Printf("Task %s failed health check", task.ID)
 
-				// Stop and restart
-				a.runnerFor(task.Driver).Stop(task)
+				// Update state first, then stop async (runner.Stop can be slow)
 				a.do(func(s *agentState) {
 					if t := s.tasks[task.ID]; t != nil {
 						t.State = types.TaskFailed
 					}
 				})
-				go a.restartTask(task)
+				go func() {
+					a.runnerFor(task.Driver).Stop(task)
+					a.restartTask(task)
+				}()
 			}
 		}
 	}

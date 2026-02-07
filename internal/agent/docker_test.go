@@ -285,6 +285,7 @@ func TestDeleteDockerJob(t *testing.T) {
 	if deleted != 1 {
 		t.Errorf("deleteJobByID returned %d, want 1", deleted)
 	}
+	time.Sleep(50 * time.Millisecond) // wait for async stop goroutine
 
 	// Docker runner should have been called for stop
 	if !mockDocker.WasStopped("docker-task-1") {

@@ -318,41 +318,35 @@ func (a *Agent) restartTask(task *types.Task) {
 
 // deleteJobByID removes job definition AND cleans up all tasks by job ID
 func (a *Agent) deleteJobByID(jobID string) int {
-	// Get running tasks to stop
+	// Remove job, mark tasks as stopping (prevents monitor from restarting)
 	tasksToStop := query(a, func(s *agentState) []*types.Task {
+		delete(s.jobs, jobID)
 		var tasks []*types.Task
 		for _, task := range s.tasks {
-			if task.JobID == jobID && task.State == types.TaskRunning {
+			if task.JobID == jobID {
+				task.State = types.TaskStopping
 				tasks = append(tasks, task)
 			}
 		}
 		return tasks
 	})
-
-	// Stop running tasks outside of state loop (runner.Stop can block)
-	for _, task := range tasksToStop {
-		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
-			log.Printf("Failed to stop task %s: %v", task.ID, err)
-		}
-	}
-
-	// Remove job and ALL its tasks from state
-	deleted := query(a, func(s *agentState) int {
-		delete(s.jobs, jobID)
-
-		count := 0
-		for id, task := range s.tasks {
-			if task.JobID == jobID {
-				delete(s.tasks, id)
-				count++
-			}
-		}
-		return count
-	})
-
 	a.scheduleSave()
-	log.Printf("Deleted job %s: %d tasks cleaned up", jobID, deleted)
-	return deleted
+
+	// Stop runners in background (docker stop ~10s per container, don't block HTTP response)
+	go func() {
+		for _, task := range tasksToStop {
+			if err := a.runnerFor(task.Driver).Stop(task); err != nil {
+				log.Printf("Failed to stop task %s: %v", task.ID, err)
+			}
+			a.do(func(s *agentState) {
+				delete(s.tasks, task.ID)
+			})
+		}
+		a.scheduleSave()
+		log.Printf("Deleted job %s: %d tasks stopped", jobID, len(tasksToStop))
+	}()
+
+	return len(tasksToStop)
 }
 
 // handleLogs streams task logs (stdout or stderr)

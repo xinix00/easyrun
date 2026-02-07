@@ -203,6 +203,7 @@ func (a *Agent) StopAllTasks() {
 		var running []*types.Task
 		for _, task := range s.tasks {
 			if task.State == types.TaskRunning {
+				task.State = types.TaskStopping
 				running = append(running, task)
 			}
 		}
@@ -237,18 +238,18 @@ func (a *Agent) shutdown() {
 	defer cancel()
 	a.server.Shutdown(ctx)
 
-	// Get running tasks
+	// Mark running tasks as stopping, then stop them
 	tasks := query(a, func(s *agentState) []*types.Task {
 		var running []*types.Task
 		for _, task := range s.tasks {
 			if task.State == types.TaskRunning {
+				task.State = types.TaskStopping
 				running = append(running, task)
 			}
 		}
 		return running
 	})
 
-	// Stop them
 	for _, task := range tasks {
 		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
 			log.Printf("Failed to stop task %s: %v", task.ID, err)
@@ -435,7 +436,8 @@ func findJobByName(s *agentState, jobName string) *types.Job {
 	return nil
 }
 
-// resourceUsage returns total CPU shares and memory used by running tasks + reservations
+// resourceUsage returns total CPU shares and memory used by running tasks + reservations.
+// Stopping tasks are excluded — OS cgroups enforce actual limits during brief overlap.
 func (s *agentState) resourceUsage() (cpu int, mem uint64) {
 	cpu = s.reservedCPU
 	mem = s.reservedMem
