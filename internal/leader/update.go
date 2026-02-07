@@ -1,7 +1,6 @@
 package leader
 
 import (
-	"context"
 	"fmt"
 	"log"
 	"net/http"
@@ -9,8 +8,6 @@ import (
 
 	"easyrun/internal/types"
 )
-
-const deleteTimeout = 30 * time.Second
 
 var (
 	// RollingUpdateDelay can be overridden in tests for faster execution
@@ -107,13 +104,10 @@ func (l *Leader) stopOneInstance(job *types.Job) {
 	}
 }
 
-// deleteTaskOnAgent deletes a job on specific agent (by job ID).
-// Uses longer timeout because agent blocks until all container stops complete.
+// deleteTaskOnAgent deletes a job on specific agent (by job ID)
 func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobID string) {
 	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobID)
-	ctx, cancel := context.WithTimeout(context.Background(), deleteTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url, nil)
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
 	if err != nil {
 		log.Printf("Failed to create delete request for %s on %s: %v", jobID, agent.ID, err)
 		return

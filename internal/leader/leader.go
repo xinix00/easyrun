@@ -17,8 +17,9 @@ const (
 )
 
 var (
-	// HTTPClientTimeout can be overridden in tests for faster execution
-	HTTPClientTimeout = 5 * time.Second
+	// HTTPClientTimeout can be overridden in tests for faster execution.
+	// 60s covers Docker stop (~10s SIGTERM + 10s SIGKILL worst case) with margin.
+	HTTPClientTimeout = 60 * time.Second
 )
 
 // JobStore is the interface for accessing jobs (implemented by Agent)
