@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -197,37 +198,47 @@ func (a *Agent) Run(ctx context.Context) error {
 	return nil
 }
 
-// StopAllTasks stops all running tasks and removes them from state (used when agent is isolated)
-func (a *Agent) StopAllTasks() {
-	tasks := query(a, func(s *agentState) []*types.Task {
-		var running []*types.Task
-		for _, task := range s.tasks {
-			if task.State == types.TaskRunning {
-				task.State = types.TaskStopping
-				running = append(running, task)
-			}
-		}
-		return running
-	})
-
+// stopTasks stops tasks in parallel, removes from state, and blocks until done.
+func (a *Agent) stopTasks(tasks []*types.Task) {
 	if len(tasks) == 0 {
 		return
 	}
-
+	var wg sync.WaitGroup
 	for _, task := range tasks {
-		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
-			log.Printf("Failed to stop task %s: %v", task.ID, err)
+		wg.Add(1)
+		go func(t *types.Task) {
+			defer wg.Done()
+			if err := a.runnerFor(t.Driver).Stop(t); err != nil {
+				log.Printf("Failed to stop task %s: %v", t.ID, err)
+			}
+			a.do(func(s *agentState) {
+				delete(s.tasks, t.ID)
+			})
+		}(task)
+	}
+	wg.Wait()
+	a.scheduleSave()
+}
+
+// markRunningAsStopping returns all running tasks after marking them as stopping.
+func markRunningAsStopping(s *agentState) []*types.Task {
+	var tasks []*types.Task
+	for _, task := range s.tasks {
+		if task.State == types.TaskRunning {
+			task.State = types.TaskStopping
+			tasks = append(tasks, task)
 		}
 	}
+	return tasks
+}
 
-	a.do(func(s *agentState) {
-		for _, task := range tasks {
-			delete(s.tasks, task.ID)
-		}
-	})
-	a.scheduleSave()
-
-	log.Printf("Isolation mode: stopped and removed %d tasks", len(tasks))
+// StopAllTasks stops all running tasks and removes them from state (used when agent is isolated)
+func (a *Agent) StopAllTasks() {
+	tasks := query(a, func(s *agentState) []*types.Task { return markRunningAsStopping(s) })
+	a.stopTasks(tasks)
+	if len(tasks) > 0 {
+		log.Printf("Isolation mode: stopped and removed %d tasks", len(tasks))
+	}
 }
 
 // shutdown gracefully stops all tasks
@@ -238,23 +249,8 @@ func (a *Agent) shutdown() {
 	defer cancel()
 	a.server.Shutdown(ctx)
 
-	// Mark running tasks as stopping, then stop them
-	tasks := query(a, func(s *agentState) []*types.Task {
-		var running []*types.Task
-		for _, task := range s.tasks {
-			if task.State == types.TaskRunning {
-				task.State = types.TaskStopping
-				running = append(running, task)
-			}
-		}
-		return running
-	})
-
-	for _, task := range tasks {
-		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
-			log.Printf("Failed to stop task %s: %v", task.ID, err)
-		}
-	}
+	tasks := query(a, func(s *agentState) []*types.Task { return markRunningAsStopping(s) })
+	a.stopTasks(tasks)
 }
 
 // corsMiddleware adds CORS headers for browser access
