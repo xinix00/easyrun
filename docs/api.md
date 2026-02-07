@@ -164,15 +164,17 @@ curl -X POST http://localhost:9080/v1/jobs \
 
 **Fields:**
 - `name` (string, **required**): Job name — **unique key for upsert**
+- `driver` (string): `"exec"` (default) or `"docker"` — auto-derived from `image` if not set
+- `image` (string): Docker image (sets driver to `"docker"` automatically)
 - `agent_id` (string): Pin to specific agent (optional)
 - `artifact` (object): Binary/assets to download (optional)
   - `url` (string): URL with scheme — determines downloader (http://, s3://)
   - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
   - `auth` (map): Credentials (S3: access_key/secret_key/region, HTTP: username/password)
   - `extract` (string): Archive type — `tar.gz`, `tar.bz2`, `zip`, or `""` (raw binary, auto chmod +x)
-- `command` (string, **required**): Command to execute
+- `command` (string): Command to execute (required for process jobs, optional for Docker — overrides CMD)
 - `count` (int): Number of instances (default 1, -1 = all agents)
-- `ports` (map): Port name → fixed port (0 = dynamic). ENV vars `ER_PORT_<NAME>`
+- `ports` (map): Process: port name → host port (0=dynamic). Docker: port name → container port (host always dynamic). ENV vars `ER_PORT_<NAME>`
 - `cpu_shares` (int): CPU priority (nice-based)
 - `memory_limit` (uint64): Memory limit in bytes
 - `env` (map): Environment variables

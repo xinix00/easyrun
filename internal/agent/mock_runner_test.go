@@ -61,6 +61,8 @@ func (m *MockRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 		ID:          taskID,
 		JobID:       job.ID,
 		JobName:     job.Name,
+		Driver:      types.DriverFor(job.Image),
+		Image:       job.Image,
 		Ports:       ports,
 		Pid:         m.nextPid,
 		State:       types.TaskRunning,

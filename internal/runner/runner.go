@@ -1,8 +1,29 @@
 package runner
 
 import (
+	"fmt"
+	"strings"
+
 	"easyrun/internal/types"
 )
+
+// PortEnvVars builds ER_PORT_<NAME>=<port> environment variables for all ports
+func PortEnvVars(ports map[string]int) []string {
+	vars := make([]string, 0, len(ports))
+	for name, port := range ports {
+		upper := strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' {
+				return r - 32
+			}
+			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				return r
+			}
+			return '_'
+		}, name)
+		vars = append(vars, fmt.Sprintf("ER_PORT_%s=%d", upper, port))
+	}
+	return vars
+}
 
 // Runner interface for executing jobs
 type Runner interface {

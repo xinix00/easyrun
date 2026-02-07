@@ -31,7 +31,7 @@ func TestSetupCommandWithIsolation(t *testing.T) {
 		Isolate:    true,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-job",
 		Command: "echo hello",
@@ -72,7 +72,7 @@ func TestSetupCommandWithoutIsolation(t *testing.T) {
 		Isolate:    false,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-job",
 		Command: "echo hello",
@@ -98,7 +98,7 @@ func TestRunnerRunWithIsolation(t *testing.T) {
 		Isolate:    true,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-isolated",
 		Command: "echo isolated",
@@ -128,7 +128,7 @@ func TestRunnerRunWithoutIsolation(t *testing.T) {
 		Isolate:    false,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-no-isolation",
 		Command: "echo not isolated",
@@ -163,7 +163,7 @@ func TestIsolationWithVolumes(t *testing.T) {
 		Isolate:    true,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-volumes",
 		Command: "cat /data/test.txt",
@@ -191,7 +191,7 @@ func TestIsolationWithEnvVars(t *testing.T) {
 		Isolate:    true,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-env",
 		Command: "echo $MY_VAR",
@@ -223,13 +223,13 @@ func TestIsolationWithPorts(t *testing.T) {
 		Isolate:    true,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-ports",
 		Command: "echo $ER_PORT_HTTP",
 	}
 
-	portEnvVars := runner.buildPortEnvVars(map[string]int{
+	portEnvVars := PortEnvVars(map[string]int{
 		"http": 8080,
 		"grpc": 9090,
 	})
@@ -266,7 +266,7 @@ func TestSandboxProfileGeneration(t *testing.T) {
 		Isolate:    true,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-sandbox",
 		Command: "echo test",
@@ -295,7 +295,7 @@ func TestIsolatedProcessCannotAccessRoot(t *testing.T) {
 		Isolate:    true,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 
 	// Try to read /etc/passwd - should fail in isolated mode
 	job := &types.Job{
@@ -339,7 +339,7 @@ func TestCleanupRemovesTaskDir(t *testing.T) {
 		Isolate:    true,
 	}
 
-	runner := NewProcessRunner(cfg)
+	runner := NewExecRunner(cfg)
 	job := &types.Job{
 		Name:    "test-cleanup",
 		Command: "sleep 10",

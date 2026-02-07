@@ -25,8 +25,8 @@ const (
 	maxNiceValue            = 19
 )
 
-// ProcessRunner runs processes with optional isolation
-type ProcessRunner struct {
+// ExecRunner runs processes with optional isolation
+type ExecRunner struct {
 	config    *Config
 	processes map[string]*exec.Cmd
 	taskDirs  map[string]string // taskID -> work directory
@@ -35,9 +35,9 @@ type ProcessRunner struct {
 	mu        sync.RWMutex
 }
 
-// NewProcessRunner creates a new process runner
-func NewProcessRunner(config *Config) *ProcessRunner {
-	return &ProcessRunner{
+// NewExecRunner creates a new process runner
+func NewExecRunner(config *Config) *ExecRunner {
+	return &ExecRunner{
 		config:    config,
 		processes: make(map[string]*exec.Cmd),
 		taskDirs:  make(map[string]string),
@@ -47,7 +47,7 @@ func NewProcessRunner(config *Config) *ProcessRunner {
 }
 
 // Run starts a job
-func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
+func (r *ExecRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
 	if job.Command == "" {
 		return nil, errors.New("command is required")
 	}
@@ -70,7 +70,7 @@ func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, 
 	}
 
 	// Build port environment variables
-	portEnvVars := r.buildPortEnvVars(ports)
+	portEnvVars := PortEnvVars(ports)
 
 	// Setup command with platform-specific isolation
 	cmd := r.setupCommand(job, taskDir, portEnvVars)
@@ -120,6 +120,7 @@ func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, 
 		ID:          taskID,
 		JobID:       job.ID,
 		JobName:     job.Name,
+		Driver:      types.DriverExec,
 		Ports:       ports,
 		Pid:         cmd.Process.Pid,
 		State:       types.TaskRunning,
@@ -129,32 +130,8 @@ func (r *ProcessRunner) Run(job *types.Job, ports map[string]int) (*types.Task, 
 	}, nil
 }
 
-// buildPortEnvVars creates environment variables for all ports
-func (r *ProcessRunner) buildPortEnvVars(ports map[string]int) []string {
-	var envVars []string
-
-	// Set ER_PORT_<NAME> for each named port (uppercase)
-	for name, port := range ports {
-		upperName := ""
-		for _, c := range name {
-			if c >= 'a' && c <= 'z' {
-				upperName += string(c - 32)
-			} else if c >= 'A' && c <= 'Z' {
-				upperName += string(c)
-			} else if c >= '0' && c <= '9' {
-				upperName += string(c)
-			} else {
-				upperName += "_"
-			}
-		}
-		envVars = append(envVars, fmt.Sprintf("ER_PORT_%s=%d", upperName, port))
-	}
-
-	return envVars
-}
-
 // Stop stops a running task
-func (r *ProcessRunner) Stop(task *types.Task) error {
+func (r *ExecRunner) Stop(task *types.Task) error {
 	r.mu.Lock()
 	cmd, ok := r.processes[task.ID]
 	if ok {
@@ -208,7 +185,7 @@ func (r *ProcessRunner) Stop(task *types.Task) error {
 }
 
 // Status returns the current state of a task
-func (r *ProcessRunner) Status(task *types.Task) (types.TaskState, error) {
+func (r *ExecRunner) Status(task *types.Task) (types.TaskState, error) {
 	r.mu.RLock()
 	cmd, ok := r.processes[task.ID]
 	r.mu.RUnlock()
@@ -243,7 +220,7 @@ func (r *ProcessRunner) Status(task *types.Task) (types.TaskState, error) {
 }
 
 // applyLimits applies resource limits if set on the job
-func (r *ProcessRunner) applyLimits(pid int, job *types.Job) {
+func (r *ExecRunner) applyLimits(pid int, job *types.Job) {
 	if job.CPUShares > 0 {
 		r.applyNice(pid, job.CPUShares)
 	}
@@ -253,7 +230,7 @@ func (r *ProcessRunner) applyLimits(pid int, job *types.Job) {
 }
 
 // applyNice sets process priority based on CPU shares
-func (r *ProcessRunner) applyNice(pid int, cpuShares int) {
+func (r *ExecRunner) applyNice(pid int, cpuShares int) {
 	maxShares := r.config.MaxCPUShares
 	if maxShares <= 0 {
 		maxShares = defaultMaxCPUShares
@@ -274,7 +251,7 @@ func (r *ProcessRunner) applyNice(pid int, cpuShares int) {
 }
 
 // setupTaskDir creates an isolated directory for the task
-func (r *ProcessRunner) setupTaskDir(taskID string, job *types.Job) (string, error) {
+func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error) {
 	// Base directory for all tasks
 	base := r.config.RootfsBase
 	if base == "" {
@@ -326,7 +303,7 @@ func (r *ProcessRunner) setupTaskDir(taskID string, job *types.Job) (string, err
 }
 
 // setupIsolationEnv creates symlinks for minimal shell environment (Linux chroot)
-func (r *ProcessRunner) setupIsolationEnv(taskDir string) {
+func (r *ExecRunner) setupIsolationEnv(taskDir string) {
 	// Create directories
 	dirs := []string{
 		filepath.Join(taskDir, "bin"),
@@ -350,7 +327,7 @@ func (r *ProcessRunner) setupIsolationEnv(taskDir string) {
 }
 
 // cleanupTaskDir removes the task directory
-func (r *ProcessRunner) cleanupTaskDir(taskID string) {
+func (r *ExecRunner) cleanupTaskDir(taskID string) {
 	r.mu.Lock()
 	taskDir, ok := r.taskDirs[taskID]
 	if ok {
@@ -373,21 +350,21 @@ func (r *ProcessRunner) cleanupTaskDir(taskID string) {
 }
 
 // GetStdout returns the stdout broadcaster for a task
-func (r *ProcessRunner) GetStdout(taskID string) *LogBroadcaster {
+func (r *ExecRunner) GetStdout(taskID string) *LogBroadcaster {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.stdoutLog[taskID]
 }
 
 // GetStderr returns the stderr broadcaster for a task
-func (r *ProcessRunner) GetStderr(taskID string) *LogBroadcaster {
+func (r *ExecRunner) GetStderr(taskID string) *LogBroadcaster {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.stderrLog[taskID]
 }
 
 // Cleanup removes all task directories (called at startup)
-func (r *ProcessRunner) Cleanup() error {
+func (r *ExecRunner) Cleanup() error {
 	base := r.config.RootfsBase
 	if base == "" {
 		base = "/tmp/easyrun"
@@ -399,7 +376,7 @@ func (r *ProcessRunner) Cleanup() error {
 }
 
 // copyFile copies a file from src to dst
-func (r *ProcessRunner) copyFile(src, dst string) error {
+func (r *ExecRunner) copyFile(src, dst string) error {
 	srcFile, err := os.Open(src)
 	if err != nil {
 		return err

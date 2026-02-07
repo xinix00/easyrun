@@ -77,13 +77,10 @@ type CapacityResponse struct {
 // handleCapacity returns detected system capacity with actual usage from running tasks
 func (a *Agent) handleCapacity(w http.ResponseWriter, r *http.Request) {
 	usage := query(a, func(s *agentState) CapacityResponse {
-		cpuUsed := s.reservedCPU
-		memUsed := s.reservedMem
+		cpuUsed, memUsed := s.resourceUsage()
 		var running int
 		for _, task := range s.tasks {
 			if task.State == types.TaskRunning {
-				cpuUsed += task.CPUShares
-				memUsed += task.MemoryLimit
 				running++
 			}
 		}
@@ -125,14 +122,7 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// Check capacity AND reserve atomically (prevents TOCTOU race)
 	reserved := query(a, func(s *agentState) bool {
-		usedCPU := s.reservedCPU
-		usedMem := s.reservedMem
-		for _, task := range s.tasks {
-			if task.State == types.TaskRunning {
-				usedCPU += task.CPUShares
-				usedMem += task.MemoryLimit
-			}
-		}
+		usedCPU, usedMem := s.resourceUsage()
 		if job.CPUShares > 0 && usedCPU+job.CPUShares > a.sysInfo.CPUCores*1024 {
 			return false
 		}
@@ -199,12 +189,17 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 		job.ID = uuid.New().String()
 	}
 
-	ports, err := allocatePorts(job.Ports)
+	// Derive driver from image if not set
+	if job.Driver == "" {
+		job.Driver = types.DriverFor(job.Image)
+	}
+
+	ports, err := a.allocatePortsForJob(job)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate ports: %w", err)
 	}
 
-	task, err := a.runner.Run(job, ports)
+	task, err := a.runnerFor(job.Driver).Run(job, ports)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start: %w", err)
 	}
@@ -288,15 +283,15 @@ func (a *Agent) restartTask(task *types.Task) {
 	}
 
 	// Clean up old runner entries (process already dead, this just removes maps + task dir)
-	a.runner.Stop(task)
+	a.runnerFor(task.Driver).Stop(task)
 
-	ports, err := allocatePorts(job.Ports)
+	ports, err := a.allocatePortsForJob(job)
 	if err != nil {
 		log.Printf("Failed to allocate ports for restart: %v", err)
 		return
 	}
 
-	newTask, err := a.runner.Run(job, ports)
+	newTask, err := a.runnerFor(job.Driver).Run(job, ports)
 	if err != nil {
 		log.Printf("Failed to restart task %s: %v", task.ID, err)
 		a.do(func(s *agentState) {
@@ -336,7 +331,7 @@ func (a *Agent) deleteJobByID(jobID string) int {
 
 	// Stop running tasks outside of state loop (runner.Stop can block)
 	for _, task := range tasksToStop {
-		if err := a.runner.Stop(task); err != nil {
+		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
 			log.Printf("Failed to stop task %s: %v", task.ID, err)
 		}
 	}
@@ -371,15 +366,19 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 	taskID := parts[0]
 	stream := parts[1]
 
-	var broadcaster *runner.LogBroadcaster
+	var get func(runner.Runner) *runner.LogBroadcaster
 	switch stream {
 	case "stdout":
-		broadcaster = a.runner.GetStdout(taskID)
+		get = func(r runner.Runner) *runner.LogBroadcaster { return r.GetStdout(taskID) }
 	case "stderr":
-		broadcaster = a.runner.GetStderr(taskID)
+		get = func(r runner.Runner) *runner.LogBroadcaster { return r.GetStderr(taskID) }
 	default:
 		http.Error(w, "stream must be stdout or stderr", http.StatusBadRequest)
 		return
+	}
+	broadcaster := get(a.execRunner)
+	if broadcaster == nil {
+		broadcaster = get(a.dockerRunner)
 	}
 
 	if broadcaster == nil {

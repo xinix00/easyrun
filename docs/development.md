@@ -59,6 +59,7 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
         process.go         # Process runner (start, stop, status, limits, volumes)
         process_linux.go   # Linux: cgroups, chroot
         process_darwin.go  # macOS: ulimit, sandbox
+        docker.go          # Docker runner (via docker CLI, no SDK)
         download.go        # Artifact download router + extraction (tar.gz, tar.bz2, zip)
         download_http.go   # HTTP/HTTPS downloader
         download_s3.go     # S3 downloader

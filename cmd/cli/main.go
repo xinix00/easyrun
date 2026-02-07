@@ -53,7 +53,8 @@ func runCommand() *cli.Command {
 		Usage: "Run or update a job (upsert based on name)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Required: true},
-			&cli.StringFlag{Name: "command", Required: true},
+			&cli.StringFlag{Name: "command", Usage: "Command to run (required for process jobs)"},
+			&cli.StringFlag{Name: "image", Usage: "Docker image (uses Docker instead of process)"},
 			&cli.StringFlag{Name: "artifact", Usage: "Artifact URL"},
 			&cli.IntFlag{Name: "cpu", Usage: "CPU shares"},
 			&cli.StringFlag{Name: "memory", Usage: "Memory limit (e.g., 512M, 1G)"},
@@ -94,8 +95,13 @@ func runJob(c *cli.Context) error {
 	job := types.Job{
 		Name:         c.String("name"),
 		Command:      c.String("command"),
+		Image:        c.String("image"),
 		CPUShares:    c.Int("cpu"),
 		UpdatePolicy: types.UpdatePolicy(c.String("update-policy")),
+	}
+
+	if job.Command == "" && job.Image == "" {
+		return fmt.Errorf("either --command or --image is required")
 	}
 
 	if artifact := c.String("artifact"); artifact != "" {

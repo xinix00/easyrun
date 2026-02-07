@@ -39,7 +39,7 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 **Same command for deploy and update** — detects automatically based on job name:
 
 ```bash
-# Deploy initial version
+# Deploy process job
 ./bin/easyrun run \
     --name api \
     --command "./api-binary" \
@@ -57,6 +57,10 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 
 # Output (UPDATE):
 # Job 'api' updated (ID def456, policy=rolling)
+
+# Deploy Docker container
+./bin/easyrun run --name redis --image redis:7
+./bin/easyrun run --name my-app --image myapp:v2 --command "python serve.py"
 ```
 
 ### Run Flags
@@ -64,12 +68,15 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 | Flag | Description |
 |------|-------------|
 | `--name` | Job name (required, unique key for upsert) |
-| `--command` | Command to execute (required) |
+| `--command` | Command to execute (required for process jobs, optional for Docker) |
+| `--image` | Docker image (uses Docker instead of process) |
 | `--artifact` | Artifact URL to download |
 | `--cpu` | CPU shares |
 | `--memory` | Memory limit (e.g., 512M, 1G) |
 | `--env` | Environment variables (KEY=VALUE, repeatable) |
 | `--update-policy` | Update policy: rolling (default), recreate, or blue-green |
+
+Either `--command` or `--image` (or both) is required.
 
 ### Update Policies
 

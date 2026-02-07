@@ -42,15 +42,31 @@ const (
 	UpdateBlueGreen UpdatePolicy = "blue-green"
 )
 
+// Driver identifies which runner executes a job/task
+const (
+	DriverExec   = "exec"
+	DriverDocker = "docker"
+)
+
+// DriverFor returns the driver for a given image (empty = exec, non-empty = docker)
+func DriverFor(image string) string {
+	if image != "" {
+		return DriverDocker
+	}
+	return DriverExec
+}
+
 // Job defines what the user wants to run
 type Job struct {
 	ID           string            `json:"id,omitempty"`       // unique ID (generated)
 	Name         string            `json:"name"`               // user-facing name (for upsert)
 	AgentID      string            `json:"agent_id,omitempty"` // pin to specific agent
+	Driver       string            `json:"driver,omitempty"`   // "exec" (default) or "docker"
+	Image        string            `json:"image,omitempty"`    // Docker image (only for driver=docker)
 	Artifact     *Artifact         `json:"artifact,omitempty"` // binary/assets to download
-	Command      string            `json:"command"`
-	Count        int               `json:"count,omitempty"` // number of instances (default 1)
-	Ports        map[string]int    `json:"ports,omitempty"` // port name -> fixed port (0 = dynamic)
+	Command      string            `json:"command,omitempty"`
+	Count        int               `json:"count,omitempty"`          // number of instances (default 1)
+	Ports        map[string]int    `json:"ports,omitempty"`          // process: port name -> host port (0 = dynamic), docker: port name -> container port
 	CPUShares    int               `json:"cpu_shares,omitempty"`
 	MemoryLimit  uint64            `json:"memory_limit,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
@@ -66,7 +82,9 @@ type Task struct {
 	ID           string         `json:"id"`
 	JobID        string         `json:"job_id"`
 	JobName      string         `json:"job_name"`
-	Ports        map[string]int `json:"ports"` // named port -> port number
+	Driver       string         `json:"driver"`          // "exec" or "docker"
+	Image        string         `json:"image,omitempty"` // Docker image (only for driver=docker)
+	Ports        map[string]int `json:"ports"`           // named port -> host port number
 	Pid          int            `json:"pid"`
 	State        TaskState      `json:"state"`
 	StartedAt    time.Time      `json:"started_at"`

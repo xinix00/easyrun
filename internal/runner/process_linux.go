@@ -16,12 +16,12 @@ const cgroupBase = "/sys/fs/cgroup/easyrun"
 
 // wrapCommand on Linux returns the command as-is
 // Memory limiting is done via cgroups after process start
-func (r *ProcessRunner) wrapCommand(command string, memoryLimit uint64) string {
+func (r *ExecRunner) wrapCommand(command string, memoryLimit uint64) string {
 	return command
 }
 
 // applyMemoryLimit applies memory limits using cgroups v2
-func (r *ProcessRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
+func (r *ExecRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
 	cgroupPath := fmt.Sprintf("%s/%d", cgroupBase, pid)
 
 	if err := os.MkdirAll(cgroupPath, 0755); err != nil {
@@ -42,17 +42,17 @@ func (r *ProcessRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
 }
 
 // mountVolume bind-mounts a host path into the task directory
-func (r *ProcessRunner) mountVolume(hostPath, targetPath string) error {
+func (r *ExecRunner) mountVolume(hostPath, targetPath string) error {
 	return syscall.Mount(hostPath, targetPath, "", syscall.MS_BIND, "")
 }
 
 // unmountVolume cleans up a mounted volume
-func (r *ProcessRunner) unmountVolume(targetPath string) error {
+func (r *ExecRunner) unmountVolume(targetPath string) error {
 	return syscall.Unmount(targetPath, 0)
 }
 
 // setupCommand configures the command with optional namespace isolation
-func (r *ProcessRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []string) *exec.Cmd {
+func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []string) *exec.Cmd {
 	command := r.wrapCommand(job.Command, job.MemoryLimit)
 	cmd := exec.Command("/bin/sh", "-c", command)
 
@@ -96,7 +96,7 @@ func (r *ProcessRunner) setupCommand(job *types.Job, taskDir string, portEnvVars
 }
 
 // linkLibraries symlinks required libraries for chroot on Linux
-func (r *ProcessRunner) linkLibraries(taskDir string) {
+func (r *ExecRunner) linkLibraries(taskDir string) {
 	// Link common library paths
 	libs := []string{
 		"/lib",

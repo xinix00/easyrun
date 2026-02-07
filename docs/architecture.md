@@ -183,7 +183,13 @@ Without settle:
 - Runs on port 8080
 - CORS enabled for browser access
 
-### ProcessRunner
+### Runner Selection
+- Agent has both `ExecRunner` and `DockerRunner`
+- `job.Driver` / `task.Driver` determines which runner is used (`"exec"` or `"docker"`)
+- Driver is derived from `image` field if not set explicitly (`image != ""` → `"docker"`)
+- All other systems (scheduling, health checks, service discovery) are runner-agnostic
+
+### ExecRunner
 - Starts processes with optional resource limits
 - Each task gets its own directory with:
   - `tmp/` - temporary files
@@ -195,6 +201,18 @@ Without settle:
   - macOS: ulimit -v wrapper
 - Optional isolation (chroot on Linux)
 - Artifact download with extraction support (tar.gz, tar.bz2, zip, raw binary)
+
+### DockerRunner
+- Runs Docker containers via `docker` CLI (no SDK, no external dependencies)
+- Container naming: `easyrun-<taskID>` for predictable lifecycle management
+- Port mapping: `-p hostPort:containerPort` (host ports always dynamic)
+- Resource limits: `--memory`, `--cpu-shares` (maps directly from Job fields)
+- Volumes: `-v hostPath:containerPath`
+- Environment: `-e KEY=VAL` + `ER_PORT_<NAME>` vars
+- Logs: `docker logs -f` piped to LogBroadcaster (same SSE streaming as processes)
+- Stop: `docker stop` (SIGTERM → 10s → SIGKILL) + `docker rm`
+- Status: `docker inspect -f '{{.State.Running}}'`
+- Cleanup at startup: `docker rm -f` all `easyrun-*` containers
 
 ## Named Ports
 

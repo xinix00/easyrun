@@ -27,11 +27,11 @@ func TestAgentNew(t *testing.T) {
 func TestAgentNewWithNilRunner(t *testing.T) {
 	cfg := testConfig()
 
-	// New with nil runner should create default ProcessRunner
+	// New with nil runner should create default ExecRunner
 	agent := New(cfg, "test-agent", nil)
 
-	if agent.runner == nil {
-		t.Error("Agent runner should not be nil when created with nil runner")
+	if agent.execRunner == nil {
+		t.Error("Agent execRunner should not be nil when created with nil runner")
 	}
 }
 

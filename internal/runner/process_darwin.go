@@ -15,7 +15,7 @@ import (
 )
 
 // wrapCommand on macOS wraps the command with ulimit for memory limiting
-func (r *ProcessRunner) wrapCommand(command string, memoryLimit uint64) string {
+func (r *ExecRunner) wrapCommand(command string, memoryLimit uint64) string {
 	if memoryLimit == 0 {
 		return command
 	}
@@ -25,22 +25,22 @@ func (r *ProcessRunner) wrapCommand(command string, memoryLimit uint64) string {
 
 // applyMemoryLimit on macOS is a no-op
 // Memory limiting is done via ulimit in wrapCommand (before exec)
-func (r *ProcessRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
+func (r *ExecRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
 	// Already handled via ulimit wrapper
 }
 
 // mountVolume on macOS uses symlinks
-func (r *ProcessRunner) mountVolume(hostPath, targetPath string) error {
+func (r *ExecRunner) mountVolume(hostPath, targetPath string) error {
 	return os.Symlink(hostPath, targetPath)
 }
 
 // unmountVolume removes the symlink
-func (r *ProcessRunner) unmountVolume(targetPath string) error {
+func (r *ExecRunner) unmountVolume(targetPath string) error {
 	return os.Remove(targetPath)
 }
 
 // setupCommand configures the command with optional sandbox isolation
-func (r *ProcessRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []string) *exec.Cmd {
+func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []string) *exec.Cmd {
 	command := r.wrapCommand(job.Command, job.MemoryLimit)
 
 	var cmd *exec.Cmd
@@ -85,7 +85,7 @@ func (r *ProcessRunner) setupCommand(job *types.Job, taskDir string, portEnvVars
 }
 
 // generateSandboxProfile creates a sandbox profile for the task
-func (r *ProcessRunner) generateSandboxProfile(taskDir string, job *types.Job) string {
+func (r *ExecRunner) generateSandboxProfile(taskDir string, job *types.Job) string {
 	// Convert taskDir to absolute path for sandbox
 	absTaskDir, err := filepath.Abs(taskDir)
 	if err != nil {
@@ -118,6 +118,6 @@ func (r *ProcessRunner) generateSandboxProfile(taskDir string, job *types.Job) s
 }
 
 // linkLibraries is a no-op on macOS with sandbox (not needed)
-func (r *ProcessRunner) linkLibraries(taskDir string) {
+func (r *ExecRunner) linkLibraries(taskDir string) {
 	// Sandbox allows access to system libraries directly
 }

@@ -240,7 +240,7 @@ See `/docs` for details:
 ## Design Principles
 
 - **Simplicity over features** - KISS
-- **One ProcessRunner** with optional limits
+- **One ExecRunner** with optional limits
 - **States**: running, stopped, failed
 - **Polling over events** - 10s heartbeat, simple and robust
 - **Channel-based state** - Single goroutine owns mutable state

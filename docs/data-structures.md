@@ -9,20 +9,40 @@ type Job struct {
     ID           string            // Unique identifier (auto-generated)
     Name         string            // Human-readable name (UNIQUE KEY for upsert)
     AgentID      string            // Pin to specific agent (optional)
+    Driver       string            // "exec" (default) or "docker"
+    Image        string            // Docker image (only for driver=docker)
     Artifact     *Artifact         // Binary/assets to download (optional)
-    Command      string            // Command to execute
+    Command      string            // Command to execute (required for process, optional for Docker)
     Count        int               // Number of instances (see below)
-    Ports        map[string]int    // Port name → fixed port (0 = dynamic)
+    Ports        map[string]int    // Process: port name → host port (0=dynamic). Docker: port name → container port
     CPUShares    int               // Relative CPU priority (0 = no limiting)
     MemoryLimit  uint64            // Bytes (0 = no limiting)
     Env          map[string]string // Extra environment variables
     Tags         map[string]string // Labels for service discovery/grouping
-    Volumes      map[string]string // host_path → task_path (symlinked)
+    Volumes      map[string]string // host_path → task_path (symlinked / Docker -v)
     HealthCheck  *HealthCheck      // HTTP health check config (optional)
     MaxRestarts  int               // Max restart attempts (0=default 5, -1=unlimited)
     UpdatePolicy UpdatePolicy      // How to update: rolling | recreate | blue-green
 }
 ```
+
+### Image (Docker Support)
+
+Run a Docker container instead of a process:
+
+```json
+{
+  "name": "redis",
+  "image": "redis:7",
+  "count": 3,
+  "ports": {"redis": 6379}
+}
+```
+
+- If `image` is set, the agent uses the DockerRunner instead of ExecRunner
+- `command` is optional for Docker (overrides the image's CMD if provided)
+- `ports` values are **container ports** (host ports are always dynamically allocated)
+- All other fields (env, volumes, cpu_shares, memory_limit, tags, health_check) work identically
 
 ### AgentID (Node Pinning)
 
@@ -83,9 +103,11 @@ Ports can be dynamic (assigned at runtime) or fixed:
 }
 ```
 
-**Fixed ports:** If the specified port is already in use, the job will be rejected with an error.
+**Fixed ports (process jobs):** If the specified port is already in use, the job will be rejected with an error.
 
-**Environment variables:** Task gets `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all ports.
+**Docker jobs:** Port values are container ports. Host ports are always dynamically allocated. Example: `{"http": 80}` → `-p <random>:80`.
+
+**Environment variables:** Task gets `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all ports (host ports).
 
 ### Volumes
 
@@ -189,8 +211,10 @@ type Task struct {
     ID           string         // Unique identifier
     JobID        string         // Job ID (which version of the job)
     JobName      string         // Job name (which job this task belongs to)
-    Ports        map[string]int // Named port -> port number
-    Pid          int            // Process ID
+    Driver       string         // "exec" or "docker"
+    Image        string         // Docker image (only for driver=docker)
+    Ports        map[string]int // Named port -> host port number
+    Pid          int            // Process ID (0 for Docker tasks)
     State        TaskState      // running, stopped, failed
     StartedAt    time.Time
     RestartCount int            // Number of times restarted
@@ -198,6 +222,8 @@ type Task struct {
 ```
 
 **Note:** Task has both `JobID` and `JobName`. Use `task.JobName` to look up the job by name, `task.JobID` to reference the specific version.
+
+**Note:** `task.Driver` determines which runner manages this task. `"exec"` = ExecRunner, `"docker"` = DockerRunner.
 
 **Ports:** Task gets ENV vars `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all allocated ports.
 

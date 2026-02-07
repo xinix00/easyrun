@@ -32,7 +32,7 @@ go build -o bin/easyrun ./cmd/cli
 ## Design Principles
 
 - Simplicity over features
-- One ProcessRunner with optional limits (no separate runner types)
+- One ExecRunner with optional limits (no separate runner types)
 - State = `running`, `stopped`, `failed` (details in logs)
 - Limits only when set (`CPUShares > 0`, `MemoryLimit > 0`)
 - Single goroutine owns mutable state via ops channel (`do()` and `query()` helpers)

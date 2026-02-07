@@ -50,7 +50,8 @@ type Agent struct {
 	id       string
 	endpoint string
 	config   *config.Config
-	runner   runner.Runner
+	execRunner runner.Runner
+	dockerRunner  runner.Runner
 	sysInfo  SystemInfo // detected once at startup
 
 	ops chan func(*agentState) // all state access goes through here
@@ -62,7 +63,7 @@ type Agent struct {
 	needsSave atomic.Bool // flag for debounced persistence
 }
 
-// New creates a new agent with optional runner (nil uses default ProcessRunner)
+// New creates a new agent with optional runner (nil uses default ExecRunner)
 func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 	if r == nil {
 		runnerCfg := &runner.Config{
@@ -71,19 +72,20 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 			MaxCPUShares: cfg.Capacity.CPUShares,
 			Isolate:      cfg.Runner.Isolate,
 		}
-		r = runner.NewProcessRunner(runnerCfg)
+		r = runner.NewExecRunner(runnerCfg)
 	}
 
 	endpoint := fmt.Sprintf("http://%s:%d", cfg.Node.IP, cfg.Node.Port)
 
 	return &Agent{
-		id:         id,
-		endpoint:   endpoint,
-		config:     cfg,
-		runner:     r,
-		sysInfo:    GetSystemInfo(), // detect once at startup
-		ops:        make(chan func(*agentState), stateChannelBufferSize),
-		httpClient: &http.Client{Timeout: proxyTimeout},
+		id:           id,
+		endpoint:     endpoint,
+		config:       cfg,
+		execRunner: r,
+		dockerRunner: runner.NewDockerRunner(),
+		sysInfo:      GetSystemInfo(), // detect once at startup
+		ops:          make(chan func(*agentState), stateChannelBufferSize),
+		httpClient:   &http.Client{Timeout: proxyTimeout},
 		// needsSave is zero-initialized (false)
 	}
 }
@@ -108,9 +110,20 @@ func (a *Agent) Endpoint() string {
 	return a.endpoint
 }
 
-// Init performs startup cleanup (removes old task directories)
+// Init performs startup cleanup (removes old task directories and containers)
 func (a *Agent) Init() error {
-	return a.runner.Cleanup()
+	if err := a.execRunner.Cleanup(); err != nil {
+		return err
+	}
+	return a.dockerRunner.Cleanup()
+}
+
+// runnerFor returns the appropriate runner based on driver
+func (a *Agent) runnerFor(driver string) runner.Runner {
+	if driver == types.DriverDocker {
+		return a.dockerRunner
+	}
+	return a.execRunner
 }
 
 // stateLoop is the single goroutine that owns all mutable state
@@ -201,7 +214,7 @@ func (a *Agent) StopAllTasks() {
 	}
 
 	for _, task := range tasks {
-		if err := a.runner.Stop(task); err != nil {
+		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
 			log.Printf("Failed to stop task %s: %v", task.ID, err)
 		}
 	}
@@ -237,7 +250,7 @@ func (a *Agent) shutdown() {
 
 	// Stop them
 	for _, task := range tasks {
-		if err := a.runner.Stop(task); err != nil {
+		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
 			log.Printf("Failed to stop task %s: %v", task.ID, err)
 		}
 	}
@@ -422,19 +435,24 @@ func findJobByName(s *agentState, jobName string) *types.Job {
 	return nil
 }
 
+// resourceUsage returns total CPU shares and memory used by running tasks + reservations
+func (s *agentState) resourceUsage() (cpu int, mem uint64) {
+	cpu = s.reservedCPU
+	mem = s.reservedMem
+	for _, task := range s.tasks {
+		if task.State == types.TaskRunning {
+			cpu += task.CPUShares
+			mem += task.MemoryLimit
+		}
+	}
+	return
+}
+
 // hasCapacity checks if the agent has capacity for a new job.
 // Accounts for both running tasks AND pending reservations.
 func (a *Agent) hasCapacity(job *types.Job) bool {
 	return query(a, func(s *agentState) bool {
-		usedCPU := s.reservedCPU
-		usedMem := s.reservedMem
-
-		for _, task := range s.tasks {
-			if task.State == types.TaskRunning {
-				usedCPU += task.CPUShares
-				usedMem += task.MemoryLimit
-			}
-		}
+		usedCPU, usedMem := s.resourceUsage()
 
 		if job.CPUShares > 0 {
 			maxCPU := a.sysInfo.CPUCores * 1024
@@ -453,6 +471,24 @@ func (a *Agent) hasCapacity(job *types.Job) bool {
 
 		return true
 	})
+}
+
+// allocatePortsForJob allocates host ports appropriate for the job type.
+// For Docker jobs, Ports values are container ports — host ports are always dynamic.
+// For process jobs, uses the existing logic (0 = dynamic, >0 = fixed).
+func (a *Agent) allocatePortsForJob(job *types.Job) (map[string]int, error) {
+	if job.Driver == types.DriverDocker {
+		ports := make(map[string]int)
+		for name := range job.Ports {
+			p, err := getFreePort()
+			if err != nil {
+				return nil, fmt.Errorf("failed to allocate host port for %s: %w", name, err)
+			}
+			ports[name] = p
+		}
+		return ports, nil
+	}
+	return allocatePorts(job.Ports)
 }
 
 func getFreePort() (int, error) {

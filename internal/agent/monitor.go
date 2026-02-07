@@ -60,7 +60,7 @@ func (a *Agent) checkTasks() {
 		task := info.task
 		job := info.job
 
-		state, err := a.runner.Status(task)
+		state, err := a.runnerFor(task.Driver).Status(task)
 		if err != nil {
 			log.Printf("Failed to get status for task %s: %v", task.ID, err)
 			continue
@@ -88,7 +88,7 @@ func (a *Agent) checkTasks() {
 				log.Printf("Task %s failed health check", task.ID)
 
 				// Stop and restart
-				a.runner.Stop(task)
+				a.runnerFor(task.Driver).Stop(task)
 				a.do(func(s *agentState) {
 					if t := s.tasks[task.ID]; t != nil {
 						t.State = types.TaskFailed
