@@ -1,0 +1,14 @@
+node:
+  id: "node-2"
+  port: 8081
+
+cluster:
+  name: "dev-local"
+  raft_endpoints:
+    - "https://server-raft.easyflor.net"
+
+paths:
+  state_file: "./data/state-node2.json"
+  rootfs_base: "./data/rootfs-node2"
+  artifacts: "./data/artifacts"
+  cache: "./data/cache"

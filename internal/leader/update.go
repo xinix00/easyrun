@@ -104,7 +104,8 @@ func (l *Leader) stopOneInstance(job *types.Job) {
 	}
 }
 
-// deleteTaskOnAgent deletes a job on specific agent (by job ID)
+// deleteTaskOnAgent deletes a job on specific agent (by job ID).
+// Uses a dedicated long timeout because Docker stops can take ~20s.
 func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobID string) {
 	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobID)
 	req, err := http.NewRequest(http.MethodDelete, url, nil)
@@ -112,7 +113,8 @@ func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobID string) {
 		log.Printf("Failed to create delete request for %s on %s: %v", jobID, agent.ID, err)
 		return
 	}
-	resp, err := l.httpClient.Do(req)
+	client := &http.Client{Timeout: DeleteClientTimeout}
+	resp, err := client.Do(req)
 	if err != nil {
 		log.Printf("Failed to delete %s on %s: %v", jobID, agent.ID, err)
 		return
