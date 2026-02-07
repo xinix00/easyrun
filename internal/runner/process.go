@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	gracefulShutdownTimeout = 5 * time.Second
+	gracefulShutdownTimeout = 10 * time.Second
 	killTimeout             = 5 * time.Second
 	processExitPollInterval = 100 * time.Millisecond
 	processExitPollAttempts = 50
