@@ -19,6 +19,7 @@ import (
 
 const (
 	gracefulShutdownTimeout = 5 * time.Second
+	killTimeout             = 5 * time.Second
 	processExitPollInterval = 100 * time.Millisecond
 	processExitPollAttempts = 50
 	defaultMaxCPUShares     = 14000
@@ -177,7 +178,11 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
 			fmt.Printf("Warning: failed to send SIGKILL to process group %d: %v\n", pid, err)
 		}
-		<-done
+		select {
+		case <-done:
+		case <-time.After(killTimeout):
+			log.Printf("Process group %d did not exit after SIGKILL, giving up", pid)
+		}
 	}
 
 	r.cleanupTaskDir(task.ID)

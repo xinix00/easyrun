@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os/exec"
@@ -13,7 +14,11 @@ import (
 	"github.com/google/uuid"
 )
 
-const containerPrefix = "easyrun-"
+const (
+	containerPrefix     = "easyrun-"
+	dockerStopTimeout   = 10 // seconds (SIGTERM grace period, then SIGKILL)
+	dockerCommandTimeout = 30 * time.Second // max time for docker stop + rm
+)
 
 // DockerRunner runs jobs as Docker containers
 type DockerRunner struct {
@@ -109,14 +114,18 @@ func (r *DockerRunner) Run(job *types.Job, ports map[string]int) (*types.Task, e
 // Stop stops and removes a Docker container
 func (r *DockerRunner) Stop(task *types.Task) error {
 	containerName := containerPrefix + task.ID
+	ctx, cancel := context.WithTimeout(context.Background(), dockerCommandTimeout)
+	defer cancel()
 
 	// Stop container (SIGTERM → 10s → SIGKILL)
-	if out, err := exec.Command("docker", "stop", containerName).CombinedOutput(); err != nil {
+	stopCmd := exec.CommandContext(ctx, "docker", "stop", "-t", fmt.Sprintf("%d", dockerStopTimeout), containerName)
+	if out, err := stopCmd.CombinedOutput(); err != nil {
 		log.Printf("docker stop %s: %v: %s", containerName, err, strings.TrimSpace(string(out)))
 	}
 
 	// Remove container
-	if out, err := exec.Command("docker", "rm", containerName).CombinedOutput(); err != nil {
+	rmCmd := exec.CommandContext(ctx, "docker", "rm", containerName)
+	if out, err := rmCmd.CombinedOutput(); err != nil {
 		log.Printf("docker rm %s: %v: %s", containerName, err, strings.TrimSpace(string(out)))
 	}
 

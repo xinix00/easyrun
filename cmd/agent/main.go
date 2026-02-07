@@ -26,7 +26,7 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.6.6" // Agent version - placed in RegisterAgent, not heartbeat
+const version = "v0.6.7" // Agent version - placed in RegisterAgent, not heartbeat
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
