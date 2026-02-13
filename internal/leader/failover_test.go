@@ -856,36 +856,34 @@ func TestFailoverNewLeaderWithExistingDaemon(t *testing.T) {
 	}
 }
 
-func TestFailoverJobsPinnedToDeadAgent(t *testing.T) {
-	// Jobs pinned to a dead agent (AgentID set) CANNOT be rescheduled
-	// to other agents - dispatchInstances respects the AgentID constraint.
+func TestFailoverJobsWithAffinity(t *testing.T) {
+	// Jobs with affinity constraints are dispatched to all agents.
+	// Affinity is checked agent-side (agent rejects with 406 if no match).
+	// The leader doesn't know about attributes — it just dispatches everywhere.
 
 	localAgent := newMockAgent()
 	defer localAgent.Close()
 
-	oldLeaderID := "old-leader-id"
-
-	// Jobs pinned to old leader (dead - cannot be rescheduled!)
-	pinnedJobs := []*types.Job{
-		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1, AgentID: oldLeaderID},
-		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1, AgentID: oldLeaderID},
-		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1, AgentID: oldLeaderID},
+	// Jobs with affinity (agent-side check, mock agent accepts all)
+	affinityJobs := []*types.Job{
+		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
+		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
+		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
 	}
-	// Jobs NOT pinned (can run anywhere)
-	unpinnedJobs := []*types.Job{
+	// Jobs without affinity
+	normalJobs := []*types.Job{
 		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
 		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
 		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
 	}
 	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
 
-	// New leader loads all jobs from persisted state
 	newLeaderStore := NewMockJobStore()
 	newLeaderStore.StoreJob(daemon)
-	for _, job := range pinnedJobs {
+	for _, job := range affinityJobs {
 		newLeaderStore.StoreJob(job)
 	}
-	for _, job := range unpinnedJobs {
+	for _, job := range normalJobs {
 		newLeaderStore.StoreJob(job)
 	}
 
@@ -899,15 +897,11 @@ func TestFailoverJobsPinnedToDeadAgent(t *testing.T) {
 	newLeader.RegisterAgent("new-leader-id", localAgent.URL(), "", nil)
 	time.Sleep(100 * time.Millisecond)
 
-	// 4 jobs dispatched: 1 daemon + 3 unpinned
-	// 3 pinned jobs FAIL because old-leader-id is dead
+	// Leader dispatches all 7 jobs (affinity checked agent-side, mock accepts all)
 	runCalls := localAgent.RunCallCount()
-	if runCalls != 4 {
-		t.Errorf("Expected 4 /run calls (daemon + 3 unpinned), got %d", runCalls)
+	if runCalls != 7 {
+		t.Errorf("Expected 7 /run calls (leader dispatches all, affinity checked agent-side), got %d", runCalls)
 	}
-
-	// Pinned jobs stay unscheduled until their target agent comes back online
-	// or the job is manually updated to remove the AgentID constraint
 }
 
 func TestFailoverSecondHeartbeatDoesNotReschedule(t *testing.T) {

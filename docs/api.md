@@ -124,7 +124,7 @@ curl -X POST http://localhost:9080/v1/jobs \
   -H "Content-Type: application/json" \
   -d '{
     "name": "api",
-    "agent_id": "",
+    "affinity": {"node.arch": "amd64"},
     "artifact": {
       "url": "s3://mybucket/api-v2.0.tar.gz",
       "auth": {
@@ -166,7 +166,7 @@ curl -X POST http://localhost:9080/v1/jobs \
 - `name` (string, **required**): Job name — **unique key for upsert**
 - `driver` (string): `"exec"` (default) or `"docker"` — auto-derived from `image` if not set
 - `image` (string): Docker image (sets driver to `"docker"` automatically)
-- `agent_id` (string): Pin to specific agent (optional)
+- `affinity` (map): Node attribute constraints, AND logic (optional). Example: `{"node.arch": "arm64"}`. Agent rejects with 406 if no match.
 - `artifact` (object): Binary/assets to download (optional)
   - `url` (string): URL with scheme — determines downloader (http://, s3://)
   - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
@@ -253,11 +253,16 @@ Returns the current leader address:
 GET /capacity
 ```
 
-Returns detected system resources:
+Returns detected system resources and node attributes:
 ```json
 {
   "cpu_cores": 14,
-  "memory_bytes": 51539607552
+  "memory_bytes": 51539607552,
+  "attributes": {
+    "node.id": "agent-1",
+    "node.arch": "arm64",
+    "node.os": "linux"
+  }
 }
 ```
 
@@ -282,7 +287,7 @@ Start a job. Returns 202 Accepted (fire-and-forget, artifact download + start ha
 }
 ```
 
-Returns 503 if no capacity.
+Returns 406 if affinity mismatch. Returns 503 if no capacity.
 
 ### Delete (internal, called by leader)
 

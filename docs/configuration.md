@@ -7,6 +7,9 @@ node:
   id: ""                    # Auto-generate UUID als leeg
   ip: ""                    # Auto-detect als leeg
   port: 8080                # Agent port (leader draait op port+1000)
+  attributes:               # Custom node attributes (merged with auto-detected)
+    # region: eu-west-1
+    # gpu: "true"
 
 cluster:
   name: "my-cluster"
@@ -132,6 +135,7 @@ In beide modes:
 | Node IP | Outbound interface | `node.ip` in config |
 | Node Port | 8080 | `node.port` in config |
 | Node ID | UUID (persisted in data/node-id) | `node.id` in config |
+| Node Attributes | `node.id`, `node.arch`, `node.os` | `node.attributes` in config (merges) |
 | Capacity | System CPU/RAM | `capacity.*` in config |
 | Paths | ./data/* | `paths.*` in config |
 | Leader Port | node.port + 1000 | N/A |

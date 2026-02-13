@@ -61,6 +61,12 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 # Deploy Docker container
 ./bin/easyrun run --name redis --image redis:7
 ./bin/easyrun run --name my-app --image myapp:v2 --command "python serve.py"
+
+# Deploy with affinity (only on arm64 nodes)
+./bin/easyrun run --name api --command "./api" --affinity node.arch=arm64
+
+# Pin to specific node
+./bin/easyrun run --name monitor --command "./monitor" --affinity node.id=node-1
 ```
 
 ### Run Flags
@@ -74,6 +80,7 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 | `--cpu` | CPU shares |
 | `--memory` | Memory limit (e.g., 512M, 1G) |
 | `--env` | Environment variables (KEY=VALUE, repeatable) |
+| `--affinity` | Node affinity constraints (key=value, repeatable, e.g. `node.arch=arm64`) |
 | `--update-policy` | Update policy: rolling (default), recreate, or blue-green |
 
 Either `--command` or `--image` (or both) is required.
@@ -131,8 +138,14 @@ Agent:    agent-1
 Endpoint: http://10.0.0.1:8080
 LastSeen: 15:04:05
 
+Tasks:    3 running
 CPU:      2.0 / 14 cores (2048 / 14336 shares)
 Memory:   0.5 / 48.0 GB
+
+Attributes:
+  node.arch = arm64
+  node.id = agent-1
+  node.os = linux
 ```
 
 ## Logs

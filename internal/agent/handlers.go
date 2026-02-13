@@ -127,11 +127,12 @@ func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 // CapacityResponse shows system resources and actual usage
 type CapacityResponse struct {
-	CPUCores        int    `json:"cpu_cores"`
-	MemoryBytes     uint64 `json:"memory_bytes"`
-	CPUUsedShares   int    `json:"cpu_used_shares"`
-	MemoryUsedBytes uint64 `json:"memory_used_bytes"`
-	TasksRunning    int    `json:"tasks_running"`
+	CPUCores        int               `json:"cpu_cores"`
+	MemoryBytes     uint64            `json:"memory_bytes"`
+	CPUUsedShares   int               `json:"cpu_used_shares"`
+	MemoryUsedBytes uint64            `json:"memory_used_bytes"`
+	TasksRunning    int               `json:"tasks_running"`
+	Attributes      map[string]string `json:"attributes,omitempty"`
 }
 
 // handleCapacity returns detected system capacity with actual usage from running tasks
@@ -150,6 +151,7 @@ func (a *Agent) handleCapacity(w http.ResponseWriter, r *http.Request) {
 			CPUUsedShares:   cpuUsed,
 			MemoryUsedBytes: memUsed,
 			TasksRunning:    running,
+			Attributes:      a.attributes,
 		}
 	})
 	httputil.WriteJSON(w, http.StatusOK, usage)
@@ -177,6 +179,14 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
 		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+
+	// Check affinity before capacity (agent-side: leader stays dumb)
+	if !a.matchesAffinity(job.Affinity) {
+		httputil.WriteJSON(w, http.StatusNotAcceptable, map[string]string{
+			"error": "affinity mismatch",
+		})
 		return
 	}
 

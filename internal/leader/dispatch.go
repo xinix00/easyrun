@@ -90,26 +90,9 @@ func (l *Leader) trackPlacement(agentID, jobID string) {
 	})
 }
 
-// dispatchToAvailableAgent tries agents until one accepts the job
+// dispatchToAvailableAgent tries agents until one accepts the job.
+// Affinity is checked agent-side (agent rejects with 406 if no match).
 func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
-	// If job is pinned to specific node, dispatch only to that node
-	if job.AgentID != "" {
-		agent := query(l, func(s *leaderState) *types.Agent {
-			return s.agents[job.AgentID]
-		})
-
-		if agent == nil {
-			return fmt.Errorf("node %s not found (job %s requires this node)", job.AgentID, job.Name)
-		}
-
-		if err := l.sendJobToAgent(agent, job); err != nil {
-			return err
-		}
-		l.trackPlacement(agent.ID, job.ID)
-		return nil
-	}
-
-	// No node constraint, try all agents
 	agentCount := query(l, func(s *leaderState) int {
 		return len(s.agents)
 	})

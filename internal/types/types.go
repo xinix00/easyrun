@@ -59,10 +59,10 @@ func DriverFor(image string) string {
 
 // Job defines what the user wants to run
 type Job struct {
-	ID           string            `json:"id,omitempty"`       // unique ID (generated)
-	Name         string            `json:"name"`               // user-facing name (for upsert)
-	AgentID      string            `json:"agent_id,omitempty"` // pin to specific agent
-	Driver       string            `json:"driver,omitempty"`   // "exec" (default) or "docker"
+	ID           string            `json:"id,omitempty"`         // unique ID (generated)
+	Name         string            `json:"name"`                 // user-facing name (for upsert)
+	Affinity     map[string]string `json:"affinity,omitempty"`   // node attribute constraints (AND logic, equality)
+	Driver       string            `json:"driver,omitempty"`     // "exec" (default) or "docker"
 	Image        string            `json:"image,omitempty"`    // Docker image (only for driver=docker)
 	Artifact     *Artifact         `json:"artifact,omitempty"` // binary/assets to download
 	Command      string            `json:"command,omitempty"`

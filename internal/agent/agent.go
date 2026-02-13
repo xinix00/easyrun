@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,12 +49,13 @@ type agentState struct {
 
 // Agent runs jobs and reports status
 type Agent struct {
-	id       string
-	endpoint string
-	config   *config.Config
-	execRunner runner.Runner
-	dockerRunner  runner.Runner
-	sysInfo  SystemInfo // detected once at startup
+	id         string
+	endpoint   string
+	config     *config.Config
+	execRunner   runner.Runner
+	dockerRunner runner.Runner
+	sysInfo    SystemInfo        // detected once at startup
+	attributes map[string]string // node attributes for affinity matching
 
 	ops chan func(*agentState) // all state access goes through here
 
@@ -78,13 +80,24 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 
 	endpoint := fmt.Sprintf("http://%s:%d", cfg.Node.IP, cfg.Node.Port)
 
+	// Build node attributes: auto-detected + user-configured (config overrides)
+	attrs := map[string]string{
+		"node.id":   id,
+		"node.arch": runtime.GOARCH,
+		"node.os":   runtime.GOOS,
+	}
+	for k, v := range cfg.Node.Attributes {
+		attrs[k] = v
+	}
+
 	return &Agent{
 		id:           id,
 		endpoint:     endpoint,
 		config:       cfg,
-		execRunner: r,
+		execRunner:   r,
 		dockerRunner: runner.NewDockerRunner(),
 		sysInfo:      GetSystemInfo(), // detect once at startup
+		attributes:   attrs,
 		ops:          make(chan func(*agentState), stateChannelBufferSize),
 		httpClient:   &http.Client{Timeout: proxyTimeout},
 		// needsSave is zero-initialized (false)
@@ -109,6 +122,21 @@ func (a *Agent) ID() string {
 // Endpoint returns the agent's HTTP endpoint
 func (a *Agent) Endpoint() string {
 	return a.endpoint
+}
+
+// Attributes returns the agent's node attributes
+func (a *Agent) Attributes() map[string]string {
+	return a.attributes
+}
+
+// matchesAffinity checks if this agent's attributes satisfy all job affinity constraints.
+func (a *Agent) matchesAffinity(affinity map[string]string) bool {
+	for k, v := range affinity {
+		if a.attributes[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 // Init performs startup cleanup (removes old task directories and containers)

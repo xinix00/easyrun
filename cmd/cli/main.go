@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -59,6 +60,7 @@ func runCommand() *cli.Command {
 			&cli.IntFlag{Name: "cpu", Usage: "CPU shares"},
 			&cli.StringFlag{Name: "memory", Usage: "Memory limit (e.g., 512M, 1G)"},
 			&cli.StringSliceFlag{Name: "env", Usage: "Environment variables (KEY=VALUE)"},
+			&cli.StringSliceFlag{Name: "affinity", Usage: "Node affinity constraints (key=value, e.g. node.arch=arm64)"},
 			&cli.StringFlag{Name: "update-policy", Usage: "Update policy: rolling (default), recreate, or blue-green", Value: "rolling"},
 		},
 		Action: runJob,
@@ -124,6 +126,18 @@ func runJob(c *cli.Context) error {
 			for i, ch := range env {
 				if ch == '=' {
 					job.Env[env[:i]] = env[i+1:]
+					break
+				}
+			}
+		}
+	}
+
+	if affinities := c.StringSlice("affinity"); len(affinities) > 0 {
+		job.Affinity = make(map[string]string)
+		for _, a := range affinities {
+			for i, ch := range a {
+				if ch == '=' {
+					job.Affinity[a[:i]] = a[i+1:]
 					break
 				}
 			}
@@ -323,11 +337,12 @@ func showAgentDetails(agent *types.Agent) error {
 	}
 
 	var cap struct {
-		CPUCores        int    `json:"cpu_cores"`
-		MemoryBytes     uint64 `json:"memory_bytes"`
-		CPUUsedShares   int    `json:"cpu_used_shares"`
-		MemoryUsedBytes uint64 `json:"memory_used_bytes"`
-		TasksRunning    int    `json:"tasks_running"`
+		CPUCores        int               `json:"cpu_cores"`
+		MemoryBytes     uint64            `json:"memory_bytes"`
+		CPUUsedShares   int               `json:"cpu_used_shares"`
+		MemoryUsedBytes uint64            `json:"memory_used_bytes"`
+		TasksRunning    int               `json:"tasks_running"`
+		Attributes      map[string]string `json:"attributes"`
 	}
 	if err := json.NewDecoder(capResp.Body).Decode(&cap); err != nil {
 		fmt.Printf("Capacity: (unavailable - %v)\n", err)
@@ -342,6 +357,19 @@ func showAgentDetails(agent *types.Agent) error {
 	fmt.Printf("Tasks:    %d running\n", cap.TasksRunning)
 	fmt.Printf("CPU:      %.1f / %d cores (%.0f / %d shares)\n", usedCores, cap.CPUCores, float64(cap.CPUUsedShares), totalShares)
 	fmt.Printf("Memory:   %.1f / %.0f GB\n", usedGB, totalGB)
+
+	if len(cap.Attributes) > 0 {
+		fmt.Println()
+		fmt.Println("Attributes:")
+		keys := make([]string, 0, len(cap.Attributes))
+		for k := range cap.Attributes {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			fmt.Printf("  %s = %s\n", k, cap.Attributes[k])
+		}
+	}
 
 	return nil
 }

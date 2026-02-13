@@ -146,7 +146,6 @@ Without settle:
 - Receives heartbeats from agents
 - Dispatches regular jobs via deterministic round-robin (agents sorted by ID)
 - Dispatches daemon jobs (count=-1) via reconcile-based dispatch
-- Supports agent pinning (job.AgentID dispatches only to that agent)
 - Tracks which job instances run on which agents (placed map: agentID → jobID → count)
 - On agent failure: cleans stale placement, reconciles all jobs
 - Runs on port+1000 (default 9080)
@@ -157,9 +156,10 @@ Without settle:
 - On 503 (full) → leader tries next agent
 - Automatic spreading over agents
 
-**Agent Pinning:**
-- Job with AgentID set → dispatches only to that specific agent
-- If agent not found → returns error
+**Affinity (agent-side):**
+- Jobs can have `affinity` constraints (e.g., `{"node.arch": "arm64"}`)
+- Leader dispatches to all agents — agent checks affinity and rejects with 406 if no match
+- Leader stays unaware of node attributes (KISS)
 
 **Daemon Scheduling (count=-1):**
 - Uses reconcile-based dispatch (same code path as periodic reconciliation)
@@ -182,6 +182,8 @@ Without settle:
 - On isolation (6 ticks, no leader, can't become leader): stop all tasks
 - Runs on port 8080
 - CORS enabled for browser access
+- Has node attributes (auto-detected: `node.id`, `node.arch`, `node.os` + custom via config)
+- Checks job affinity constraints before accepting — rejects with 406 on mismatch
 
 ### Runner Selection
 - Agent has both `ExecRunner` and `DockerRunner`

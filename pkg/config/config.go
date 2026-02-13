@@ -19,9 +19,10 @@ type Config struct {
 
 // NodeConfig holds node-specific configuration
 type NodeConfig struct {
-	ID   string `yaml:"id"`
-	IP   string `yaml:"ip"`
-	Port int    `yaml:"port"`
+	ID         string            `yaml:"id"`
+	IP         string            `yaml:"ip"`
+	Port       int               `yaml:"port"`
+	Attributes map[string]string `yaml:"attributes"` // user-defined node attributes (merged with auto-detected)
 }
 
 // ClusterConfig holds cluster-wide configuration

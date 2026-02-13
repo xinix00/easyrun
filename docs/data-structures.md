@@ -8,7 +8,7 @@ What the user wants to run.
 type Job struct {
     ID           string            // Unique identifier (auto-generated)
     Name         string            // Human-readable name (UNIQUE KEY for upsert)
-    AgentID      string            // Pin to specific agent (optional)
+    Affinity     map[string]string // Node attribute constraints (optional, AND logic)
     Driver       string            // "exec" (default) or "docker"
     Image        string            // Docker image (only for driver=docker)
     Artifact     *Artifact         // Binary/assets to download (optional)
@@ -44,20 +44,33 @@ Run a Docker container instead of a process:
 - `ports` values are **container ports** (host ports are always dynamically allocated)
 - All other fields (env, volumes, cpu_shares, memory_limit, tags, health_check) work identically
 
-### AgentID (Node Pinning)
+### Affinity (Node Targeting)
 
-Pin a job to a specific agent:
+Target jobs to specific nodes based on attributes:
 
 ```json
 {
-  "name": "monitoring",
-  "agent_id": "node-1",
-  "command": "./monitor",
-  "count": 1
+  "name": "gpu-training",
+  "command": "./train",
+  "count": 1,
+  "affinity": {"node.arch": "arm64"}
 }
 ```
 
-If the pinned agent is not found, dispatch returns an error.
+Pin to a specific node:
+```json
+{
+  "name": "monitoring",
+  "command": "./monitor",
+  "count": 1,
+  "affinity": {"node.id": "node-1"}
+}
+```
+
+All constraints must match (AND logic). The agent checks affinity and rejects with 406 if no match — the leader stays unaware of attributes.
+
+**Auto-detected attributes:** `node.id`, `node.arch` (arm64/amd64), `node.os` (linux/darwin/windows).
+**Custom attributes:** configurable via `node.attributes` in config YAML.
 
 ### UpdatePolicy
 
