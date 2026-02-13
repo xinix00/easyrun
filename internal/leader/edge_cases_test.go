@@ -261,7 +261,7 @@ func TestLeaderMultipleAgentsPartialFailure(t *testing.T) {
 			tasks = append(tasks, &types.Task{ID: "task-1", JobID: "test-id", JobName: "test", State: types.TaskRunning})
 			w.WriteHeader(http.StatusCreated)
 		case "/tasks":
-			json.NewEncoder(w).Encode(tasks)
+			_ = json.NewEncoder(w).Encode(tasks)
 		default:
 			w.WriteHeader(http.StatusOK)
 		}

@@ -310,7 +310,7 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Job string `json:"job"`
 	}
-	json.NewDecoder(r.Body).Decode(&req) // best-effort, empty body = generic notify
+	_ = json.NewDecoder(r.Body).Decode(&req) // best-effort, empty body = generic notify
 	if req.Job != "" {
 		s.leader.EventBus().Notify("job:" + req.Job)
 	} else {

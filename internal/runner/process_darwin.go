@@ -48,7 +48,7 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 		// Generate sandbox profile
 		profile := r.generateSandboxProfile(taskDir, job)
 		profilePath := filepath.Join(taskDir, "sandbox.sb")
-		os.WriteFile(profilePath, []byte(profile), 0644)
+		_ = os.WriteFile(profilePath, []byte(profile), 0644)
 		log.Printf("Sandbox profile written to %s", profilePath)
 
 		// Wrap with sandbox-exec

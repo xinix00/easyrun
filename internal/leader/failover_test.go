@@ -88,7 +88,7 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	ma.tasks = append(ma.tasks, task)
 	ma.mu.Unlock()
 
-	json.NewEncoder(w).Encode(task)
+	_ = json.NewEncoder(w).Encode(task)
 }
 
 // SetFailRuns makes all /run requests fail with 503 when set to true
@@ -160,7 +160,7 @@ func (ma *mockAgent) handleTasks(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()
 
-	json.NewEncoder(w).Encode(ma.tasks)
+	_ = json.NewEncoder(w).Encode(ma.tasks)
 }
 
 func (ma *mockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
@@ -185,7 +185,7 @@ func (ma *mockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	delete(ma.jobs, jobID)
 	ma.mu.Unlock()
 
-	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+	_ = json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
 }
 
 // taskCounts creates a map of jobID -> 1 for each job (1 task per job)

@@ -286,7 +286,7 @@ func TestDownloadHTTPWithExtractTarGz(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(tarBuf)
+		_, _ = w.Write(tarBuf)
 	}))
 	defer srv.Close()
 
@@ -319,7 +319,7 @@ func TestDownloadHTTPWithExtractZip(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(zipBuf)
+		_, _ = w.Write(zipBuf)
 	}))
 	defer srv.Close()
 
@@ -346,7 +346,7 @@ func TestDownloadHTTPRawBinary(t *testing.T) {
 	content := []byte("#!/bin/sh\necho hello")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer srv.Close()
 

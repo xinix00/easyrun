@@ -451,13 +451,13 @@ func (ma *realisticMockAgent) handleRun(w http.ResponseWriter, r *http.Request) 
 	ma.tasks = append(ma.tasks, task)
 	ma.mu.Unlock()
 
-	json.NewEncoder(w).Encode(task)
+	_ = json.NewEncoder(w).Encode(task)
 }
 
 func (ma *realisticMockAgent) handleTasks(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()
-	json.NewEncoder(w).Encode(ma.tasks)
+	_ = json.NewEncoder(w).Encode(ma.tasks)
 }
 
 func (ma *realisticMockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
@@ -476,7 +476,7 @@ func (ma *realisticMockAgent) handleDelete(w http.ResponseWriter, r *http.Reques
 	ma.tasks = filtered
 	ma.mu.Unlock()
 
-	json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+	_ = json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
 }
 
 func (ma *realisticMockAgent) URL() string  { return ma.server.URL }

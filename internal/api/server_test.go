@@ -560,18 +560,18 @@ func (ma *testMockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Unlock()
 
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(task)
+	_ = json.NewEncoder(w).Encode(task)
 }
 
 func (ma *testMockAgent) handleTasks(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()
-	json.NewEncoder(w).Encode(ma.tasks)
+	_ = json.NewEncoder(w).Encode(ma.tasks)
 }
 
 func (ma *testMockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]int{"deleted": 1})
+	_ = json.NewEncoder(w).Encode(map[string]int{"deleted": 1})
 }
 
 func (ma *testMockAgent) URL() string {

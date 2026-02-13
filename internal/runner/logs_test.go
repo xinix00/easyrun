@@ -381,7 +381,7 @@ func TestLogBroadcasterRapidSubscribeUnsubscribe(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			b.Write([]byte("test\n"))
+			_, _ = b.Write([]byte("test\n"))
 		}()
 	}
 
