@@ -75,6 +75,7 @@ func (a *Agent) checkTasks() {
 					t.State = state
 				}
 			})
+			go a.notifyLeader(task.JobName)
 			go a.restartTask(task)
 			continue
 		}
@@ -94,6 +95,7 @@ func (a *Agent) checkTasks() {
 					}
 				})
 				go func() {
+					a.notifyLeader(task.JobName)
 					a.runnerFor(task.Driver).Stop(task)
 					a.restartTask(task)
 				}()

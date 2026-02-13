@@ -177,6 +177,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/v1/jobs", a.proxyToLeader)
 	mux.HandleFunc("/v1/jobs/", a.proxyToLeader) // DELETE /v1/jobs/{id}
 	mux.HandleFunc("/v1/status", a.proxyToLeader)
+	mux.HandleFunc("/v1/events", a.proxySSEToLeader)
 
 	addr := fmt.Sprintf("%s:%d", a.config.Node.IP, a.config.Node.Port)
 	a.server = &http.Server{

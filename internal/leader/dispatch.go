@@ -57,6 +57,7 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 		}
 	}
 
+	l.eventBus.Notify(job.Name)
 	return nil
 }
 

@@ -54,6 +54,7 @@ type Leader struct {
 	httpClient   *http.Client
 	agentTimeout time.Duration
 	settleDelay  time.Duration // wait before first reconciliation (0 = settled immediately)
+	eventBus     *EventBus
 }
 
 // New creates a new leader with optional HTTP client (nil uses default)
@@ -67,6 +68,7 @@ func New(localAgentID string, jobStore JobStore, client *http.Client) *Leader {
 		ops:          make(chan func(*leaderState), stateChannelBufferSize),
 		agentTimeout: defaultAgentTimeout,
 		httpClient:   client,
+		eventBus:     NewEventBus(),
 	}
 }
 
@@ -234,5 +236,10 @@ func (l *Leader) GetStateTime() time.Time {
 // IsSettled returns whether the leader has finished its settle period
 func (l *Leader) IsSettled() bool {
 	return query(l, func(s *leaderState) bool { return s.settled })
+}
+
+// EventBus returns the leader's event bus for SSE subscribers
+func (l *Leader) EventBus() *EventBus {
+	return l.eventBus
 }
 

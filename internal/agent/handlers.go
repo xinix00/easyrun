@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,6 +50,65 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+// proxySSEToLeader forwards the SSE event stream from the leader.
+// Uses a dedicated client without timeout and flushes after each SSE event.
+func (a *Agent) proxySSEToLeader(w http.ResponseWriter, r *http.Request) {
+	if a.getLeader == nil {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "leader discovery not configured")
+		return
+	}
+	leaderAddr := a.getLeader()
+	if leaderAddr == "" {
+		httputil.WriteError(w, http.StatusServiceUnavailable, "no leader available")
+		return
+	}
+
+	req, err := http.NewRequestWithContext(r.Context(), "GET", fmt.Sprintf("http://%s/v1/events", leaderAddr), nil)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to create request")
+		return
+	}
+
+	// No timeout — SSE is long-lived
+	resp, err := (&http.Client{}).Do(req)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadGateway, "failed to contact leader")
+		return
+	}
+	defer resp.Body.Close()
+
+	sse := httputil.SSEWriter(w)
+	if sse == nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		fmt.Fprintf(w, "%s\n", scanner.Text())
+		if scanner.Text() == "" { // empty line = SSE event boundary
+			sse.Flush()
+		}
+	}
+}
+
+// notifyLeader sends a lightweight ping to the leader's /v1/notify endpoint
+func (a *Agent) notifyLeader(jobName string) {
+	if a.getLeader == nil {
+		return
+	}
+	addr := a.getLeader()
+	if addr == "" {
+		return
+	}
+	body := strings.NewReader(fmt.Sprintf(`{"job":%q}`, jobName))
+	resp, err := http.Post(fmt.Sprintf("http://%s/v1/notify", addr), "application/json", body)
+	if err != nil {
+		return
+	}
+	resp.Body.Close()
 }
 
 // handleLeader returns the current leader address
@@ -369,18 +429,14 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	logCh := broadcaster.Subscribe()
-	defer broadcaster.Unsubscribe(logCh)
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	sse := httputil.SSEWriter(w)
+	if sse == nil {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
+
+	logCh := broadcaster.Subscribe()
+	defer broadcaster.Unsubscribe(logCh)
 
 	for {
 		select {
@@ -388,8 +444,7 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", line)
-			flusher.Flush()
+			sse.WriteData(line)
 		case <-r.Context().Done():
 			return
 		}

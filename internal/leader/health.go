@@ -131,6 +131,9 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 		if dispatched == 0 && len(missing) > 0 {
 			return fmt.Errorf("all agents rejected daemon job %s", job.Name)
 		}
+		if dispatched > 0 {
+			l.eventBus.Notify(job.Name)
+		}
 		return nil
 	}
 
@@ -153,7 +156,9 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 	missing := desired - totalPlaced
 	if missing > 0 {
 		log.Printf("Reconciling job %s: %d/%d placed, dispatching %d", job.Name, totalPlaced, desired, missing)
-		return l.dispatchInstances(job, missing)
+		err := l.dispatchInstances(job, missing)
+		l.eventBus.Notify(job.Name)
+		return err
 	}
 	return nil
 }
@@ -205,6 +210,73 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	}
 
 	return result
+}
+
+// GetJobStatus fetches tasks for a specific job by only querying agents
+// that have the job placed. Returns tasks_by_agent and the relevant agents.
+func (l *Leader) GetJobStatus(jobName string) (map[string][]*types.Task, []*types.Agent) {
+	job := l.FindJobByName(jobName)
+	if job == nil {
+		return nil, nil
+	}
+
+	// Find agents that have this job placed
+	agents := query(l, func(s *leaderState) []*types.Agent {
+		var result []*types.Agent
+		for agentID, jobs := range s.placed {
+			if jobs[job.ID] > 0 {
+				if a := s.agents[agentID]; a != nil {
+					result = append(result, a)
+				}
+			}
+		}
+		return result
+	})
+
+	result := make(map[string][]*types.Task)
+	if len(agents) == 0 {
+		return result, agents
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), HTTPClientTimeout)
+	defer cancel()
+
+	type agentResult struct {
+		agentID string
+		tasks   []*types.Task
+	}
+	resultCh := make(chan agentResult, len(agents))
+
+	for _, agent := range agents {
+		go func(a *types.Agent) {
+			tasks, err := l.fetchAgentTasks(ctx, a)
+			if err != nil {
+				resultCh <- agentResult{agentID: a.ID}
+				return
+			}
+			// Filter to only this job's tasks
+			var filtered []*types.Task
+			for _, t := range tasks {
+				if t.JobName == jobName {
+					filtered = append(filtered, t)
+				}
+			}
+			resultCh <- agentResult{agentID: a.ID, tasks: filtered}
+		}(agent)
+	}
+
+	for i := 0; i < len(agents); i++ {
+		select {
+		case res := <-resultCh:
+			if res.tasks != nil {
+				result[res.agentID] = res.tasks
+			}
+		case <-ctx.Done():
+			return result, agents
+		}
+	}
+
+	return result, agents
 }
 
 // fetchAgentTasks gets the task list from an agent

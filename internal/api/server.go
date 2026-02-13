@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -45,6 +46,13 @@ func NewServer(l *leader.Leader, addr string) *Server {
 
 	// Status
 	mux.HandleFunc("GET /v1/status", s.handleStatus)
+
+	// Events (SSE)
+	mux.HandleFunc("GET /v1/events", s.handleEvents)
+	mux.HandleFunc("POST /v1/notify", s.handleNotify)
+
+	// Per-job status
+	mux.HandleFunc("GET /v1/jobs/{name}/status", s.handleJobStatus)
 
 	s.server = &http.Server{
 		Addr:    addr,
@@ -258,6 +266,60 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		"total_tasks":    totalTasks,
 		"running_tasks":  running,
 		"settling":       !s.leader.IsSettled(),
+		"tasks_by_agent": tasks,
+	})
+}
+
+// handleEvents streams SSE notifications when cluster state changes.
+// Each event includes the job name that changed (empty = generic).
+func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+	sse := httputil.SSEWriter(w)
+	if sse == nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	ch := s.leader.EventBus().Subscribe()
+	defer s.leader.EventBus().Unsubscribe(ch)
+
+	// Initial ping so client does an immediate refetch
+	sse.WriteEvent("changed", "{}")
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case job, ok := <-ch:
+			if !ok {
+				return
+			}
+			sse.WriteEvent("changed", fmt.Sprintf(`{"job":%q}`, job))
+		}
+	}
+}
+
+// handleNotify receives agent task-change notifications and fires the event bus
+func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Job string `json:"job"`
+	}
+	json.NewDecoder(r.Body).Decode(&req) // best-effort, empty body = generic notify
+	s.leader.EventBus().Notify(req.Job)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleJobStatus returns tasks and agents for a specific job.
+// Only queries agents that have this job placed (via placed map).
+func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job name required")
+		return
+	}
+
+	tasks, agents := s.leader.GetJobStatus(name)
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"agents":         agents,
 		"tasks_by_agent": tasks,
 	})
 }
