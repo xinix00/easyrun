@@ -25,6 +25,25 @@ func PortEnvVars(ports map[string]int) []string {
 	return vars
 }
 
+// AttrEnvVars builds ER_ATTR_<KEY>=<value> environment variables for node attributes
+// Dots and dashes in keys are replaced with underscores (e.g. node.os → ER_ATTR_NODE_OS)
+func AttrEnvVars(attrs map[string]string) []string {
+	vars := make([]string, 0, len(attrs))
+	for name, val := range attrs {
+		upper := strings.Map(func(r rune) rune {
+			if r >= 'a' && r <= 'z' {
+				return r - 32
+			}
+			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+				return r
+			}
+			return '_'
+		}, name)
+		vars = append(vars, fmt.Sprintf("ER_ATTR_%s=%s", upper, val))
+	}
+	return vars
+}
+
 // Runner interface for executing jobs
 type Runner interface {
 	// Run starts a job and returns the task

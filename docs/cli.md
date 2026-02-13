@@ -58,8 +58,8 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 # Output (UPDATE):
 # Job 'api' updated (ID def456, policy=rolling)
 
-# Deploy Docker container
-./bin/easyrun run --name redis --image redis:7
+# Deploy Docker container (only on nodes with Docker)
+./bin/easyrun run --name redis --image redis:7 --affinity node.docker=true
 ./bin/easyrun run --name my-app --image myapp:v2 --command "python serve.py"
 
 # Deploy with affinity (only on arm64 nodes)
@@ -67,6 +67,14 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 
 # Pin to specific node
 ./bin/easyrun run --name monitor --command "./monitor" --affinity node.id=node-1
+
+# Platform-specific artifacts (agent picks first matching)
+./bin/easyrun run --name tailscale --command "./tailscale" \
+  --artifact "node.arch=amd64::https://pkgs.tailscale.com/stable/tailscale_amd64.tar.gz" \
+  --artifact "node.arch=arm64::https://pkgs.tailscale.com/stable/tailscale_arm64.tar.gz"
+
+# Simple artifact (no match = catch-all)
+./bin/easyrun run --name app --command "./app" --artifact "https://example.com/app.tar.gz"
 ```
 
 ### Run Flags
@@ -76,7 +84,7 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 | `--name` | Job name (required, unique key for upsert) |
 | `--command` | Command to execute (required for process jobs, optional for Docker) |
 | `--image` | Docker image (uses Docker instead of process) |
-| `--artifact` | Artifact URL to download |
+| `--artifact` | Artifact URL (repeatable, with optional match: `key=val::URL`) |
 | `--cpu` | CPU shares |
 | `--memory` | Memory limit (e.g., 512M, 1G) |
 | `--env` | Environment variables (KEY=VALUE, repeatable) |
@@ -144,6 +152,7 @@ Memory:   0.5 / 48.0 GB
 
 Attributes:
   node.arch = arm64
+  node.docker = true
   node.id = agent-1
   node.os = linux
 ```

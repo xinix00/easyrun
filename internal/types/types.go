@@ -15,6 +15,7 @@ const (
 // Artifact describes where to download the application binary/assets
 type Artifact struct {
 	URL     string            `json:"url"`               // http://, https://, s3://
+	Match   map[string]string `json:"match,omitempty"`   // node attribute constraints (agent picks first matching artifact)
 	Headers map[string]string `json:"headers,omitempty"` // HTTP headers (Authorization, X-API-Key, etc.)
 	Auth    map[string]string `json:"auth,omitempty"`    // other credentials (S3: access_key/secret_key/region)
 	Extract string            `json:"extract,omitempty"` // "tar.gz", "zip", "" (empty = raw file, chmod +x, no extraction)
@@ -64,7 +65,7 @@ type Job struct {
 	Affinity     map[string]string `json:"affinity,omitempty"`   // node attribute constraints (AND logic, equality)
 	Driver       string            `json:"driver,omitempty"`     // "exec" (default) or "docker"
 	Image        string            `json:"image,omitempty"`    // Docker image (only for driver=docker)
-	Artifact     *Artifact         `json:"artifact,omitempty"` // binary/assets to download
+	Artifacts    []Artifact        `json:"artifacts,omitempty"` // binary/assets to download (agent picks first matching)
 	Command      string            `json:"command,omitempty"`
 	Count        int               `json:"count,omitempty"`          // number of instances (default 1)
 	Ports        map[string]int    `json:"ports,omitempty"`          // process: port name -> host port (0 = dynamic), docker: port name -> container port

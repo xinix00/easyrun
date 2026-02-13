@@ -266,6 +266,98 @@ func TestHandleRunAffinityBeforeCapacity(t *testing.T) {
 	}
 }
 
+func TestResolveArtifactFirstMatch(t *testing.T) {
+	cfg := testConfig()
+	cfg.Node.Attributes = map[string]string{"node.os": "darwin"}
+	agent := New(cfg, "mac-node", NewMockRunner())
+
+	artifacts := []types.Artifact{
+		{URL: "https://example.com/app-linux.tar.gz", Match: map[string]string{"node.os": "linux"}},
+		{URL: "https://example.com/app-darwin.tar.gz", Match: map[string]string{"node.os": "darwin"}},
+		{URL: "https://example.com/app-windows.tar.gz", Match: map[string]string{"node.os": "windows"}},
+	}
+
+	resolved := agent.resolveArtifact(artifacts)
+	if resolved == nil {
+		t.Fatal("Expected a matching artifact")
+	}
+	if resolved.URL != "https://example.com/app-darwin.tar.gz" {
+		t.Errorf("URL = %q, want darwin artifact", resolved.URL)
+	}
+}
+
+func TestResolveArtifactCatchAll(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "node-1", NewMockRunner())
+
+	artifacts := []types.Artifact{
+		{URL: "https://example.com/app-linux.tar.gz", Match: map[string]string{"node.os": "linux"}},
+		{URL: "https://example.com/app-fallback.tar.gz"}, // no Match = catch-all
+	}
+
+	// node.os won't be "linux" (it's the test node's auto-detected OS)
+	// but the catch-all should always match
+	resolved := agent.resolveArtifact(artifacts)
+	if resolved == nil {
+		t.Fatal("Expected catch-all artifact to match")
+	}
+	// Either linux matched (if running on linux) or fallback matched
+	if resolved.URL != "https://example.com/app-linux.tar.gz" && resolved.URL != "https://example.com/app-fallback.tar.gz" {
+		t.Errorf("Unexpected URL: %q", resolved.URL)
+	}
+}
+
+func TestResolveArtifactNoMatch(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "node-1", NewMockRunner())
+
+	artifacts := []types.Artifact{
+		{URL: "https://example.com/app-windows.tar.gz", Match: map[string]string{"node.os": "windows"}},
+	}
+
+	resolved := agent.resolveArtifact(artifacts)
+	if resolved != nil {
+		t.Errorf("Expected no match, got %q", resolved.URL)
+	}
+}
+
+func TestResolveArtifactMultipleConstraints(t *testing.T) {
+	cfg := testConfig()
+	cfg.Node.Attributes = map[string]string{"node.os": "linux"}
+	agent := New(cfg, "linux-arm", NewMockRunner())
+	// agent has: node.id=linux-arm, node.os=linux, node.arch=<runtime>
+
+	artifacts := []types.Artifact{
+		{URL: "https://example.com/app-linux-amd64.tar.gz", Match: map[string]string{"node.os": "linux", "node.arch": "amd64"}},
+		{URL: "https://example.com/app-linux-arm64.tar.gz", Match: map[string]string{"node.os": "linux", "node.arch": "arm64"}},
+		{URL: "https://example.com/app-darwin-arm64.tar.gz", Match: map[string]string{"node.os": "darwin", "node.arch": "arm64"}},
+	}
+
+	resolved := agent.resolveArtifact(artifacts)
+	if resolved == nil {
+		t.Fatal("Expected a match (linux + current arch)")
+	}
+	// Should match the linux entry for the current runtime arch
+	if resolved.Match["node.os"] != "linux" {
+		t.Errorf("Expected linux match, got %v", resolved.Match)
+	}
+}
+
+func TestResolveArtifactEmptySlice(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "node-1", NewMockRunner())
+
+	resolved := agent.resolveArtifact(nil)
+	if resolved != nil {
+		t.Error("Expected nil for empty artifacts")
+	}
+
+	resolved = agent.resolveArtifact([]types.Artifact{})
+	if resolved != nil {
+		t.Error("Expected nil for empty artifacts slice")
+	}
+}
+
 func TestCapacityIncludesAttributes(t *testing.T) {
 	cfg := &config.Config{
 		Node: config.NodeConfig{

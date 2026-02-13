@@ -182,8 +182,9 @@ Without settle:
 - On isolation (6 ticks, no leader, can't become leader): stop all tasks
 - Runs on port 8080
 - CORS enabled for browser access
-- Has node attributes (auto-detected: `node.id`, `node.arch`, `node.os` + custom via config)
+- Has node attributes (auto-detected: `node.id`, `node.arch`, `node.os`, `node.docker` + custom via config)
 - Checks job affinity constraints before accepting — rejects with 406 on mismatch
+- Resolves platform-specific artifacts: picks first artifact whose `match` constraints match node attributes
 
 ### Runner Selection
 - Agent has both `ExecRunner` and `DockerRunner`
@@ -231,7 +232,8 @@ Jobs can request multiple named ports:
 1. Agent allocates free port for each dynamic port (value=0)
 2. Fixed ports (value>0) are used directly after availability check
 3. Sets ENV vars: `ER_PORT_HTTP=8080`, `ER_PORT_GRPC=9090`, etc.
-4. Task struct has `Ports map[string]int`
+4. Sets ENV vars: `ER_ATTR_NODE_OS=linux`, `ER_ATTR_NODE_ARCH=arm64`, etc. for all node attributes
+5. Task struct has `Ports map[string]int`
 
 **No ports = no ports:**
 - Jobs without `ports` field get empty ports map

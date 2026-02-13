@@ -264,6 +264,28 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 		job.Driver = types.DriverFor(job.Image)
 	}
 
+	// Resolve platform-specific artifact (pick first matching this node's attributes)
+	if len(job.Artifacts) > 0 {
+		resolved := a.resolveArtifact(job.Artifacts)
+		if resolved == nil {
+			return nil, fmt.Errorf("no matching artifact for this node's attributes")
+		}
+		job.Artifacts = []types.Artifact{*resolved}
+	}
+
+	// Inject node attributes as ER_ATTR_* environment variables
+	if len(a.attributes) > 0 {
+		if job.Env == nil {
+			job.Env = make(map[string]string)
+		}
+		for _, env := range runner.AttrEnvVars(a.attributes) {
+			k, v, _ := strings.Cut(env, "=")
+			if _, exists := job.Env[k]; !exists {
+				job.Env[k] = v
+			}
+		}
+	}
+
 	ports, err := a.allocatePortsForJob(job)
 	if err != nil {
 		return nil, fmt.Errorf("failed to allocate ports: %w", err)

@@ -33,9 +33,16 @@ func TestJobJSONRoundtrip(t *testing.T) {
 		MemoryLimit: 512 * 1024 * 1024,
 		Env:         map[string]string{"FOO": "bar"},
 		Tags:        map[string]string{"env": "prod"},
-		Artifact: &Artifact{
-			URL:     "https://example.com/app.tar.gz",
-			Headers: map[string]string{"Authorization": "Bearer token"},
+		Artifacts: []Artifact{
+			{
+				URL:     "https://example.com/app-arm64.tar.gz",
+				Match:   map[string]string{"node.arch": "arm64"},
+				Headers: map[string]string{"Authorization": "Bearer token"},
+			},
+			{
+				URL:   "https://example.com/app-amd64.tar.gz",
+				Match: map[string]string{"node.arch": "amd64"},
+			},
 		},
 		HealthCheck: &HealthCheck{
 			Path:     "/health",
@@ -75,10 +82,15 @@ func TestJobJSONRoundtrip(t *testing.T) {
 	if decoded.MemoryLimit != job.MemoryLimit {
 		t.Errorf("MemoryLimit = %d, want %d", decoded.MemoryLimit, job.MemoryLimit)
 	}
-	if decoded.Artifact == nil {
-		t.Error("Artifact is nil")
-	} else if decoded.Artifact.URL != job.Artifact.URL {
-		t.Errorf("Artifact.URL = %q, want %q", decoded.Artifact.URL, job.Artifact.URL)
+	if len(decoded.Artifacts) != 2 {
+		t.Errorf("Artifacts length = %d, want 2", len(decoded.Artifacts))
+	} else {
+		if decoded.Artifacts[0].URL != job.Artifacts[0].URL {
+			t.Errorf("Artifacts[0].URL = %q, want %q", decoded.Artifacts[0].URL, job.Artifacts[0].URL)
+		}
+		if decoded.Artifacts[0].Match["node.arch"] != "arm64" {
+			t.Errorf("Artifacts[0].Match[node.arch] = %q, want %q", decoded.Artifacts[0].Match["node.arch"], "arm64")
+		}
 	}
 	if decoded.HealthCheck == nil {
 		t.Error("HealthCheck is nil")
@@ -192,8 +204,8 @@ func TestJobDefaults(t *testing.T) {
 	if job.Count != 0 {
 		t.Errorf("Count = %d, want 0 (default)", job.Count)
 	}
-	if job.Artifact != nil {
-		t.Error("Artifact should be nil")
+	if len(job.Artifacts) != 0 {
+		t.Error("Artifacts should be empty")
 	}
 	if job.HealthCheck != nil {
 		t.Error("HealthCheck should be nil")

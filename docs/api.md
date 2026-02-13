@@ -125,15 +125,28 @@ curl -X POST http://localhost:9080/v1/jobs \
   -d '{
     "name": "api",
     "affinity": {"node.arch": "amd64"},
-    "artifact": {
-      "url": "s3://mybucket/api-v2.0.tar.gz",
-      "auth": {
-        "access_key": "AKIAIOSFODNN7EXAMPLE",
-        "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
-        "region": "eu-west-1"
+    "artifacts": [
+      {
+        "url": "s3://mybucket/api-v2.0-amd64.tar.gz",
+        "match": {"node.arch": "amd64"},
+        "auth": {
+          "access_key": "AKIAIOSFODNN7EXAMPLE",
+          "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+          "region": "eu-west-1"
+        },
+        "extract": "tar.gz"
       },
-      "extract": "tar.gz"
-    },
+      {
+        "url": "s3://mybucket/api-v2.0-arm64.tar.gz",
+        "match": {"node.arch": "arm64"},
+        "auth": {
+          "access_key": "AKIAIOSFODNN7EXAMPLE",
+          "secret_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+          "region": "eu-west-1"
+        },
+        "extract": "tar.gz"
+      }
+    ],
     "command": "./server --http=$ER_PORT_HTTP --grpc=$ER_PORT_GRPC",
     "count": 3,
     "ports": {"http": 0, "grpc": 0, "metrics": 9090},
@@ -167,8 +180,9 @@ curl -X POST http://localhost:9080/v1/jobs \
 - `driver` (string): `"exec"` (default) or `"docker"` — auto-derived from `image` if not set
 - `image` (string): Docker image (sets driver to `"docker"` automatically)
 - `affinity` (map): Node attribute constraints, AND logic (optional). Example: `{"node.arch": "arm64"}`. Agent rejects with 406 if no match.
-- `artifact` (object): Binary/assets to download (optional)
+- `artifacts` (array): Platform-specific binaries/assets (optional). Agent picks first matching entry.
   - `url` (string): URL with scheme — determines downloader (http://, s3://)
+  - `match` (map): Node attribute constraints — agent picks first artifact where all match (empty = catch-all)
   - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
   - `auth` (map): Credentials (S3: access_key/secret_key/region, HTTP: username/password)
   - `extract` (string): Archive type — `tar.gz`, `tar.bz2`, `zip`, or `""` (raw binary, auto chmod +x)
@@ -177,7 +191,7 @@ curl -X POST http://localhost:9080/v1/jobs \
 - `ports` (map): Process: port name → host port (0=dynamic). Docker: port name → container port (host always dynamic). ENV vars `ER_PORT_<NAME>`
 - `cpu_shares` (int): CPU priority (nice-based)
 - `memory_limit` (uint64): Memory limit in bytes
-- `env` (map): Environment variables
+- `env` (map): Environment variables (note: node attributes are auto-injected as `ER_ATTR_<KEY>`, user env takes priority)
 - `tags` (map): Labels for service discovery
 - `volumes` (map): Host path → task path (symlinked)
 - `health_check`: HTTP health monitoring

@@ -56,7 +56,7 @@ func runCommand() *cli.Command {
 			&cli.StringFlag{Name: "name", Required: true},
 			&cli.StringFlag{Name: "command", Usage: "Command to run (required for process jobs)"},
 			&cli.StringFlag{Name: "image", Usage: "Docker image (uses Docker instead of process)"},
-			&cli.StringFlag{Name: "artifact", Usage: "Artifact URL"},
+			&cli.StringSliceFlag{Name: "artifact", Usage: "Artifact URL, or match::URL for platform-specific (e.g. node.arch=arm64::https://example.com/app-arm64.tar.gz)"},
 			&cli.IntFlag{Name: "cpu", Usage: "CPU shares"},
 			&cli.StringFlag{Name: "memory", Usage: "Memory limit (e.g., 512M, 1G)"},
 			&cli.StringSliceFlag{Name: "env", Usage: "Environment variables (KEY=VALUE)"},
@@ -106,9 +106,25 @@ func runJob(c *cli.Context) error {
 		return fmt.Errorf("either --command or --image is required")
 	}
 
-	if artifact := c.String("artifact"); artifact != "" {
-		job.Artifact = &types.Artifact{
-			URL: artifact,
+	if artifacts := c.StringSlice("artifact"); len(artifacts) > 0 {
+		for _, art := range artifacts {
+			a := types.Artifact{}
+			if idx := strings.Index(art, "::"); idx > 0 {
+				// match::URL format (e.g. "node.arch=arm64,node.os=linux::https://example.com/app.tar.gz")
+				a.URL = art[idx+2:]
+				a.Match = make(map[string]string)
+				for _, kv := range strings.Split(art[:idx], ",") {
+					for i, ch := range kv {
+						if ch == '=' {
+							a.Match[kv[:i]] = kv[i+1:]
+							break
+						}
+					}
+				}
+			} else {
+				a.URL = art
+			}
+			job.Artifacts = append(job.Artifacts, a)
 		}
 	}
 

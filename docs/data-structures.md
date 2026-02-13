@@ -11,7 +11,7 @@ type Job struct {
     Affinity     map[string]string // Node attribute constraints (optional, AND logic)
     Driver       string            // "exec" (default) or "docker"
     Image        string            // Docker image (only for driver=docker)
-    Artifact     *Artifact         // Binary/assets to download (optional)
+    Artifacts    []Artifact        // Platform-specific binaries (optional, agent picks first match)
     Command      string            // Command to execute (required for process, optional for Docker)
     Count        int               // Number of instances (see below)
     Ports        map[string]int    // Process: port name → host port (0=dynamic). Docker: port name → container port
@@ -69,7 +69,7 @@ Pin to a specific node:
 
 All constraints must match (AND logic). The agent checks affinity and rejects with 406 if no match — the leader stays unaware of attributes.
 
-**Auto-detected attributes:** `node.id`, `node.arch` (arm64/amd64), `node.os` (linux/darwin/windows).
+**Auto-detected attributes:** `node.id`, `node.arch` (arm64/amd64), `node.os` (linux/darwin/windows), `node.docker` (true/false).
 **Custom attributes:** configurable via `node.attributes` in config YAML.
 
 ### UpdatePolicy
@@ -120,7 +120,7 @@ Ports can be dynamic (assigned at runtime) or fixed:
 
 **Docker jobs:** Port values are container ports. Host ports are always dynamically allocated. Example: `{"http": 80}` → `-p <random>:80`.
 
-**Environment variables:** Task gets `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all ports (host ports).
+**Environment variables:** Task gets `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all ports (host ports), and `ER_ATTR_NODE_OS`, `ER_ATTR_NODE_ARCH`, etc. for all node attributes (dots/dashes become underscores, uppercased).
 
 ### Volumes
 
@@ -144,11 +144,14 @@ Mount host directories into the task's working directory via symlinks:
 ```go
 type Artifact struct {
     URL     string            // Download URL (http://, https://, s3://)
+    Match   map[string]string // Node attribute constraints (agent picks first match, empty = catch-all)
     Headers map[string]string // HTTP headers (Authorization, X-API-Key, etc.)
     Auth    map[string]string // Other credentials (S3, helpers)
     Extract string            // "tar.gz", "tar.bz2", "zip", "" (empty = raw file)
 }
 ```
+
+**Platform-specific artifacts:** Jobs have an `artifacts` array. The agent picks the first entry whose `match` constraints match its node attributes (same AND logic as affinity). Empty `match` = catch-all.
 
 **URL scheme determines which downloader to use.**
 
@@ -239,6 +242,8 @@ type Task struct {
 **Note:** `task.Driver` determines which runner manages this task. `"exec"` = ExecRunner, `"docker"` = DockerRunner.
 
 **Ports:** Task gets ENV vars `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all allocated ports.
+
+**Node attributes:** Task gets ENV vars `ER_ATTR_NODE_OS`, `ER_ATTR_NODE_ARCH`, `ER_ATTR_NODE_ID`, etc. for all node attributes. User-defined `env` on the job takes priority over attribute env vars with the same name.
 
 ### Task States
 

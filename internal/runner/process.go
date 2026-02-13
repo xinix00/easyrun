@@ -61,10 +61,10 @@ func (r *ExecRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 		return nil, fmt.Errorf("failed to setup task directory: %w", err)
 	}
 
-	// Download artifact if specified
-	if job.Artifact != nil {
+	// Download artifact if specified (agent already resolved to first matching entry)
+	if len(job.Artifacts) > 0 {
 		// Download directly to taskDir so commands like "./binary" work
-		if err := downloadArtifact(job.Artifact, taskDir); err != nil {
+		if err := downloadArtifact(&job.Artifacts[0], taskDir); err != nil {
 			r.cleanupTaskDir(taskID)
 			return nil, fmt.Errorf("failed to download artifact: %w", err)
 		}

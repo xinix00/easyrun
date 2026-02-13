@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -81,10 +82,17 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 	endpoint := fmt.Sprintf("http://%s:%d", cfg.Node.IP, cfg.Node.Port)
 
 	// Build node attributes: auto-detected + user-configured (config overrides)
+	// Auto-detect docker availability
+	hasDocker := "false"
+	if _, err := exec.LookPath("docker"); err == nil {
+		hasDocker = "true"
+	}
+
 	attrs := map[string]string{
-		"node.id":   id,
-		"node.arch": runtime.GOARCH,
-		"node.os":   runtime.GOOS,
+		"node.id":     id,
+		"node.arch":   runtime.GOARCH,
+		"node.os":     runtime.GOOS,
+		"node.docker": hasDocker,
 	}
 	for k, v := range cfg.Node.Attributes {
 		attrs[k] = v
@@ -137,6 +145,18 @@ func (a *Agent) matchesAffinity(affinity map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// resolveArtifact picks the first artifact whose Match constraints are satisfied
+// by this agent's attributes. Empty Match = catch-all (always matches).
+// Returns nil if no artifact matches.
+func (a *Agent) resolveArtifact(artifacts []types.Artifact) *types.Artifact {
+	for i := range artifacts {
+		if a.matchesAffinity(artifacts[i].Match) {
+			return &artifacts[i]
+		}
+	}
+	return nil
 }
 
 // Init performs startup cleanup (removes old task directories and containers)
