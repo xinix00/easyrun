@@ -37,22 +37,24 @@ func (l *Leader) checkDeadAgents() {
 		return
 	}
 
-	hadDead := query(l, func(s *leaderState) bool {
-		hadDead := false
+	var deadIDs []string
+	query(l, func(s *leaderState) bool {
 		for id, agent := range s.agents {
 			if time.Since(agent.LastSeen) > l.agentTimeout {
 				log.Printf("Agent %s is dead (no heartbeat for %v)", id, time.Since(agent.LastSeen))
 				delete(s.agents, id)
 				delete(s.placed, id)
-				hadDead = true
+				deadIDs = append(deadIDs, id)
 			}
 		}
-		return hadDead
+		return false
 	})
 
-	// If any agents died, reconcile all jobs
-	if hadDead {
+	if len(deadIDs) > 0 {
 		l.reconcileJobs()
+		for _, id := range deadIDs {
+			l.eventBus.Notify("agent:" + id)
+		}
 	}
 }
 
@@ -132,7 +134,7 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 			return fmt.Errorf("all agents rejected daemon job %s", job.Name)
 		}
 		if dispatched > 0 {
-			l.eventBus.Notify(job.Name)
+			l.eventBus.Notify("job:" + job.Name)
 		}
 		return nil
 	}
@@ -157,7 +159,7 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 	if missing > 0 {
 		log.Printf("Reconciling job %s: %d/%d placed, dispatching %d", job.Name, totalPlaced, desired, missing)
 		err := l.dispatchInstances(job, missing)
-		l.eventBus.Notify(job.Name)
+		l.eventBus.Notify("job:" + job.Name)
 		return err
 	}
 	return nil

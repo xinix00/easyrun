@@ -177,6 +177,7 @@ func (l *Leader) RegisterAgent(id, endpoint, version string, placed map[string]i
 		log.Printf("Agent %s registered, reconciling jobs", id)
 		l.reconcileJobs()
 	}
+	l.eventBus.Notify("agent:" + id)
 }
 
 // UnregisterAgent removes an agent and reconciles jobs

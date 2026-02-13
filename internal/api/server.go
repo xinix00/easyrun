@@ -289,11 +289,18 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case job, ok := <-ch:
+		case msg, ok := <-ch:
 			if !ok {
 				return
 			}
-			sse.WriteEvent("changed", fmt.Sprintf(`{"job":%q}`, job))
+			switch {
+			case strings.HasPrefix(msg, "agent:"):
+				sse.WriteEvent("changed", fmt.Sprintf(`{"agent":%q}`, strings.TrimPrefix(msg, "agent:")))
+			case strings.HasPrefix(msg, "job:"):
+				sse.WriteEvent("changed", fmt.Sprintf(`{"job":%q}`, strings.TrimPrefix(msg, "job:")))
+			default:
+				sse.WriteEvent("changed", "{}")
+			}
 		}
 	}
 }
@@ -304,7 +311,11 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		Job string `json:"job"`
 	}
 	json.NewDecoder(r.Body).Decode(&req) // best-effort, empty body = generic notify
-	s.leader.EventBus().Notify(req.Job)
+	if req.Job != "" {
+		s.leader.EventBus().Notify("job:" + req.Job)
+	} else {
+		s.leader.EventBus().Notify("")
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

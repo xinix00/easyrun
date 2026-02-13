@@ -64,7 +64,7 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 
 		// Only stop old after new is running (tracked under old.ID)
 		l.stopOneInstance(old)
-		l.eventBus.Notify(new.Name)
+		l.eventBus.Notify("job:" + new.Name)
 
 		if i < count-1 {
 			time.Sleep(RollingUpdateDelay)
