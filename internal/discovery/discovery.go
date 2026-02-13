@@ -102,7 +102,7 @@ func (d *Discovery) TryBecomeLeader() bool {
 	var result struct {
 		Success bool `json:"success"`
 	}
-	json.NewDecoder(resp.Body).Decode(&result)
+	_ = json.NewDecoder(resp.Body).Decode(&result)
 	return result.Success
 }
 
@@ -124,7 +124,7 @@ func (d *Discovery) ReleaseLeadership() {
 	if err != nil {
 		return
 	}
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 }
 

@@ -80,7 +80,7 @@ func (s *Server) Run(ctx context.Context) error {
 func (s *Server) Stop() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	s.server.Shutdown(ctx)
+	_ = s.server.Shutdown(ctx)
 }
 
 // handleHealth returns health status

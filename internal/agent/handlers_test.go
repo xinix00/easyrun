@@ -749,7 +749,7 @@ func TestProxyToLeaderSuccess(t *testing.T) {
 	leaderServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`[{"id":"agent-1"}]`))
+		_, _ = w.Write([]byte(`[{"id":"agent-1"}]`))
 	}))
 	defer leaderServer.Close()
 
@@ -785,7 +785,7 @@ func TestProxyToLeaderPostForward(t *testing.T) {
 		data, _ := io.ReadAll(r.Body)
 		receivedBody = string(data)
 		w.WriteHeader(http.StatusCreated)
-		w.Write([]byte(`{"status":"ok"}`))
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	}))
 	defer leaderServer.Close()
 

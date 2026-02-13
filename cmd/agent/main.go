@@ -159,7 +159,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				} else {
 					failCount = 0
 					leaderAddr = fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
-					sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
+					_, _ = sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
 				}
 			} else if leaderAddr != "" {
 				// On startup (or after leader change): register first with placed counts
@@ -369,7 +369,7 @@ func getOrCreateNodeID(cfg *config.Config) string {
 
 	// 3. Generate new ID and persist
 	nodeID := uuid.New().String()[:8]
-	os.MkdirAll(stateDir, 0755)
+	_ = os.MkdirAll(stateDir, 0755)
 	if err := os.WriteFile(idFile, []byte(nodeID), 0644); err != nil {
 		log.Printf("Warning: failed to persist node ID: %v", err)
 	} else {

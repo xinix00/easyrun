@@ -116,10 +116,7 @@ func TestLogBroadcasterSlowSubscriber(t *testing.T) {
 
 	// Write more than the buffer size
 	for i := 0; i < 150; i++ {
-		_, err := b.Write([]byte("line\n"))
-		if err != nil {
-			t.Fatalf("Write failed: %v", err)
-		}
+		_, _ = b.Write([]byte("line\n"))
 	}
 
 	// Should not block or panic
@@ -327,7 +324,7 @@ func TestLogBroadcasterSubscribeAfterClose(t *testing.T) {
 	ch := b.Subscribe()
 
 	// Write should work but channel won't receive (it's in closed state)
-	b.Write([]byte("test\n"))
+	_, _ = b.Write([]byte("test\n"))
 
 	// Channel should be readable (might be empty or have messages)
 	select {

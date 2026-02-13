@@ -352,7 +352,7 @@ func TestRunJobNoAgentsAvailable(t *testing.T) {
 	}
 
 	var resp map[string]string
-	json.Unmarshal(w.Body.Bytes(), &resp)
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
 	if resp["status"] != "pending" {
 		t.Errorf("status = %q, want %q", resp["status"], "pending")
 	}

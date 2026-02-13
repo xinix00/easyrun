@@ -347,7 +347,7 @@ func TestIsolatedProcessCannotAccessRoot(t *testing.T) {
 		// Timeout is acceptable - command might have failed
 	}
 
-	runner.Stop(task)
+	_ = runner.Stop(task)
 }
 
 func TestCleanupRemovesTaskDir(t *testing.T) {
@@ -378,7 +378,7 @@ func TestCleanupRemovesTaskDir(t *testing.T) {
 	}
 
 	// Stop and cleanup
-	runner.Stop(task)
+	_ = runner.Stop(task)
 
 	// Task dir should be removed
 	time.Sleep(100 * time.Millisecond)

@@ -41,7 +41,7 @@ func TestDiscoveryNodeAddr(t *testing.T) {
 func TestDiscoveryGetLeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/leader/test-cluster" && r.Method == http.MethodGet {
-			json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.20:8080"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.20:8080"})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -83,14 +83,14 @@ func TestDiscoveryTryBecomeLeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/leader/test-cluster" && r.Method == http.MethodPost {
 			var req map[string]any
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 
 			if req["ip"] == "192.168.1.10:8080" {
-				json.NewEncoder(w).Encode(map[string]bool{"success": true})
+				_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 				return
 			}
 		}
-		json.NewEncoder(w).Encode(map[string]bool{"success": false})
+		_ = json.NewEncoder(w).Encode(map[string]bool{"success": false})
 	}))
 	defer server.Close()
 
@@ -111,7 +111,7 @@ func TestDiscoveryTryBecomeLeaderNoEndpoint(t *testing.T) {
 
 func TestDiscoveryTryBecomeLeaderDenied(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]bool{"success": false})
+		_ = json.NewEncoder(w).Encode(map[string]bool{"success": false})
 	}))
 	defer server.Close()
 
@@ -127,7 +127,7 @@ func TestDiscoveryReleaseLeadership(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/leader/test-cluster" && r.Method == http.MethodDelete {
 			released = true
-			json.NewEncoder(w).Encode(map[string]bool{"released": true})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"released": true})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)
@@ -150,7 +150,7 @@ func TestDiscoveryReleaseLeadershipNoEndpoint(t *testing.T) {
 
 func TestDiscoveryIsLeader(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.10:8080"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.10:8080"})
 	}))
 	defer server.Close()
 
@@ -163,7 +163,7 @@ func TestDiscoveryIsLeader(t *testing.T) {
 
 func TestDiscoveryIsLeaderFalse(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.20:8080"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.20:8080"})
 	}))
 	defer server.Close()
 
@@ -177,7 +177,7 @@ func TestDiscoveryIsLeaderFalse(t *testing.T) {
 func TestDiscoveryRenewLease(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {
-			json.NewEncoder(w).Encode(map[string]bool{"success": true})
+			_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)

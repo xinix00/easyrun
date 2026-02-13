@@ -261,7 +261,7 @@ func TestExtractZipPathTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	w.Write([]byte("evil"))
+	_, _ = w.Write([]byte("evil"))
 	zw.Close()
 	f.Close()
 

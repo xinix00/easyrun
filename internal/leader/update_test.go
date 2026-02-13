@@ -118,7 +118,7 @@ func TestUpdateJobRecreate(t *testing.T) {
 		Count:   1,
 	}
 
-	leader.DispatchJob(oldJob)
+	_ = leader.DispatchJob(oldJob)
 	time.Sleep(50 * time.Millisecond)
 
 	// Update with recreate policy
@@ -177,7 +177,7 @@ func TestUpdateJobBlueGreen(t *testing.T) {
 		},
 	}
 
-	leader.DispatchJob(oldJob)
+	_ = leader.DispatchJob(oldJob)
 	time.Sleep(50 * time.Millisecond)
 
 	initialRunCalls := agent.RunCallCount()
@@ -438,7 +438,7 @@ func newRealisticMockAgent() *realisticMockAgent {
 
 func (ma *realisticMockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	var job types.Job
-	json.NewDecoder(r.Body).Decode(&job)
+	_ = json.NewDecoder(r.Body).Decode(&job)
 
 	ma.mu.Lock()
 	ma.taskSeq++
@@ -548,7 +548,7 @@ func TestUpdateRollingDeleteByNameBug(t *testing.T) {
 		Count:        1,
 		UpdatePolicy: types.UpdateRolling,
 	}
-	l.UpdateJob(newJob)
+	_ = l.UpdateJob(newJob)
 	time.Sleep(50 * time.Millisecond)
 
 	// BUG: DELETE /delete/my-app killed BOTH v1 and v2 tasks
@@ -604,7 +604,7 @@ func TestUpdateBlueGreenDeleteByNameBug(t *testing.T) {
 		Count:        1,
 		UpdatePolicy: types.UpdateBlueGreen,
 	}
-	l.UpdateJob(newJob)
+	_ = l.UpdateJob(newJob)
 	time.Sleep(50 * time.Millisecond)
 
 	// BUG: DeleteJobByID(old) sends DELETE /delete/my-app which kills v2 too

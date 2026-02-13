@@ -50,7 +50,7 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		ldr.DispatchJob(job)
+		_ = ldr.DispatchJob(job)
 	}()
 
 	// Wait for a few dispatches to complete (~5 at 60ms each)
