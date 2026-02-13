@@ -85,6 +85,9 @@ func (l *Leader) updateRecreate(old, new *types.Job) error {
 // updateBlueGreen: dispatch all → KILL all
 func (l *Leader) updateBlueGreen(old, new *types.Job) error {
 	if err := l.DispatchJob(new); err != nil {
+		// DispatchJob always stores the job — clean up on failure
+		// so the old version remains the only entry for this name.
+		l.jobStore.DeleteJob(new.ID)
 		return err
 	}
 	l.DeleteJobByID(old) // Deletes old by ID, new stays (different ID!)

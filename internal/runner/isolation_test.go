@@ -2,13 +2,29 @@ package runner
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"easyrun/internal/types"
 )
+
+// skipWithoutIsolation skips if the OS cannot run isolated processes
+// (Linux needs root for chroot, macOS needs sandbox-exec).
+func skipWithoutIsolation(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "linux" && os.Getuid() != 0 {
+		t.Skip("chroot requires root on Linux")
+	}
+	if runtime.GOOS == "darwin" {
+		if _, err := exec.LookPath("sandbox-exec"); err != nil {
+			t.Skip("sandbox-exec not found")
+		}
+	}
+}
 
 func TestIsolationEnabledByDefault(t *testing.T) {
 	// Verify that a new config has isolation enabled
@@ -91,6 +107,7 @@ func TestSetupCommandWithoutIsolation(t *testing.T) {
 }
 
 func TestRunnerRunWithIsolation(t *testing.T) {
+	skipWithoutIsolation(t)
 	taskDir := t.TempDir()
 
 	cfg := &Config{
@@ -151,6 +168,7 @@ func TestRunnerRunWithoutIsolation(t *testing.T) {
 }
 
 func TestIsolationWithVolumes(t *testing.T) {
+	skipWithoutIsolation(t)
 	taskDir := t.TempDir()
 	volumeDir := t.TempDir()
 
@@ -284,6 +302,7 @@ func TestSandboxProfileGeneration(t *testing.T) {
 }
 
 func TestIsolatedProcessCannotAccessRoot(t *testing.T) {
+	skipWithoutIsolation(t)
 	if testing.Short() {
 		t.Skip("Skipping isolation test in short mode")
 	}
@@ -332,6 +351,7 @@ func TestIsolatedProcessCannotAccessRoot(t *testing.T) {
 }
 
 func TestCleanupRemovesTaskDir(t *testing.T) {
+	skipWithoutIsolation(t)
 	rootfs := t.TempDir()
 
 	cfg := &Config{
