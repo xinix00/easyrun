@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -641,7 +642,7 @@ func TestChaos_HeartbeatStorm(t *testing.T) {
 
 	done := make(chan bool)
 	start := time.Now()
-	heartbeats := 0
+	var heartbeats atomic.Int64
 
 	for i := 0; i < 100; i++ {
 		go func(id int) {
@@ -650,7 +651,7 @@ func TestChaos_HeartbeatStorm(t *testing.T) {
 
 			for j := 0; j < 100; j++ {
 				leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
-				heartbeats++
+				heartbeats.Add(1)
 			}
 			done <- true
 		}(i)
@@ -662,9 +663,10 @@ func TestChaos_HeartbeatStorm(t *testing.T) {
 	}
 
 	elapsed := time.Since(start)
-	rate := float64(heartbeats) / elapsed.Seconds()
+	hb := heartbeats.Load()
+	rate := float64(hb) / elapsed.Seconds()
 
-	t.Logf("Heartbeat storm: %d heartbeats in %v = %.0f HB/sec", heartbeats, elapsed, rate)
+	t.Logf("Heartbeat storm: %d heartbeats in %v = %.0f HB/sec", hb, elapsed, rate)
 
 	// System should survive
 	agents := leader.GetAgents()

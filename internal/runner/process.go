@@ -155,19 +155,16 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 		fmt.Printf("Warning: failed to send SIGTERM to process group %d: %v\n", pid, err)
 	}
 
-	// Wait for graceful shutdown
+	// Wait for graceful shutdown by polling PID.
+	// Don't call cmd.Wait() here — Run's background goroutine already does that,
+	// and calling it twice on the same exec.Cmd is a data race.
 	done := make(chan struct{})
 	go func() {
-		if cmd != nil {
-			_ = cmd.Wait()
-		} else {
-			// Poll for process exit
-			for i := 0; i < processExitPollAttempts; i++ {
-				if err := syscall.Kill(pid, 0); err != nil {
-					break
-				}
-				time.Sleep(processExitPollInterval)
+		for i := 0; i < processExitPollAttempts; i++ {
+			if err := syscall.Kill(pid, 0); err != nil {
+				break
 			}
+			time.Sleep(processExitPollInterval)
 		}
 		close(done)
 	}()

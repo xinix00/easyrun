@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -95,9 +96,11 @@ func TestChaos_TaskExceedsMaxRestarts(t *testing.T) {
 	currentTaskID := task.ID
 	for i := 0; i < 5; i++ {
 		// Task crashes
+		mockRunner.mu.Lock()
 		if ct, ok := mockRunner.tasks[currentTaskID]; ok {
 			ct.state = types.TaskFailed
 		}
+		mockRunner.mu.Unlock()
 
 		// Get current task reference from agent state
 		currentTask := query(agent, func(s *agentState) *types.Task {
@@ -365,6 +368,7 @@ func TestChaos_RapidJobDeletionAndCreation(t *testing.T) {
 // Helper types for chaos tests
 
 type crashingRunner struct {
+	mu    sync.Mutex
 	tasks map[string]*crashingTask
 }
 
@@ -384,26 +388,34 @@ func (r *crashingRunner) Run(job *types.Job, ports map[string]int) (*types.Task,
 		CPUShares:   job.CPUShares,
 		MemoryLimit: job.MemoryLimit,
 	}
+	r.mu.Lock()
 	r.tasks[task.ID] = &crashingTask{task: task, state: types.TaskRunning}
+	r.mu.Unlock()
 
-	// Crash after short delay (check if still tracked before writing)
+	// Crash after short delay
 	taskID := task.ID
 	go func() {
 		time.Sleep(10 * time.Millisecond)
+		r.mu.Lock()
 		if t, ok := r.tasks[taskID]; ok {
 			t.state = types.TaskFailed
 		}
+		r.mu.Unlock()
 	}()
 
 	return task, nil
 }
 
 func (r *crashingRunner) Stop(task *types.Task) error {
+	r.mu.Lock()
 	delete(r.tasks, task.ID)
+	r.mu.Unlock()
 	return nil
 }
 
 func (r *crashingRunner) Status(task *types.Task) (types.TaskState, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if t, ok := r.tasks[task.ID]; ok {
 		return t.state, nil
 	}
