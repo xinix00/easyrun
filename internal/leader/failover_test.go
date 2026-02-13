@@ -23,8 +23,9 @@ type mockAgent struct {
 	tasks    []*types.Task         // all running tasks
 	runCalls int
 	taskSeq  int
-	failRuns bool          // if true, all /run requests will fail
-	runDelay time.Duration // delay before processing /run requests (simulates slow dispatch)
+	failRuns        bool          // if true, all /run requests will fail with 503
+	rejectAffinity  bool          // if true, all /run requests will fail with 406
+	runDelay        time.Duration // delay before processing /run requests (simulates slow dispatch)
 }
 
 func newMockAgent() *mockAgent {
@@ -51,6 +52,11 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ma.mu.Lock()
+	if ma.rejectAffinity {
+		ma.mu.Unlock()
+		http.Error(w, "affinity mismatch", http.StatusNotAcceptable)
+		return
+	}
 	if ma.failRuns {
 		ma.mu.Unlock()
 		http.Error(w, "simulated failure", http.StatusServiceUnavailable)
@@ -85,10 +91,17 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(task)
 }
 
-// SetFailRuns makes all /run requests fail when set to true
+// SetFailRuns makes all /run requests fail with 503 when set to true
 func (ma *mockAgent) SetFailRuns(fail bool) {
 	ma.mu.Lock()
 	ma.failRuns = fail
+	ma.mu.Unlock()
+}
+
+// SetRejectAffinity makes all /run requests fail with 406 when set to true
+func (ma *mockAgent) SetRejectAffinity(reject bool) {
+	ma.mu.Lock()
+	ma.rejectAffinity = reject
 	ma.mu.Unlock()
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"testing"
 	"time"
 
@@ -76,6 +77,73 @@ func TestConfigOverridesAutoDetected(t *testing.T) {
 
 	if agent.attributes["node.id"] != "custom-id" {
 		t.Errorf("node.id = %q, want %q (config should override auto-detected)", agent.attributes["node.id"], "custom-id")
+	}
+}
+
+func TestAutoDetectedAttributes(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "test-node", NewMockRunner())
+
+	// node.id comes from the id parameter
+	if agent.attributes["node.id"] != "test-node" {
+		t.Errorf("node.id = %q, want %q", agent.attributes["node.id"], "test-node")
+	}
+	// node.arch and node.os come from runtime
+	if agent.attributes["node.arch"] != runtime.GOARCH {
+		t.Errorf("node.arch = %q, want %q", agent.attributes["node.arch"], runtime.GOARCH)
+	}
+	if agent.attributes["node.os"] != runtime.GOOS {
+		t.Errorf("node.os = %q, want %q", agent.attributes["node.os"], runtime.GOOS)
+	}
+}
+
+func TestMatchesAffinityMultipleConstraintsAND(t *testing.T) {
+	// All constraints must match (AND logic)
+	cfg := testConfig()
+	cfg.Node.Attributes = map[string]string{
+		"region": "eu-west-1",
+		"gpu":    "true",
+	}
+	agent := New(cfg, "node-1", NewMockRunner())
+
+	// Both match → true
+	if !agent.matchesAffinity(map[string]string{"node.id": "node-1", "region": "eu-west-1"}) {
+		t.Error("Expected match when both constraints match")
+	}
+
+	// First matches, second doesn't → false (AND)
+	if agent.matchesAffinity(map[string]string{"node.id": "node-1", "region": "us-east-1"}) {
+		t.Error("Expected no match when second constraint fails (AND logic)")
+	}
+
+	// Three constraints, one fails → false
+	if agent.matchesAffinity(map[string]string{"node.id": "node-1", "region": "eu-west-1", "gpu": "false"}) {
+		t.Error("Expected no match when third constraint fails")
+	}
+
+	// Three constraints, all match → true
+	if !agent.matchesAffinity(map[string]string{"node.id": "node-1", "region": "eu-west-1", "gpu": "true"}) {
+		t.Error("Expected match when all three constraints match")
+	}
+}
+
+func TestMatchesAffinityOSFiltering(t *testing.T) {
+	// Simulates the user's scenario: daemon with node.os=darwin on a linux node
+	cfg := testConfig()
+	// Override node.os to simulate a linux agent
+	cfg.Node.Attributes = map[string]string{"node.os": "linux"}
+	linuxAgent := New(cfg, "linux-node", NewMockRunner())
+
+	// Job wants only darwin nodes
+	darwinAffinity := map[string]string{"node.os": "darwin"}
+	if linuxAgent.matchesAffinity(darwinAffinity) {
+		t.Error("Linux agent should NOT match darwin affinity")
+	}
+
+	// Job wants only linux nodes
+	linuxAffinity := map[string]string{"node.os": "linux"}
+	if !linuxAgent.matchesAffinity(linuxAffinity) {
+		t.Error("Linux agent should match linux affinity")
 	}
 }
 
@@ -162,6 +230,39 @@ func TestHandleRunNoAffinity(t *testing.T) {
 
 	if w.Code != http.StatusAccepted {
 		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, http.StatusAccepted)
+	}
+}
+
+func TestHandleRunAffinityBeforeCapacity(t *testing.T) {
+	// Affinity check should happen BEFORE capacity check.
+	// Even if we have zero capacity, affinity mismatch should return 406 not 503.
+	cfg := testConfig()
+	cfg.Capacity.CPUShares = 0 // minimal capacity
+	cfg.Capacity.Memory = 0
+	agent := New(cfg, "node-1", NewMockRunner())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	job := types.Job{
+		Name:        "test-job",
+		Command:     "echo hello",
+		CPUShares:   99999, // exceeds any capacity
+		MemoryLimit: 999999999999,
+		Affinity:    map[string]string{"node.id": "wrong-node"},
+	}
+	body, _ := json.Marshal(job)
+
+	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	agent.handleRun(w, req)
+
+	// Should be 406 (affinity), not 503 (capacity)
+	if w.Code != http.StatusNotAcceptable {
+		t.Errorf("Status = %d, want %d (affinity should be checked before capacity)", w.Code, http.StatusNotAcceptable)
 	}
 }
 
