@@ -26,7 +26,9 @@ import (
 	"github.com/google/uuid"
 )
 
-const version = "v0.6.9" // Agent version - placed in RegisterAgent, not heartbeat
+// version is set at build time via -ldflags "-X main.version=v1.0.0"
+// Falls back to "dev" for local `go build` without version injection.
+var version = "dev"
 
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
