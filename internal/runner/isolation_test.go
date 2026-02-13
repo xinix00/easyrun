@@ -160,10 +160,9 @@ func TestRunnerRunWithoutIsolation(t *testing.T) {
 		t.Fatal("Run returned nil task")
 	}
 
-	// Give it time to start
-	time.Sleep(100 * time.Millisecond)
-
-	// Clean up
+	// Wait for short-lived process to finish, then clean up.
+	// Stop blocks until the process exits, which prevents the race
+	// between t.TempDir cleanup and background PipeReader goroutines.
 	_ = runner.Stop(task)
 }
 
