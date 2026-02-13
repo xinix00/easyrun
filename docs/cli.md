@@ -5,13 +5,13 @@
 ```bash
 export EASYRUN_LEADER=localhost:9080
 # of
-./bin/easyrun --leader localhost:9080 ...
+./bin/run --leader localhost:9080 ...
 ```
 
 ## Cluster Status
 
 ```bash
-./bin/easyrun status
+./bin/run status
 ```
 
 Output:
@@ -40,7 +40,7 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 
 ```bash
 # Deploy process job
-./bin/easyrun run \
+./bin/run deploy\
     --name api \
     --command "./api-binary" \
     --cpu 2000 \
@@ -51,7 +51,7 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 # Job 'api' dispatched with ID abc123
 
 # Update to new version (rolling by default)
-./bin/easyrun run \
+./bin/run deploy\
     --name api \
     --command "./api-binary-v2"
 
@@ -59,25 +59,25 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 # Job 'api' updated (ID def456, policy=rolling)
 
 # Deploy Docker container (only on nodes with Docker)
-./bin/easyrun run --name redis --image redis:7 --affinity node.docker=true
-./bin/easyrun run --name my-app --image myapp:v2 --command "python serve.py"
+./bin/run deploy--name redis --image redis:7 --affinity node.docker=true
+./bin/run deploy--name my-app --image myapp:v2 --command "python serve.py"
 
 # Deploy with affinity (only on arm64 nodes)
-./bin/easyrun run --name api --command "./api" --affinity node.arch=arm64
+./bin/run deploy--name api --command "./api" --affinity node.arch=arm64
 
 # Pin to specific node
-./bin/easyrun run --name monitor --command "./monitor" --affinity node.id=node-1
+./bin/run deploy--name monitor --command "./monitor" --affinity node.id=node-1
 
 # Platform-specific artifacts (agent picks first matching)
-./bin/easyrun run --name tailscale --command "./tailscale" \
+./bin/run deploy--name tailscale --command "./tailscale" \
   --artifact "node.arch=amd64::https://pkgs.tailscale.com/stable/tailscale_amd64.tar.gz" \
   --artifact "node.arch=arm64::https://pkgs.tailscale.com/stable/tailscale_arm64.tar.gz"
 
 # Simple artifact (no match = catch-all)
-./bin/easyrun run --name app --command "./app" --artifact "https://example.com/app.tar.gz"
+./bin/run deploy--name app --command "./app" --artifact "https://example.com/app.tar.gz"
 ```
 
-### Run Flags
+### Deploy Flags
 
 | Flag | Description |
 |------|-------------|
@@ -99,13 +99,13 @@ Control how updates are rolled out:
 
 ```bash
 # Rolling update (default) - zero downtime
-./bin/easyrun run --name api --command "./v2" --update-policy rolling
+./bin/run deploy--name api --command "./v2" --update-policy rolling
 
 # Recreate - downtime but fast
-./bin/easyrun run --name api --command "./v2" --update-policy recreate
+./bin/run deploy--name api --command "./v2" --update-policy recreate
 
 # Blue-green - zero downtime, 2x resources during switch
-./bin/easyrun run --name api --command "./v2" --update-policy blue-green
+./bin/run deploy--name api --command "./v2" --update-policy blue-green
 ```
 
 | Policy | Downtime | Resources | Behavior |
@@ -117,7 +117,7 @@ Control how updates are rolled out:
 ### Job verwijderen
 
 ```bash
-./bin/easyrun delete <job-name>
+./bin/run delete <job-name>
 ```
 
 Verwijdert de job en stopt alle bijbehorende tasks.
@@ -126,10 +126,10 @@ Verwijdert de job en stopt alle bijbehorende tasks.
 
 ```bash
 # List all agents
-./bin/easyrun agents
+./bin/run agents
 
 # Show agent details (capacity, resource usage)
-./bin/easyrun agents <agent-id>
+./bin/run agents <agent-id>
 ```
 
 List output:
@@ -163,10 +163,10 @@ Stream task logs in real-time:
 
 ```bash
 # Stream stdout (default)
-./bin/easyrun logs <task-id>
+./bin/run logs <task-id>
 
 # Stream stderr
-./bin/easyrun logs <task-id> --stream stderr
+./bin/run logs <task-id> --stream stderr
 ```
 
 Finds the agent running the task automatically via cluster status.

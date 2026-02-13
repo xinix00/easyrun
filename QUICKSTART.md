@@ -7,7 +7,7 @@ Get easyrun running in 30 seconds.
 ```bash
 cd easyrun
 go build -o ../bin/agent ./cmd/agent
-go build -o ../bin/easyrun ./cmd/cli
+go build -o ../bin/run ./cmd/cli
 ```
 
 ## Standalone Mode (No Raft)
@@ -30,13 +30,13 @@ go build -o ../bin/easyrun ./cmd/cli
 export EASYRUN_LEADER=localhost:9080
 
 # Deploy
-../bin/easyrun run --name nginx --command "nginx -g 'daemon off;'"
+../bin/run deploy--name nginx --command "nginx -g 'daemon off;'"
 
 # Check status
-../bin/easyrun status
+../bin/run status
 
 # View agents
-../bin/easyrun agents
+../bin/run agents
 ```
 
 ## Multi-Node Cluster
@@ -49,7 +49,7 @@ export EASYRUN_LEADER=localhost:9080
 ../bin/agent --cluster=my-cluster --raft http://raft-server:7080
 
 # 3. Deploy with spreading
-../bin/easyrun run --name api --command "./server" --count 3
+../bin/run deploy--name api --command "./server" --count 3
 ```
 
 ## With Config File

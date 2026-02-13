@@ -22,7 +22,7 @@ var leaderAddr string
 
 func main() {
 	app := &cli.App{
-		Name:  "easyrun",
+		Name:  "run",
 		Usage: "EasyRun CLI",
 		Flags: []cli.Flag{
 			&cli.StringFlag{
@@ -34,7 +34,7 @@ func main() {
 			},
 		},
 		Commands: []*cli.Command{
-			runCommand(),
+			deployCommand(),
 			deleteCommand(),
 			statusCommand(),
 			agentsCommand(),
@@ -48,10 +48,10 @@ func main() {
 	}
 }
 
-func runCommand() *cli.Command {
+func deployCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "run",
-		Usage: "Run or update a job (upsert based on name)",
+		Name:  "deploy",
+		Usage: "Deploy or update a job (upsert based on name)",
 		Flags: []cli.Flag{
 			&cli.StringFlag{Name: "name", Required: true},
 			&cli.StringFlag{Name: "command", Usage: "Command to run (required for process jobs)"},
@@ -63,7 +63,7 @@ func runCommand() *cli.Command {
 			&cli.StringSliceFlag{Name: "affinity", Usage: "Node affinity constraints (key=value, e.g. node.arch=arm64)"},
 			&cli.StringFlag{Name: "update-policy", Usage: "Update policy: rolling (default), recreate, or blue-green", Value: "rolling"},
 		},
-		Action: runJob,
+		Action: deployJob,
 	}
 }
 
@@ -93,7 +93,7 @@ func agentsCommand() *cli.Command {
 	}
 }
 
-func runJob(c *cli.Context) error {
+func deployJob(c *cli.Context) error {
 	job := types.Job{
 		Name:         c.String("name"),
 		Command:      c.String("command"),

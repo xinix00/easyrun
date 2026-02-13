@@ -5,7 +5,7 @@
 ```bash
 # Binaries bouwen
 go build -o bin/agent ./cmd/agent
-go build -o bin/easyrun ./cmd/cli
+go build -o bin/run ./cmd/cli
 
 # Cross compile voor Linux
 GOOS=linux GOARCH=amd64 go build -o bin/agent-linux ./cmd/agent
@@ -28,11 +28,11 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 
 3. Test CLI:
 ```bash
-./bin/easyrun --leader localhost:9080 status
-./bin/easyrun --leader localhost:9080 run --name test --command "sleep 60"
-./bin/easyrun --leader localhost:9080 delete test
-./bin/easyrun --leader localhost:9080 agents
-./bin/easyrun --leader localhost:9080 logs <task-id>
+./bin/run --leader localhost:9080 status
+./bin/run --leader localhost:9080 deploy --name test --command "sleep 60"
+./bin/run --leader localhost:9080 delete test
+./bin/run --leader localhost:9080 agents
+./bin/run --leader localhost:9080 logs <task-id>
 ```
 
 ## Project Structuur

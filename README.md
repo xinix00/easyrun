@@ -25,7 +25,7 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
 ```bash
 go build -o bin/agent ./cmd/agent
-go build -o bin/easyrun ./cmd/cli
+go build -o bin/run ./cmd/cli
 ```
 
 ### Run Standalone
@@ -38,13 +38,13 @@ go build -o bin/easyrun ./cmd/cli
 
 ```bash
 # Single instance
-./bin/easyrun run --name web --command "python app.py"
+./bin/run deploy--name web --command "python app.py"
 
 # Multiple instances with spreading
-./bin/easyrun run --name api --command "./server" --count 3
+./bin/run deploy--name api --command "./server" --count 3
 
 # With artifact and resource limits
-./bin/easyrun run \
+./bin/run deploy\
   --name api \
   --command "./server" \
   --artifact "s3://bucket/app-v1.2.tar.gz" \
@@ -58,13 +58,13 @@ go build -o bin/easyrun ./cmd/cli
 
 ```bash
 # Update to new version (rolling by default - zero downtime)
-./bin/easyrun run --name api --command "./server-v2"
+./bin/run deploy--name api --command "./server-v2"
 
 # Update with specific policy
-./bin/easyrun run --name api --command "./server-v2" --update-policy recreate
+./bin/run deploy--name api --command "./server-v2" --update-policy recreate
 
 # Blue-green deployment
-./bin/easyrun run --name api --command "./server-v2" --update-policy blue-green
+./bin/run deploy--name api --command "./server-v2" --update-policy blue-green
 ```
 
 #### Update Policies
@@ -193,8 +193,8 @@ Host paths are symlinked into the task's working directory.
 
 ```bash
 # Via CLI
-./bin/easyrun logs <task-id>                    # stdout
-./bin/easyrun logs <task-id> --stream stderr    # stderr
+./bin/run logs <task-id>                    # stdout
+./bin/run logs <task-id> --stream stderr    # stderr
 
 # Via API
 curl http://agent:8080/logs/{task-id}/stdout

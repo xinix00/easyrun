@@ -20,13 +20,13 @@ See `/docs` for detailed documentation:
 ```bash
 # Build
 go build -o bin/agent ./cmd/agent
-go build -o bin/easyrun ./cmd/cli
+go build -o bin/run ./cmd/cli
 
 # Run standalone
 ./bin/agent --standalone --cluster=dev
 
 # Deploy job
-./bin/easyrun run --name test --command "echo hello"
+./bin/run deploy--name test --command "echo hello"
 ```
 
 ## Design Principles
