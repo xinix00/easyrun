@@ -32,14 +32,14 @@ const (
 	defaultHealthTimeout   = 5 * time.Second
 	shutdownTimeout        = 5 * time.Second
 	proxyTimeout           = 10 * time.Second
-	stateChannelBufferSize = 64
+	stateChannelBufferSize = 256
 )
 
 // agentState holds all mutable state (owned by single goroutine)
 type agentState struct {
-	jobs      map[string]*types.Job
-	tasks     map[string]*types.Task
-	stateTime time.Time
+	jobs  map[string]*types.Job
+	tasks map[string]*types.Task
+	stateTime  time.Time
 
 	// Capacity reservations: resources claimed by accepted-but-not-yet-started jobs.
 	// Prevents TOCTOU race where concurrent /run requests all pass hasCapacity
@@ -322,9 +322,9 @@ func corsMiddleware(next http.Handler) http.Handler {
 // GetJobByName finds a job by name (jobs are stored by ID)
 func (a *Agent) GetJobByName(jobName string) *types.Job {
 	return query(a, func(s *agentState) *types.Job {
-		for _, job := range s.jobs {
-			if job.Name == jobName {
-				return job
+		for _, j := range s.jobs {
+			if j.Name == jobName {
+				return j
 			}
 		}
 		return nil
@@ -367,7 +367,7 @@ func (a *Agent) GetJob(id string) *types.Job {
 func (a *Agent) StoreJob(job *types.Job) {
 	a.do(func(s *agentState) {
 		s.jobs[job.ID] = job
-		s.stateTime = time.Now() // Track when state actually changed
+		s.stateTime = time.Now()
 	})
 }
 
@@ -375,7 +375,7 @@ func (a *Agent) StoreJob(job *types.Job) {
 func (a *Agent) DeleteJob(id string) {
 	a.do(func(s *agentState) {
 		delete(s.jobs, id)
-		s.stateTime = time.Now() // Track when state actually changed
+		s.stateTime = time.Now()
 	})
 	a.scheduleSave()
 }
@@ -422,7 +422,7 @@ func (a *Agent) LoadState() error {
 
 	a.do(func(s *agentState) {
 		for _, job := range state.Jobs {
-			s.jobs[job.ID] = job // Store by ID (consistent with StoreJob, SyncJobs)
+			s.jobs[job.ID] = job
 		}
 		s.stateTime = state.Updated
 	})

@@ -21,7 +21,7 @@ func TestLeaderHeartbeatRegistersAgent(t *testing.T) {
 
 	// Send heartbeat from remote agent
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
+	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, nil, time.Time{}, "")
 
 	time.Sleep(10 * time.Millisecond)
 
@@ -48,7 +48,7 @@ func TestLeaderHeartbeatUpdatesLastSeen(t *testing.T) {
 
 	// First heartbeat
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
+	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	agents := leader.GetAgents()
@@ -56,7 +56,7 @@ func TestLeaderHeartbeatUpdatesLastSeen(t *testing.T) {
 
 	// Wait and send another heartbeat
 	time.Sleep(50 * time.Millisecond)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
+	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	agents = leader.GetAgents()
@@ -80,7 +80,7 @@ func TestLeaderHeartbeatLearnsJobsFromRemoteAgents(t *testing.T) {
 	}
 
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, time.Now(), "")
+	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, nil, time.Now(), "")
 	time.Sleep(10 * time.Millisecond)
 
 	// Store should have learned about the jobs
@@ -107,7 +107,7 @@ func TestLeaderHeartbeatSyncsNewerState(t *testing.T) {
 	}
 
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, newerTime, "")
+	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, nil, newerTime, "")
 	time.Sleep(10 * time.Millisecond)
 
 	// Store should have synced
@@ -127,7 +127,7 @@ func TestLeaderGetAgents(t *testing.T) {
 	// Register multiple agents
 	for i := 0; i < 5; i++ {
 		leader.RegisterAgent("agent-"+string(rune('a'+i)), "http://host:8080", "", nil)
-		leader.Heartbeat("agent-"+string(rune('a'+i)), "http://host:8080", nil, time.Time{}, "")
+		leader.Heartbeat("agent-"+string(rune('a'+i)), "http://host:8080", nil, nil, time.Time{}, "")
 	}
 
 	time.Sleep(10 * time.Millisecond)
@@ -148,7 +148,7 @@ func TestLeaderUnregisterAgent(t *testing.T) {
 
 	// Register agent
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
+	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	if len(leader.GetAgents()) != 1 {
@@ -187,7 +187,7 @@ func TestLeaderConcurrentHeartbeats(t *testing.T) {
 			defer wg.Done()
 			agentID := "agent-" + string(rune('a'+n%10))
 			for j := 0; j < 10; j++ {
-				leader.Heartbeat(agentID, "http://host:8080", nil, time.Time{}, "")
+				leader.Heartbeat(agentID, "http://host:8080", nil, nil, time.Time{}, "")
 			}
 		}(i)
 	}

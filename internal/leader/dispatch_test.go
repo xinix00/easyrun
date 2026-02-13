@@ -26,7 +26,7 @@ func TestLeaderDispatchJobToAgent(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("mock-agent", agent.URL(), "", nil)
-	leader.Heartbeat("mock-agent", agent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("mock-agent", agent.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
@@ -43,7 +43,7 @@ func TestLeaderDispatchJobToAgent(t *testing.T) {
 		t.Errorf("DispatchJob failed: %v", err)
 	}
 
-	if store.GetJobByName("test-job") == nil {
+	if leader.FindJobByName("test-job") == nil {
 		t.Error("Job should be stored after dispatch")
 	}
 }
@@ -80,7 +80,7 @@ func TestLeaderDispatchAllAgentsReject(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("rejecting-agent", server.URL, "", nil)
-	leader.Heartbeat("rejecting-agent", server.URL, nil, time.Time{}, "")
+	leader.Heartbeat("rejecting-agent", server.URL, nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{Name: "test-job", Command: "echo", Count: 1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
@@ -108,7 +108,7 @@ func TestLeaderDispatchMultipleInstances(t *testing.T) {
 
 	for i, a := range agents {
 		leader.RegisterAgent("agent-"+string(rune('a'+i)), a.URL(), "", nil)
-		leader.Heartbeat("agent-"+string(rune('a'+i)), a.URL(), nil, time.Time{}, "")
+		leader.Heartbeat("agent-"+string(rune('a'+i)), a.URL(), nil, nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -154,14 +154,15 @@ func TestLeaderDeleteJobOnMultipleAgents(t *testing.T) {
 
 	// Register agents first (no jobs in store yet, so no rescheduling triggered)
 	leader.RegisterAgent("agent-a", server.URL, "", nil)
-	leader.Heartbeat("agent-a", server.URL, nil, time.Time{}, "")
+	leader.Heartbeat("agent-a", server.URL, nil, nil, time.Time{}, "")
 	leader.RegisterAgent("agent-b", server.URL, "", nil)
-	leader.Heartbeat("agent-b", server.URL, nil, time.Time{}, "")
+	leader.Heartbeat("agent-b", server.URL, nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	// Now store the job and set up placement manually
 	store.StoreJob(job)
 	leader.do(func(s *leaderState) {
+		s.nameToID[job.Name] = job.ID
 		for _, agentID := range []string{"agent-a", "agent-b"} {
 			if s.placed[agentID] == nil {
 				s.placed[agentID] = make(map[string]int)
@@ -193,7 +194,7 @@ func TestLeaderDispatchJobWithZeroCount(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{Name: "zero-count-job", Command: "echo", Count: 0, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
@@ -225,7 +226,7 @@ func TestLeaderDispatchCountMinusOne(t *testing.T) {
 
 	for i, a := range agents {
 		leader.RegisterAgent("agent-"+string(rune('a'+i)), a.URL(), "", nil)
-		leader.Heartbeat("agent-"+string(rune('a'+i)), a.URL(), nil, time.Time{}, "")
+		leader.Heartbeat("agent-"+string(rune('a'+i)), a.URL(), nil, nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -257,7 +258,7 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("agent-a", agent1.URL(), "", nil)
-	leader.Heartbeat("agent-a", agent1.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-a", agent1.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{ID: "easydns-id", Name: "easydns", Command: "/usr/bin/easydns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
@@ -291,7 +292,7 @@ func TestLeaderConcurrentDispatchAndDelete(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	var wg sync.WaitGroup
@@ -351,7 +352,7 @@ func TestLeaderDispatchAccepts202(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("async-agent", server.URL, "", nil)
-	leader.Heartbeat("async-agent", server.URL, nil, time.Time{}, "")
+	leader.Heartbeat("async-agent", server.URL, nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
@@ -368,7 +369,7 @@ func TestLeaderDispatchAccepts202(t *testing.T) {
 		t.Errorf("DispatchJob should accept 202 Accepted, got error: %v", err)
 	}
 
-	if store.GetJobByName("async-job") == nil {
+	if leader.FindJobByName("async-job") == nil {
 		t.Error("Job should be stored after 202 response")
 	}
 }
@@ -397,7 +398,7 @@ func TestLeaderDispatchAccepts201(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("create-agent", server.URL, "", nil)
-	leader.Heartbeat("create-agent", server.URL, nil, time.Time{}, "")
+	leader.Heartbeat("create-agent", server.URL, nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
@@ -431,7 +432,7 @@ func TestLeaderDispatchRejects500(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("error-agent", server.URL, "", nil)
-	leader.Heartbeat("error-agent", server.URL, nil, time.Time{}, "")
+	leader.Heartbeat("error-agent", server.URL, nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
@@ -465,7 +466,7 @@ func TestLeaderDispatchRejects400(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("bad-agent", server.URL, "", nil)
-	leader.Heartbeat("bad-agent", server.URL, nil, time.Time{}, "")
+	leader.Heartbeat("bad-agent", server.URL, nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{

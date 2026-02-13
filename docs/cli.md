@@ -40,7 +40,7 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 
 ```bash
 # Deploy process job
-./bin/run deploy\
+./bin/run deploy \
     --name api \
     --command "./api-binary" \
     --cpu 2000 \
@@ -51,7 +51,7 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 # Job 'api' dispatched with ID abc123
 
 # Update to new version (rolling by default)
-./bin/run deploy\
+./bin/run deploy \
     --name api \
     --command "./api-binary-v2"
 
@@ -59,22 +59,22 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 # Job 'api' updated (ID def456, policy=rolling)
 
 # Deploy Docker container (only on nodes with Docker)
-./bin/run deploy--name redis --image redis:7 --affinity node.docker=true
-./bin/run deploy--name my-app --image myapp:v2 --command "python serve.py"
+./bin/run deploy --name redis --image redis:7 --affinity node.docker=true
+./bin/run deploy --name my-app --image myapp:v2 --command "python serve.py"
 
 # Deploy with affinity (only on arm64 nodes)
-./bin/run deploy--name api --command "./api" --affinity node.arch=arm64
+./bin/run deploy --name api --command "./api" --affinity node.arch=arm64
 
 # Pin to specific node
-./bin/run deploy--name monitor --command "./monitor" --affinity node.id=node-1
+./bin/run deploy --name monitor --command "./monitor" --affinity node.id=node-1
 
 # Platform-specific artifacts (agent picks first matching)
-./bin/run deploy--name tailscale --command "./tailscale" \
+./bin/run deploy --name tailscale --command "./tailscale" \
   --artifact "node.arch=amd64::https://pkgs.tailscale.com/stable/tailscale_amd64.tar.gz" \
   --artifact "node.arch=arm64::https://pkgs.tailscale.com/stable/tailscale_arm64.tar.gz"
 
 # Simple artifact (no match = catch-all)
-./bin/run deploy--name app --command "./app" --artifact "https://example.com/app.tar.gz"
+./bin/run deploy --name app --command "./app" --artifact "https://example.com/app.tar.gz"
 ```
 
 ### Deploy Flags
@@ -93,19 +93,21 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 
 Either `--command` or `--image` (or both) is required.
 
+**Note:** The API currently always requires `command`. For Docker-only deploys without a command override, pass `--command` with the container's default entrypoint.
+
 ### Update Policies
 
 Control how updates are rolled out:
 
 ```bash
 # Rolling update (default) - zero downtime
-./bin/run deploy--name api --command "./v2" --update-policy rolling
+./bin/run deploy --name api --command "./v2" --update-policy rolling
 
 # Recreate - downtime but fast
-./bin/run deploy--name api --command "./v2" --update-policy recreate
+./bin/run deploy --name api --command "./v2" --update-policy recreate
 
 # Blue-green - zero downtime, 2x resources during switch
-./bin/run deploy--name api --command "./v2" --update-policy blue-green
+./bin/run deploy --name api --command "./v2" --update-policy blue-green
 ```
 
 | Policy | Downtime | Resources | Behavior |

@@ -14,10 +14,31 @@ import (
 	"easyrun/internal/types"
 )
 
+// mockAgentServer returns a test server that responds instantly to agent API calls.
+// This prevents benchmarks from hanging on HTTP timeouts to fake agent endpoints.
+func mockAgentServer() *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/tasks":
+			json.NewEncoder(w).Encode([]interface{}{})
+		case r.URL.Path == "/run":
+			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "task_id": "bench-task"})
+		default:
+			w.WriteHeader(200)
+		}
+	}))
+}
+
+// agentEndpoint returns the mock server URL for use as agent endpoint.
+func agentEndpoint(ts *httptest.Server) string {
+	return ts.URL
+}
+
 // BenchmarkGetAgentsEndpoint measures /v1/agents endpoint throughput
 func BenchmarkGetAgentsEndpoint(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
@@ -28,7 +49,7 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
 	}
 
 	req := httptest.NewRequest("GET", "/v1/agents", nil)
@@ -49,6 +70,7 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 func BenchmarkGetJobsEndpoint(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
@@ -80,19 +102,22 @@ func BenchmarkGetJobsEndpoint(b *testing.B) {
 
 // BenchmarkPostJobEndpoint measures POST /v1/jobs throughput
 func BenchmarkPostJobEndpoint(b *testing.B) {
+	ts := mockAgentServer()
+	defer ts.Close()
+
 	store := newMockJobStore()
-	l := leader.New("local-agent", store, nil)
+	l := leader.New("local-agent", store, ts.Client())
+	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
-	// Register agents
+	// Register agents pointing to mock server
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
-		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
+		l.Heartbeat(agentID, agentEndpoint(ts), nil, nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -120,6 +145,7 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 func BenchmarkHeartbeatEndpoint(b *testing.B) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
+	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
@@ -154,19 +180,22 @@ func BenchmarkHeartbeatEndpoint(b *testing.B) {
 
 // BenchmarkStatusEndpoint measures /v1/status endpoint throughput
 func BenchmarkStatusEndpoint(b *testing.B) {
+	ts := mockAgentServer()
+	defer ts.Close()
+
 	store := newMockJobStore()
-	l := leader.New("local-agent", store, nil)
+	l := leader.New("local-agent", store, ts.Client())
+	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
-	// Register agents
+	// Register agents pointing to mock server
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
-		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
+		l.Heartbeat(agentID, agentEndpoint(ts), nil, nil, time.Time{}, "")
 	}
 
 	req := httptest.NewRequest("GET", "/v1/status", nil)
@@ -185,19 +214,22 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 
 // BenchmarkConcurrentRequests measures concurrent API request handling
 func BenchmarkConcurrentRequests(b *testing.B) {
+	ts := mockAgentServer()
+	defer ts.Close()
+
 	store := newMockJobStore()
-	l := leader.New("local-agent", store, nil)
+	l := leader.New("local-agent", store, ts.Client())
+	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
 	server := NewServer(l, ":9080")
 
-	// Register agents
+	// Register agents pointing to mock server
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
-		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
+		l.Heartbeat(agentID, agentEndpoint(ts), nil, nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -276,7 +308,9 @@ type mockJobStore struct {
 }
 
 func newMockJobStore() *mockJobStore {
-	return &mockJobStore{jobs: make(map[string]*types.Job)}
+	return &mockJobStore{
+		jobs: make(map[string]*types.Job),
+	}
 }
 
 func (m *mockJobStore) GetJobs() []*types.Job {

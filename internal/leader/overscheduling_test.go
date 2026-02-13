@@ -26,7 +26,7 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 	defer agent2.Close()
 
 	store := NewMockJobStore()
-	ldr := New("leader", store, &http.Client{Timeout: 10 * time.Second})
+	ldr := New("leader", store, &http.Client{Timeout: 200 * time.Millisecond})
 
 	oldVerify := VerifyInterval
 	VerifyInterval = 10 * time.Millisecond
@@ -38,7 +38,7 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 
 	// Register agent-1
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
-	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
+	ldr.Heartbeat("agent-1", agent1.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{ID: "app-id", Name: "app", Command: "./app", Count: 20}
@@ -116,7 +116,7 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	store.StoreJob(job)
 	store.stateTime = time.Now().Add(-1 * time.Minute)
 
-	ldr := New("leader", store, &http.Client{Timeout: 10 * time.Second})
+	ldr := New("leader", store, nil)
 	ldr.settleDelay = 300 * time.Millisecond // Wait for agents before reconciling
 
 	oldVerify := VerifyInterval
@@ -131,8 +131,8 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"app-id": 10})
 	ldr.RegisterAgent("agent-2", agent2.URL(), "", map[string]int{"app-id": 10})
 	// Heartbeat for keepalive
-	ldr.Heartbeat("agent-1", agent1.URL(), []*types.Job{job}, time.Now(), "")
-	ldr.Heartbeat("agent-2", agent2.URL(), []*types.Job{job}, time.Now(), "")
+	ldr.Heartbeat("agent-1", agent1.URL(), []*types.Job{job}, nil, time.Now(), "")
+	ldr.Heartbeat("agent-2", agent2.URL(), []*types.Job{job}, nil, time.Now(), "")
 
 	// Wait for settle timer + reconciliation
 	time.Sleep(500 * time.Millisecond)
@@ -168,7 +168,7 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	defer agent3.Close()
 
 	store := NewMockJobStore()
-	ldr := New("leader", store, &http.Client{Timeout: 10 * time.Second})
+	ldr := New("leader", store, nil)
 
 	oldVerify := VerifyInterval
 	VerifyInterval = 10 * time.Millisecond
@@ -182,9 +182,9 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
 	ldr.RegisterAgent("agent-2", agent2.URL(), "", nil)
 	ldr.RegisterAgent("agent-3", agent3.URL(), "", nil)
-	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
-	ldr.Heartbeat("agent-2", agent2.URL(), nil, time.Time{}, "")
-	ldr.Heartbeat("agent-3", agent3.URL(), nil, time.Time{}, "")
+	ldr.Heartbeat("agent-1", agent1.URL(), nil, nil, time.Time{}, "")
+	ldr.Heartbeat("agent-2", agent2.URL(), nil, nil, time.Time{}, "")
+	ldr.Heartbeat("agent-3", agent3.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Dispatch 20 tasks (round-robin across 3 agents → 7+7+6)

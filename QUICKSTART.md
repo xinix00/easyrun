@@ -17,7 +17,7 @@ go build -o ../bin/run ./cmd/cli
 ../bin/agent --cluster=dev --standalone
 
 # Output:
-# Starting easyrun agent v0.5.8
+# Starting easyrun agent dev
 # Node a1b2c3d4 on 192.168.1.5:8080
 # Cluster: dev
 # Running in standalone mode (no raft)
@@ -30,7 +30,7 @@ go build -o ../bin/run ./cmd/cli
 export EASYRUN_LEADER=localhost:9080
 
 # Deploy
-../bin/run deploy--name nginx --command "nginx -g 'daemon off;'"
+../bin/run deploy --name nginx --command "nginx -g 'daemon off;'"
 
 # Check status
 ../bin/run status
@@ -48,8 +48,8 @@ export EASYRUN_LEADER=localhost:9080
 # 2. Start agents on each node
 ../bin/agent --cluster=my-cluster --raft http://raft-server:7080
 
-# 3. Deploy with spreading
-../bin/run deploy--name api --command "./server" --count 3
+# 3. Deploy a job
+../bin/run deploy --name api --command "./server"
 ```
 
 ## With Config File

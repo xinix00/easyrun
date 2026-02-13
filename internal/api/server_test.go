@@ -99,7 +99,7 @@ func TestGetAgentsWithRegistered(t *testing.T) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -309,7 +309,7 @@ func TestRunJobCreatesNew(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	l.RegisterAgent("mock-agent", mockAgent.URL(), "", nil)
-	l.Heartbeat("mock-agent", mockAgent.URL(), nil, time.Time{}, "")
+	l.Heartbeat("mock-agent", mockAgent.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	server := NewServer(l, ":9080")
@@ -379,7 +379,7 @@ func TestRunJobUpdateExisting(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	l.RegisterAgent("mock-agent", mockAgent.URL(), "", nil)
-	l.Heartbeat("mock-agent", mockAgent.URL(), nil, time.Time{}, "")
+	l.Heartbeat("mock-agent", mockAgent.URL(), nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	server := NewServer(l, ":9080")
@@ -443,7 +443,7 @@ func TestUnregisterAgent(t *testing.T) {
 	defer cancel()
 
 	l.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
-	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, time.Time{}, "")
+	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	w := doRequest(server, "DELETE", "/v1/agents/agent-1", nil)
@@ -490,8 +490,8 @@ func TestStatusEndpointEmpty(t *testing.T) {
 	if resp["agents"].(float64) != 0 {
 		t.Errorf("agents = %v, want 0", resp["agents"])
 	}
-	if resp["total_tasks"].(float64) != 0 {
-		t.Errorf("total_tasks = %v, want 0", resp["total_tasks"])
+	if resp["jobs"].(float64) != 0 {
+		t.Errorf("jobs = %v, want 0", resp["jobs"])
 	}
 }
 
@@ -503,7 +503,7 @@ func TestStatusEndpointWithAgents(t *testing.T) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 

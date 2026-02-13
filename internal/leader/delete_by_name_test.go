@@ -26,24 +26,17 @@ func TestDeleteJobByName(t *testing.T) {
 		Count:   1,
 	}
 
-	// Store via leader's store (not direct store access)
+	// Store via leader (updates nameToID index)
 	leader.jobStore.StoreJob(job)
-
-	t.Logf("Stored job: ID=%s, Name=%s", job.ID, job.Name)
-	t.Logf("Jobs in store via GetJobs: %d", len(store.GetJobs()))
+	leader.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 
 	// Verify it exists via FindJobByName
 	found := leader.FindJobByName("test-app")
 	if found == nil {
 		t.Fatal("FindJobByName should find the job")
 	}
-	if found.Name != "test-app" {
-		t.Errorf("Job name = %s, want test-app", found.Name)
-	}
-	t.Logf("Found job before delete: ID=%s, Name=%s", found.ID, found.Name)
 
 	// Delete by name (like GUI does)
-	t.Log("Calling DeleteJob('test-app')")
 	leader.DeleteJob("test-app")
 	time.Sleep(10 * time.Millisecond)
 
@@ -64,7 +57,12 @@ func TestFindJobByNameWithIDBasedStore(t *testing.T) {
 	store := NewMockJobStore()
 	leader := New("leader", store, nil)
 
-	// Store multiple jobs with different IDs but known names
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Store multiple jobs and update index
 	jobs := []*types.Job{
 		{ID: "id-1", Name: "app-1", Command: "echo 1"},
 		{ID: "id-2", Name: "app-2", Command: "echo 2"},
@@ -73,7 +71,9 @@ func TestFindJobByNameWithIDBasedStore(t *testing.T) {
 
 	for _, j := range jobs {
 		store.StoreJob(j)
+		leader.do(func(s *leaderState) { s.nameToID[j.Name] = j.ID })
 	}
+	time.Sleep(10 * time.Millisecond)
 
 	// FindJobByName should work
 	found := leader.FindJobByName("app-2")

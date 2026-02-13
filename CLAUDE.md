@@ -26,13 +26,13 @@ go build -o bin/run ./cmd/cli
 ./bin/agent --standalone --cluster=dev
 
 # Deploy job
-./bin/run deploy--name test --command "echo hello"
+./bin/run deploy --name test --command "echo hello"
 ```
 
 ## Design Principles
 
 - Simplicity over features
-- One ExecRunner with optional limits (no separate runner types)
+- ExecRunner + DockerRunner (runner selected by `driver` field, auto-derived from `image`)
 - State = `running`, `stopped`, `failed` (details in logs)
 - Limits only when set (`CPUShares > 0`, `MemoryLimit > 0`)
 - Single goroutine owns mutable state via ops channel (`do()` and `query()` helpers)
@@ -48,5 +48,5 @@ go build -o bin/run ./cmd/cli
 - **Settle period**: 30s after becoming leader, no reconciliation during this time
 - **State persistence**: ./data/state-{cluster}.json (debounced save, 5s)
 - **Node ID**: persisted in data/node-id, survives restarts
-- **MaxRestarts**: 0 = unlimited
-- **Version**: v0.5.8
+- **MaxRestarts**: 0 = default 5, -1 = unlimited
+- **Version**: injected at build time via `-ldflags "-X main.version=..."` (default: "dev")

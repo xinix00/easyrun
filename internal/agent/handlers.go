@@ -298,7 +298,7 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 
 	// Store in state and persist
 	a.do(func(s *agentState) {
-		s.jobs[job.ID] = job // Store by ID (consistent with StoreJob, SyncJobs, LoadState)
+		s.jobs[job.ID] = job
 		s.tasks[task.ID] = task
 	})
 	a.scheduleSave()

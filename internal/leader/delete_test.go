@@ -8,6 +8,12 @@ import (
 	"easyrun/internal/types"
 )
 
+// storeJobWithIndex stores a job in the store and updates the leader's nameToID index
+func storeJobWithIndex(l *Leader, job *types.Job) {
+	l.jobStore.StoreJob(job)
+	l.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
+}
+
 // TestDeleteJobRemovesFromStore verifies job is removed from store, not just placement
 func TestDeleteJobRemovesFromStore(t *testing.T) {
 	store := NewMockJobStore()
@@ -24,7 +30,7 @@ func TestDeleteJobRemovesFromStore(t *testing.T) {
 		Command: "./app",
 		Count:   1,
 	}
-	store.StoreJob(job)
+	storeJobWithIndex(leader, job)
 
 	// Verify it exists
 	jobs := store.GetJobs()
@@ -65,7 +71,7 @@ func TestDeleteJobWithNoPlacementStillRemovesFromStore(t *testing.T) {
 		Command: "./orphan",
 		Count:   1,
 	}
-	store.StoreJob(job)
+	storeJobWithIndex(leader, job)
 
 	// Delete (no agents to cleanup, just remove from store)
 	leader.DeleteJob("orphan")
@@ -93,7 +99,7 @@ func TestDeleteJobTwiceDoesNotError(t *testing.T) {
 		Command: "./test",
 		Count:   1,
 	}
-	store.StoreJob(job)
+	storeJobWithIndex(leader, job)
 
 	// Delete once
 	leader.DeleteJob("test")

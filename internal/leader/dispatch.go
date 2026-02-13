@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sort"
 	"sync"
 	"time"
 
@@ -35,6 +34,7 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 	// Always store the job first — even if no agents have capacity now,
 	// reconciliation will pick it up when capacity becomes available.
 	l.jobStore.StoreJob(job)
+	l.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 
 	// During settle period: reconcileJobs after settle will dispatch
 	settled := query(l, func(s *leaderState) bool { return s.settled })
@@ -156,6 +156,11 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 	}
 
 	l.jobStore.DeleteJob(job.ID)
+	l.do(func(s *leaderState) {
+		if s.nameToID[job.Name] == job.ID {
+			delete(s.nameToID, job.Name)
+		}
+	})
 
 	// Reconcile immediately — all capacity is freed
 	if len(agents) > 0 {
@@ -176,22 +181,12 @@ func (l *Leader) DeleteJob(jobName string) {
 // nextAgent returns the next agent in round-robin order
 func (l *Leader) nextAgent() *types.Agent {
 	return query(l, func(s *leaderState) *types.Agent {
-		if len(s.agents) == 0 {
+		if len(s.agentsSorted) == 0 {
 			return nil
 		}
-
-		var agents []*types.Agent
-		for _, a := range s.agents {
-			agents = append(agents, a)
-		}
-		sort.Slice(agents, func(i, j int) bool {
-			return agents[i].ID < agents[j].ID
-		})
-
-		idx := s.roundRobin % len(agents)
+		idx := s.roundRobin % len(s.agentsSorted)
 		s.roundRobin++
-
-		return agents[idx]
+		return s.agentsSorted[idx]
 	})
 }
 

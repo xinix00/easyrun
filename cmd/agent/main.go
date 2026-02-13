@@ -159,7 +159,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				} else {
 					failCount = 0
 					leaderAddr = fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
-					_, _ = sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
+					_, _ = sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetPlacedTaskCounts(), ag.GetStateTime())
 				}
 			} else if leaderAddr != "" {
 				// On startup (or after leader change): register first with placed counts
@@ -181,7 +181,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				}
 
 				// Already registered → heartbeat
-				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetStateTime())
+				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetPlacedTaskCounts(), ag.GetStateTime())
 				if err != nil {
 					if errors.Is(err, errNotRegistered) {
 						// Leader doesn't know us (new leader?) → re-register next tick
@@ -316,14 +316,15 @@ func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]
 
 var errNotRegistered = errors.New("not registered with leader")
 
-func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, stateTime time.Time) (*heartbeatResponse, error) {
+func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, placed map[string]int, stateTime time.Time) (*heartbeatResponse, error) {
 	url := fmt.Sprintf("http://%s/v1/heartbeat", leaderAddr)
 
 	body, _ := json.Marshal(map[string]any{
 		"id":         agentID,
 		"endpoint":   agentEndpoint,
 		"version":    version,
-		"jobs":       jobs,      // All known jobs (for state sync)
+		"jobs":       jobs,    // All known jobs (for state sync)
+		"placed":     placed,  // jobID -> count (ground truth)
 		"state_time": stateTime,
 	})
 

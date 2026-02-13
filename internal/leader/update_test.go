@@ -15,11 +15,6 @@ import (
 )
 
 func TestUpdateJobRolling(t *testing.T) {
-	// Speed up tests by reducing update delay
-	oldDelay := RollingUpdateDelay
-	RollingUpdateDelay = 10 * time.Millisecond
-	defer func() { RollingUpdateDelay = oldDelay }()
-
 	// Create mock agents
 	agents := make([]*mockAgent, 3)
 	for i := range agents {
@@ -39,7 +34,7 @@ func TestUpdateJobRolling(t *testing.T) {
 	for i, agent := range agents {
 		agentID := string(rune('a' + i))
 		leader.RegisterAgent("agent-"+agentID, agent.URL(), "", nil)
-		leader.Heartbeat("agent-"+agentID, agent.URL(), nil, time.Time{}, "")
+		leader.Heartbeat("agent-"+agentID, agent.URL(), nil, nil, time.Time{}, "")
 	}
 
 	// Deploy initial version
@@ -90,7 +85,7 @@ func TestUpdateJobRolling(t *testing.T) {
 	}
 
 	// Verify job definition was updated
-	updatedJob := store.GetJobByName("my-app")
+	updatedJob := leader.FindJobByName("my-app")
 	if updatedJob.Command != "./app-v2" {
 		t.Errorf("Job command should be updated to ./app-v2, got %s", updatedJob.Command)
 	}
@@ -109,7 +104,7 @@ func TestUpdateJobRecreate(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -165,7 +160,7 @@ func TestUpdateJobBlueGreen(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -234,7 +229,7 @@ func TestUpdateJobRollingFailureKeepsOld(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -283,7 +278,7 @@ func TestUpdateJobRollingFailureKeepsOld(t *testing.T) {
 	}
 
 	// Job definition should NOT be updated
-	storedJob := store.GetJobByName("my-app")
+	storedJob := leader.FindJobByName("my-app")
 	if storedJob.Command != "./app-v1" {
 		t.Errorf("Job should still be v1, got %s", storedJob.Command)
 	}
@@ -302,7 +297,7 @@ func TestUpdateJobBlueGreenFailureKeepsOld(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -351,7 +346,7 @@ func TestUpdateJobBlueGreenFailureKeepsOld(t *testing.T) {
 	}
 
 	// Job definition should NOT be updated (blue-green only updates after success)
-	storedJob := store.GetJobByName("my-app")
+	storedJob := leader.FindJobByName("my-app")
 	if storedJob.Command != "./app-v1" {
 		t.Errorf("Job should still be v1, got %s", storedJob.Command)
 	}
@@ -387,9 +382,9 @@ func TestFindJobByName(t *testing.T) {
 	go leader.Run(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	// Store jobs with IDs (required for ID-based store)
-	store.StoreJob(&types.Job{ID: "id-1", Name: "app-1", Command: "echo"})
-	store.StoreJob(&types.Job{ID: "id-2", Name: "app-2", Command: "echo"})
+	// Store jobs via DispatchJob so nameToID index is updated
+	leader.DispatchJob(&types.Job{ID: "id-1", Name: "app-1", Command: "echo"})
+	leader.DispatchJob(&types.Job{ID: "id-2", Name: "app-2", Command: "echo"})
 
 	// Find by name
 	job := leader.FindJobByName("app-1")
@@ -506,10 +501,6 @@ func (ma *realisticMockAgent) TasksByJobID(jobID string) int {
 //
 // With 1 agent this is 100% reproducible. With N agents it depends on round-robin landing.
 func TestUpdateRollingDeleteByNameBug(t *testing.T) {
-	oldDelay := RollingUpdateDelay
-	RollingUpdateDelay = 10 * time.Millisecond
-	defer func() { RollingUpdateDelay = oldDelay }()
-
 	// Single agent → old and new tasks always co-located
 	agent := newRealisticMockAgent()
 	defer agent.Close()

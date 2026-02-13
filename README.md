@@ -6,13 +6,15 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
 - **Multi-instance jobs**: Deploy N copies with automatic spreading
 - **Smart scheduling**: Round-robin with capacity-aware placement
-- **Agent pinning**: Pin jobs to specific nodes via `agent_id`
+- **Node affinity**: Target jobs to specific nodes via attribute constraints
+- **Docker support**: Run containers alongside processes (via `docker` CLI)
 - **Job updates**: Rolling, recreate, or blue-green deployments
 - **Named ports**: Flexible port allocation per service
 - **Service discovery**: Tags for external load balancers
 - **Health checks**: HTTP-based monitoring with auto-restart and initial grace period
 - **Live log streaming**: Real-time stdout/stderr via SSE (no persistence)
 - **Artifact downloads**: HTTP and S3 with extraction support (tar.gz, tar.bz2, zip, raw binary)
+- **Platform-specific artifacts**: Multiple artifacts per job, agent picks first matching
 - **Volume mounts**: Host paths symlinked into task directories
 - **Fault tolerance**: Automatic failover on node crashes with settle period
 - **Resource limits**: CPU shares and memory limiting
@@ -37,19 +39,27 @@ go build -o bin/run ./cmd/cli
 ### Deploy Job
 
 ```bash
-# Single instance
-./bin/run deploy--name web --command "python app.py"
+# Single instance (process)
+./bin/run deploy --name web --command "python app.py"
 
-# Multiple instances with spreading
-./bin/run deploy--name api --command "./server" --count 3
+# Docker container
+./bin/run deploy --name redis --image redis:7 --command "redis-server"
 
 # With artifact and resource limits
-./bin/run deploy\
+./bin/run deploy \
   --name api \
   --command "./server" \
   --artifact "s3://bucket/app-v1.2.tar.gz" \
   --cpu 2000 \
   --memory 512M
+
+# With node affinity (only deploy on arm64 nodes)
+./bin/run deploy --name api --command "./api" --affinity node.arch=arm64
+
+# Platform-specific artifacts
+./bin/run deploy --name app --command "./app" \
+  --artifact "node.arch=amd64::https://example.com/app-amd64.tar.gz" \
+  --artifact "node.arch=arm64::https://example.com/app-arm64.tar.gz"
 ```
 
 ### Update Job (Upsert)
@@ -58,13 +68,13 @@ go build -o bin/run ./cmd/cli
 
 ```bash
 # Update to new version (rolling by default - zero downtime)
-./bin/run deploy--name api --command "./server-v2"
+./bin/run deploy --name api --command "./server-v2"
 
 # Update with specific policy
-./bin/run deploy--name api --command "./server-v2" --update-policy recreate
+./bin/run deploy --name api --command "./server-v2" --update-policy recreate
 
 # Blue-green deployment
-./bin/run deploy--name api --command "./server-v2" --update-policy blue-green
+./bin/run deploy --name api --command "./server-v2" --update-policy blue-green
 ```
 
 #### Update Policies
@@ -93,6 +103,7 @@ go build -o bin/run ./cmd/cli
 - **Settle period**: New leader waits 30s before reconciling to let agents register
 - **Deterministic round-robin**: Spreading across nodes (agents sorted by ID)
 - **Capacity-aware**: Agents reject when full, leader tries next
+- **Affinity**: Agents check job constraints, reject with 406 on mismatch (leader stays unaware)
 
 ## Job Spec
 
@@ -101,17 +112,26 @@ go build -o bin/run ./cmd/cli
   "name": "api-service",
   "command": "./server --http=$ER_PORT_HTTP",
   "count": 3,
-  "agent_id": "",
-  "artifact": {
-    "url": "s3://bucket/app.tar.gz",
-    "extract": "tar.gz",
-    "auth": {"access_key": "...", "secret_key": "...", "region": "eu-west-1"}
-  },
+  "affinity": {"node.arch": "arm64"},
+  "artifacts": [
+    {
+      "url": "s3://bucket/app-arm64.tar.gz",
+      "match": {"node.arch": "arm64"},
+      "auth": {"access_key": "...", "secret_key": "...", "region": "eu-west-1"},
+      "extract": "tar.gz"
+    },
+    {
+      "url": "s3://bucket/app-amd64.tar.gz",
+      "match": {"node.arch": "amd64"},
+      "auth": {"access_key": "...", "secret_key": "...", "region": "eu-west-1"},
+      "extract": "tar.gz"
+    }
+  ],
   "ports": {"http": 0, "grpc": 0},
   "cpu_shares": 2048,
   "memory_limit": 536870912,
   "env": {"DB_HOST": "postgres.internal"},
-  "tags": {"service": "api", "urlprefix": "urlprefix:*.api.example.com"},
+  "tags": {"service": "api", "easylb-urlprefix": "*.api.example.com"},
   "volumes": {"/data/shared": "data"},
   "health_check": {
     "path": "/health",
@@ -120,7 +140,7 @@ go build -o bin/run ./cmd/cli
     "timeout": "5s",
     "initial_timeout": "30s"
   },
-  "max_restarts": 0,
+  "max_restarts": 5,
   "update_policy": "rolling"
 }
 ```
@@ -128,23 +148,26 @@ go build -o bin/run ./cmd/cli
 ### Fields
 
 - **name**: Job identifier (unique key for upsert)
-- **command**: Command to execute (shell syntax supported)
-- **count**: Number of instances (default 1, -1 = all agents)
-- **agent_id**: Pin to specific agent (optional)
-- **artifact**: Binary/assets to download (optional)
+- **command**: Command to execute (always required in current API)
+- **count**: Number of instances (default 1, -1 = all agents). API-only, not available via CLI.
+- **driver**: `"exec"` (default) or `"docker"` — auto-derived from `image` if not set
+- **image**: Docker image (sets driver to `"docker"` automatically)
+- **affinity**: Node attribute constraints (AND logic). Example: `{"node.arch": "arm64"}`. Pin to node: `{"node.id": "node-1"}`. Agent rejects with 406 if no match.
+- **artifacts**: Platform-specific binaries/assets (optional). Agent picks first matching entry.
   - **url**: Download URL - scheme determines downloader (http://, https://, s3://)
-  - **extract**: Extraction format: `tar.gz`, `tar.bz2`, `zip`, or empty for raw binary (chmod +x)
+  - **match**: Node attribute constraints — agent picks first artifact where all match (empty = catch-all)
   - **headers**: HTTP headers map (Authorization, X-API-Key, etc.)
   - **auth**: Credentials (S3: access_key/secret_key/region, HTTP: username/password for Basic Auth)
-- **ports**: Port name -> fixed port (0 = dynamic) - generates ENV vars `ER_PORT_HTTP`, etc.
-- **cpu_shares**: CPU priority (higher = more CPU time)
+  - **extract**: Archive type — `tar.gz`, `tar.bz2`, `zip`, or `""` (raw binary, auto chmod +x)
+- **ports**: Process: port name -> host port (0=dynamic, >0=fixed). Docker: port name -> container port (host always dynamic). ENV vars `ER_PORT_<NAME>`
+- **cpu_shares**: CPU priority (nice-based, higher = more CPU time)
 - **memory_limit**: Memory limit in bytes
-- **env**: Environment variables
+- **env**: Environment variables (note: node attributes are auto-injected as `ER_ATTR_<KEY>`, user env takes priority)
 - **tags**: Labels for service discovery / grouping
 - **volumes**: Host path -> task path mappings (symlinked into task directory)
 - **health_check**: HTTP health check (optional)
   - **initial_timeout**: Grace period after start to become healthy (default 30s)
-- **max_restarts**: Max restart attempts (0 = unlimited)
+- **max_restarts**: Max restart attempts (0 = default 5, -1 = unlimited)
 - **update_policy**: rolling (default), recreate, or blue-green
 
 ## Named Ports
@@ -169,12 +192,22 @@ ER_PORT_METRICS=54322
 URL scheme determines downloader. `extract` field determines extraction method.
 
 ```json
-{"artifact": {"url": "s3://bucket/app.tar.gz", "extract": "tar.gz"}}
-{"artifact": {"url": "https://example.com/app.zip", "extract": "zip"}}
-{"artifact": {"url": "https://example.com/binary", "extract": ""}}
+{"artifacts": [{"url": "s3://bucket/app.tar.gz", "extract": "tar.gz"}]}
+{"artifacts": [{"url": "https://example.com/app.zip", "extract": "zip"}]}
+{"artifacts": [{"url": "https://example.com/binary"}]}
 ```
 
 Empty `extract` = raw file download with chmod +x (single binary).
+
+Platform-specific: use `match` to target node attributes (agent picks first matching entry):
+```json
+{
+  "artifacts": [
+    {"url": "https://example.com/app-arm64", "match": {"node.arch": "arm64"}},
+    {"url": "https://example.com/app-amd64", "match": {"node.arch": "amd64"}}
+  ]
+}
+```
 
 ## Volume Mounts
 
@@ -205,8 +238,8 @@ SSE format, live stream only, no storage. Pipe to external tools for persistence
 ## Fault Tolerance
 
 ### Task Failures
-- Agent detects crash
-- Auto-restart locally (up to max_restarts, 0 = unlimited)
+- Agent detects crash (monitor loop, 5s interval)
+- Auto-restart locally (up to max_restarts, 0 = default 5, -1 = unlimited)
 - Health check failures -> kill + restart
 
 ### Agent Failures
@@ -226,6 +259,28 @@ SSE format, live stream only, no storage. Pipe to external tools for persistence
 
 Capacity-aware: agents have `cpu_cores * 1024` total shares and total system memory. Requests exceeding available resources are rejected (503).
 
+## Docker Support
+
+Run Docker containers instead of processes by setting the `image` field:
+
+```json
+{
+  "name": "redis",
+  "image": "redis:7",
+  "command": "redis-server --maxmemory 256mb",
+  "count": 3,
+  "ports": {"redis": 6379}
+}
+```
+
+- Driver auto-derived from `image` field (`image` set = `"docker"`)
+- `command` overrides the image's CMD (always required in current API)
+- `ports` values are **container ports** (host ports always dynamically allocated)
+- Resource limits map to `--memory` and `--cpu-shares`
+- Volumes map to `-v hostPath:containerPath`
+- Container naming: `easyrun-<taskID>`
+- Cleanup at agent start: `docker rm -f` all `easyrun-*` containers
+
 ## Documentation
 
 See `/docs` for details:
@@ -240,8 +295,8 @@ See `/docs` for details:
 ## Design Principles
 
 - **Simplicity over features** - KISS
-- **One ExecRunner** with optional limits
-- **States**: running, stopped, failed
+- **ExecRunner + DockerRunner** — runner selected by `driver` field (auto-derived from `image`)
+- **States**: running, stopping, stopped, failed
 - **Polling over events** - 10s heartbeat, simple and robust
 - **Channel-based state** - Single goroutine owns mutable state
 

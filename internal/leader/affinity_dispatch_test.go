@@ -2,7 +2,6 @@ package leader
 
 import (
 	"context"
-	"net/http"
 	"testing"
 	"time"
 
@@ -21,7 +20,7 @@ func TestDispatch406SkipsToNextAgent(t *testing.T) {
 	// B accepts (default)
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 1 * time.Second})
+	leader := New("leader", store, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -62,7 +61,7 @@ func TestDispatchAllAgentsReject406(t *testing.T) {
 	agentB.SetRejectAffinity(true)
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 1 * time.Second})
+	leader := New("leader", store, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -110,7 +109,7 @@ func TestDaemonWithAffinityMixedAgents(t *testing.T) {
 	linuxAgent.SetRejectAffinity(true) // linux agent rejects (affinity mismatch)
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 1 * time.Second})
+	leader := New("leader", store, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -154,7 +153,7 @@ func TestDaemonAllAgentsReject406(t *testing.T) {
 	agentB.SetRejectAffinity(true)
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 1 * time.Second})
+	leader := New("leader", store, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -207,7 +206,7 @@ func TestNewAgentJoinsDaemonWithAffinity(t *testing.T) {
 	}
 	store.StoreJob(daemon)
 
-	leader := New("leader", store, &http.Client{Timeout: 1 * time.Second})
+	leader := New("leader", store, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -245,7 +244,7 @@ func TestCountedJobWithAffinityMixedAgents(t *testing.T) {
 	noMatch.SetRejectAffinity(true)
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 1 * time.Second})
+	leader := New("leader", store, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

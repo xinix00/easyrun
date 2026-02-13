@@ -51,6 +51,7 @@ func BenchmarkTaskCreation(b *testing.B) {
 
 		agent.do(func(s *agentState) {
 			s.jobs[job.Name] = job
+
 			s.tasks[task.ID] = task
 		})
 	}
@@ -78,6 +79,7 @@ func BenchmarkGetJobs(b *testing.B) {
 		}
 		agent.do(func(s *agentState) {
 			s.jobs[job.Name] = job
+
 		})
 	}
 
@@ -154,6 +156,7 @@ func BenchmarkCapacityCheck(b *testing.B) {
 		}
 		agent.do(func(s *agentState) {
 			s.jobs[job.Name] = job
+
 			s.tasks[task.ID] = task
 		})
 	}
@@ -193,6 +196,7 @@ func BenchmarkStateQuery(b *testing.B) {
 		task := &types.Task{ID: fmt.Sprintf("task-%d", i), JobName: job.Name, State: types.TaskRunning}
 		agent.do(func(s *agentState) {
 			s.jobs[job.Name] = job
+
 			s.tasks[task.ID] = task
 		})
 	}

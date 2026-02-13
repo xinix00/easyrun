@@ -9,9 +9,12 @@ import (
 	"easyrun/internal/types"
 )
 
-// startLeader creates and starts a leader for benchmarking
+// startLeader creates and starts a leader for benchmarking.
+// Uses a long settle delay to prevent RegisterAgent from triggering
+// reconcileJobs, which would attempt HTTP calls to fake agent endpoints.
 func startLeader(store JobStore) (*Leader, context.CancelFunc) {
 	l := New("local-agent", store, nil)
+	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	go l.stateLoop(ctx)
 	return l, cancel
@@ -27,7 +30,7 @@ func BenchmarkDispatchJob(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -73,7 +76,7 @@ func BenchmarkHeartbeat(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		agentID := fmt.Sprintf("agent-%d", i%100)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i%100)
-		leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		leader.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
 	}
 }
 
@@ -87,7 +90,7 @@ func BenchmarkGetAgents(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -115,7 +118,9 @@ func BenchmarkFindJobByName(b *testing.B) {
 			Command: "echo test",
 		}
 		store.StoreJob(job)
+		leader.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 	}
+	time.Sleep(10 * time.Millisecond)
 
 	b.ResetTimer()
 	b.ReportAllocs()
@@ -139,7 +144,7 @@ func BenchmarkRoundRobinSelection(b *testing.B) {
 	for i := 0; i < 100; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -174,7 +179,7 @@ func BenchmarkConcurrentHeartbeats(b *testing.B) {
 		for pb.Next() {
 			agentID := fmt.Sprintf("agent-%d", i%1000)
 			endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i%1000)
-			leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+			leader.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
 			i++
 		}
 	})
@@ -190,7 +195,7 @@ func BenchmarkPlacedUpdate(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()

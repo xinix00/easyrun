@@ -55,7 +55,7 @@ Called on agent startup and on leader change:
 {
   "id": "agent-1",
   "endpoint": "http://10.0.0.5:8080",
-  "version": "v0.5.8",
+  "version": "dev",
   "placed": {
     "job-id-abc": 2,
     "job-id-def": 1
@@ -85,7 +85,7 @@ Agents send this every 10s to stay registered:
 {
   "id": "agent-1",
   "endpoint": "http://10.0.0.5:8080",
-  "version": "v0.5.8",
+  "version": "dev",
   "jobs": [...],
   "state_time": "2025-01-31T12:00:00Z"
 }
@@ -186,7 +186,7 @@ curl -X POST http://localhost:9080/v1/jobs \
   - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
   - `auth` (map): Credentials (S3: access_key/secret_key/region, HTTP: username/password)
   - `extract` (string): Archive type — `tar.gz`, `tar.bz2`, `zip`, or `""` (raw binary, auto chmod +x)
-- `command` (string): Command to execute (required for process jobs, optional for Docker — overrides CMD)
+- `command` (string, **required**): Command to execute (for Docker, overrides image CMD)
 - `count` (int): Number of instances (default 1, -1 = all agents)
 - `ports` (map): Process: port name → host port (0=dynamic). Docker: port name → container port (host always dynamic). ENV vars `ER_PORT_<NAME>`
 - `cpu_shares` (int): CPU priority (nice-based)
@@ -197,7 +197,7 @@ curl -X POST http://localhost:9080/v1/jobs \
 - `health_check`: HTTP health monitoring
   - `port` (string): Named port to check (default "http")
   - `initial_timeout` (duration): Grace period for slow-starting services (default 30s)
-- `max_restarts` (int): Max restart attempts (0=default 5, -1=unlimited)
+- `max_restarts` (int): Max restart attempts (0 = default 5, -1 = unlimited)
 - `update_policy` (string): `rolling` (default), `recreate`, or `blue-green`
 
 **Artifact Downloaders:**
@@ -306,10 +306,10 @@ Returns 406 if affinity mismatch. Returns 503 if no capacity.
 ### Delete (internal, called by leader)
 
 ```
-DELETE /delete/{job_name}
+DELETE /delete/{job_id}
 ```
 
-Deletes a job and cleans up all its tasks on this agent.
+Deletes a job by ID and cleans up all its tasks on this agent.
 
 ### Logs (streaming)
 
@@ -338,5 +338,45 @@ The agent proxies these paths to the current leader:
 - `/v1/jobs`
 - `/v1/jobs/{name}`
 - `/v1/status`
+- `/v1/events` (SSE proxy)
 
 This means easydns/easylb/easyprom can query their local agent and automatically get cluster-wide data.
+
+### Events (SSE)
+
+```
+GET /v1/events
+```
+
+Server-Sent Events stream that notifies on cluster state changes (job dispatches, agent registrations, etc.). Each event is a `changed` event with a JSON payload indicating what changed:
+
+```json
+{"job": "api"}
+{"agent": "agent-1"}
+{}
+```
+
+### Notify (internal, called by agents)
+
+```
+POST /v1/notify
+```
+
+Agents call this when a task changes state (starts, crashes, etc.) to trigger an SSE notification to subscribers. Body: `{"job": "api"}` or empty.
+
+### Per-Job Status
+
+```
+GET /v1/jobs/{name}/status
+```
+
+Returns tasks and agents for a specific job. Only queries agents that have this job placed (more efficient than full cluster status).
+
+```json
+{
+  "agents": [...],
+  "tasks_by_agent": {
+    "agent-1": [{"id": "abc", "job_name": "api", "state": "running", ...}]
+  }
+}
+```

@@ -39,7 +39,7 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 
 ```
 /cmd
-    /agent/main.go         # Agent + leader binary (v0.5.8)
+    /agent/main.go         # Agent + leader binary (version injected at build time)
     /cli/main.go           # CLI tool
 /internal
     /agent/
@@ -54,8 +54,10 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
         dispatch.go        # Job dispatch, round-robin, agent pinning, placement, delete
         health.go          # Reconciliation (reconcileJob/reconcileJobs), dead agent check, cluster status
         update.go          # Update policies: rolling, recreate, blue-green
+    /leader/
+        events.go          # EventBus for SSE notifications
     /runner/
-        runner.go          # Runner interface + Config
+        runner.go          # Runner interface + Config + ENV var helpers
         process.go         # Process runner (start, stop, status, limits, volumes)
         process_linux.go   # Linux: cgroups, chroot
         process_darwin.go  # macOS: ulimit, sandbox

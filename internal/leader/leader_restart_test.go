@@ -3,7 +3,6 @@ package leader
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
@@ -23,7 +22,7 @@ func TestLeaderRestart_RejectUnknownHeartbeat(t *testing.T) {
 
 	// === PHASE 1: Dispatch 20 tasks ===
 	store := NewMockJobStore()
-	leader1 := New("agent-0", store, &http.Client{Timeout: 1 * time.Second})
+	leader1 := New("agent-0", store, nil)
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
 	go leader1.stateLoop(ctx1)
@@ -55,7 +54,7 @@ func TestLeaderRestart_RejectUnknownHeartbeat(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// === PHASE 3: New leader with settle ===
-	leader2 := New("agent-0", store, &http.Client{Timeout: 1 * time.Second})
+	leader2 := New("agent-0", store, nil)
 	leader2.SetSettleDelay(300 * time.Millisecond)
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
@@ -68,7 +67,7 @@ func TestLeaderRestart_RejectUnknownHeartbeat(t *testing.T) {
 	// Other agents heartbeat → should be REJECTED (unknown)
 	for i := 1; i < 4; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		_, known := leader2.Heartbeat(agentID, agents[i].URL(), []*types.Job{job}, time.Now(), "")
+		_, known := leader2.Heartbeat(agentID, agents[i].URL(), []*types.Job{job}, nil, time.Now(), "")
 		if known {
 			t.Errorf("Agent %s heartbeat should be rejected (unknown), but was accepted", agentID)
 		}
@@ -118,7 +117,7 @@ func TestAgentRestart_WithinTimeout_PlacedStale(t *testing.T) {
 	}
 
 	store := NewMockJobStore()
-	l := New("leader", store, &http.Client{Timeout: 1 * time.Second})
+	l := New("leader", store, nil)
 	l.agentTimeout = 30 * time.Second // Long timeout — agent won't be detected as dead
 
 	ctx, cancel := context.WithCancel(context.Background())

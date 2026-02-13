@@ -244,6 +244,7 @@ func TestCheckTasksHealthCheckFails(t *testing.T) {
 	// Store job and create task manually with correct port
 	agent.do(func(s *agentState) {
 		s.jobs[job.ID] = job
+
 		s.tasks["task-health"] = &types.Task{
 			ID:      "task-health",
 			JobID:   job.ID,
@@ -305,6 +306,7 @@ func TestCheckTasksHealthCheckSucceeds(t *testing.T) {
 
 	agent.do(func(s *agentState) {
 		s.jobs[job.ID] = job
+
 		s.tasks["task-ok"] = &types.Task{
 			ID:      "task-ok",
 			JobID:   job.ID,
@@ -361,6 +363,7 @@ func TestRestartTaskSuccess(t *testing.T) {
 	// Store job and create a failed task
 	agent.do(func(s *agentState) {
 		s.jobs[job.ID] = job
+
 		s.tasks["task-restart"] = &types.Task{
 			ID:           "task-restart",
 			JobName:      "restart-me",
@@ -418,6 +421,7 @@ func TestRestartTaskMaxRestartsExceeded(t *testing.T) {
 
 	agent.do(func(s *agentState) {
 		s.jobs[job.ID] = job
+
 		s.tasks["task-max"] = &types.Task{
 			ID:           "task-max",
 			JobName:      "max-restart",
@@ -474,6 +478,7 @@ func TestRestartTaskUnlimitedRestarts(t *testing.T) {
 
 	agent.do(func(s *agentState) {
 		s.jobs[job.ID] = job
+
 		s.tasks["task-unlimited"] = &types.Task{
 			ID:           "task-unlimited",
 			JobName:      "unlimited",

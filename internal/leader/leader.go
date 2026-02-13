@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"easyrun/internal/types"
@@ -13,7 +14,7 @@ const (
 	defaultAgentTimeout       = 30 * time.Second
 	defaultHealthCheckTimeout = 30 * time.Second
 	deadAgentCheckInterval    = 10 * time.Second
-	stateChannelBufferSize    = 64
+	stateChannelBufferSize    = 256
 )
 
 var (
@@ -37,11 +38,25 @@ type JobStore interface {
 
 // leaderState holds all mutable state (owned by single goroutine)
 type leaderState struct {
-	agents      map[string]*types.Agent
-	placed      map[string]map[string]int // agentID -> jobID -> count
-	dispatching map[string]bool           // jobID -> true if actively being dispatched
-	settled     bool                      // false during settle period after leader election
-	roundRobin  int
+	agents       map[string]*types.Agent
+	agentsSorted []*types.Agent            // cached sorted agent list, rebuilt on mutation
+	placed       map[string]map[string]int // agentID -> jobID -> count
+	dispatching  map[string]bool           // jobID -> true if actively being dispatched
+	nameToID     map[string]string         // job name -> job ID index for O(1) lookup
+	settled      bool                      // false during settle period after leader election
+	roundRobin   int
+}
+
+// rebuildSortedAgents rebuilds the cached sorted agent list from the agents map.
+// Must be called inside a state operation whenever agents map is modified.
+func (s *leaderState) rebuildSortedAgents() {
+	s.agentsSorted = make([]*types.Agent, 0, len(s.agents))
+	for _, a := range s.agents {
+		s.agentsSorted = append(s.agentsSorted, a)
+	}
+	sort.Slice(s.agentsSorted, func(i, j int) bool {
+		return s.agentsSorted[i].ID < s.agentsSorted[j].ID
+	})
 }
 
 // Leader dispatches jobs to agents and monitors health
@@ -88,6 +103,7 @@ func (l *Leader) stateLoop(ctx context.Context) {
 		agents:      make(map[string]*types.Agent),
 		placed:      make(map[string]map[string]int),
 		dispatching: make(map[string]bool),
+		nameToID:    make(map[string]string),
 		settled:     l.settleDelay == 0,
 	}
 
@@ -125,14 +141,18 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 	return <-result
 }
 
-// Heartbeat updates agent's LastSeen and syncs jobs.
+// Heartbeat updates agent's LastSeen, syncs placed counts, and syncs jobs.
 // Does NOT trigger reconciliation — that's RegisterAgent's job.
 // Returns (nil, false) if agent is unknown — caller should return 404 to force re-register.
-func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime time.Time, version string) ([]*types.Job, bool) {
+func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, placed map[string]int, stateTime time.Time, version string) ([]*types.Job, bool) {
 	known := query(l, func(s *leaderState) bool {
 		if agent, ok := s.agents[id]; ok {
 			agent.LastSeen = time.Now()
 			agent.Version = version
+			// Update placed from agent's ground truth
+			if placed != nil {
+				s.placed[id] = placed
+			}
 			return true
 		}
 		return false
@@ -147,6 +167,11 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime tim
 	if stateTime.After(myStateTime) && len(jobs) > 0 {
 		log.Printf("Agent %s has newer state, syncing", id)
 		l.jobStore.SyncJobs(jobs, stateTime)
+		l.do(func(s *leaderState) {
+			for _, j := range jobs {
+				s.nameToID[j.Name] = j.ID
+			}
+		})
 	}
 
 	return l.jobStore.GetJobs(), true
@@ -170,6 +195,7 @@ func (l *Leader) RegisterAgent(id, endpoint, version string, placed map[string]i
 		if placed != nil {
 			s.placed[id] = placed
 		}
+		s.rebuildSortedAgents()
 		return s.settled
 	})
 
@@ -185,6 +211,7 @@ func (l *Leader) UnregisterAgent(id string) {
 	l.do(func(s *leaderState) {
 		delete(s.agents, id)
 		delete(s.placed, id)
+		s.rebuildSortedAgents()
 	})
 	l.reconcileJobs()
 }
@@ -205,15 +232,35 @@ func (l *Leader) GetJobs() []*types.Job {
 	return l.jobStore.GetJobs()
 }
 
-// FindJobByName finds a job by name (returns nil if not found)
+// FindJobByName finds a job by name using the leader's name→ID index (O(1))
 func (l *Leader) FindJobByName(name string) *types.Job {
-	jobs := l.jobStore.GetJobs()
-	for _, job := range jobs {
-		if job.Name == name {
-			return job
-		}
+	id := query(l, func(s *leaderState) string {
+		return s.nameToID[name]
+	})
+	if id == "" {
+		return nil
 	}
-	return nil
+	return l.jobStore.GetJob(id)
+}
+
+// GetPlacedByJobName returns placed counts aggregated by job name: jobName → total count.
+// Uses the nameToID index to map job IDs back to names.
+func (l *Leader) GetPlacedByJobName() map[string]int {
+	return query(l, func(s *leaderState) map[string]int {
+		idToName := make(map[string]string, len(s.nameToID))
+		for name, id := range s.nameToID {
+			idToName[id] = name
+		}
+		result := make(map[string]int)
+		for _, jobs := range s.placed {
+			for jobID, count := range jobs {
+				if name := idToName[jobID]; name != "" {
+					result[name] += count
+				}
+			}
+		}
+		return result
+	})
 }
 
 // GetPlaced returns which agents have a job placed and how many (for testing/debugging)

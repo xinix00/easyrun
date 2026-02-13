@@ -97,11 +97,12 @@ func (s *Server) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 // handleHeartbeat handles agent heartbeat (also registers new agents)
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID        string       `json:"id"`
-		Endpoint  string       `json:"endpoint"`
-		Version   string       `json:"version,omitempty"`
-		Jobs      []*types.Job `json:"jobs,omitempty"`       // All known jobs (for state sync)
-		StateTime time.Time    `json:"state_time,omitempty"`
+		ID        string         `json:"id"`
+		Endpoint  string         `json:"endpoint"`
+		Version   string         `json:"version,omitempty"`
+		Jobs      []*types.Job   `json:"jobs,omitempty"`       // All known jobs (for state sync)
+		Placed    map[string]int `json:"placed,omitempty"`     // jobID -> count (ground truth from agent)
+		StateTime time.Time      `json:"state_time,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
@@ -113,7 +114,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobs, known := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime, req.Version)
+	jobs, known := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.Placed, req.StateTime, req.Version)
 	if !known {
 		httputil.WriteError(w, http.StatusNotFound, "not registered")
 		return
@@ -245,28 +246,24 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleStatus returns cluster status
+// handleStatus returns cluster overview from placed data (no HTTP calls to agents).
+// For task details (state, pid, restarts), use GET /v1/jobs/{name}/status.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	agents := s.leader.GetAgents()
-	tasks := s.leader.GetClusterStatus()
+	jobs := s.leader.GetJobs()
+	placed := s.leader.GetPlacedByJobName()
 
-	totalTasks := 0
-	running := 0
-	for _, agentTasks := range tasks {
-		for _, t := range agentTasks {
-			totalTasks++
-			if t.State == types.TaskRunning {
-				running++
-			}
-		}
+	totalPlaced := 0
+	for _, count := range placed {
+		totalPlaced += count
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"agents":         len(agents),
-		"total_tasks":    totalTasks,
-		"running_tasks":  running,
-		"settling":       !s.leader.IsSettled(),
-		"tasks_by_agent": tasks,
+		"agents":       len(agents),
+		"jobs":         len(jobs),
+		"total_placed": totalPlaced,
+		"settling":     !s.leader.IsSettled(),
+		"placed":       placed,
 	})
 }
 

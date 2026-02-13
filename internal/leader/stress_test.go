@@ -9,6 +9,16 @@ import (
 	"easyrun/internal/types"
 )
 
+// startStressLeader creates a leader with settle delay to prevent reconciliation
+// with fake agent endpoints during benchmarks.
+func startStressLeader(store JobStore) (*Leader, func()) {
+	l := New("local-agent", store, nil)
+	l.SetSettleDelay(time.Hour)
+	ctx, cancel := context.WithCancel(context.Background())
+	go l.stateLoop(ctx)
+	return l, cancel
+}
+
 // TestMassiveScale tests system behavior with large numbers
 func TestMassiveScale(t *testing.T) {
 	tests := []struct {
@@ -25,10 +35,8 @@ func TestMassiveScale(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			store := NewMockJobStore()
-			leader := New("local-agent", store, nil)
-			ctx, cancel := context.WithCancel(context.Background())
+			leader, cancel := startStressLeader(store)
 			defer cancel()
-			go leader.stateLoop(ctx)
 
 			// Register agents
 			start := time.Now()
@@ -36,7 +44,7 @@ func TestMassiveScale(t *testing.T) {
 				agentID := fmt.Sprintf("agent-%d", i)
 				endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 				leader.RegisterAgent(agentID, endpoint, "", nil)
-				leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
 			}
 			registerTime := time.Since(start)
 
@@ -87,16 +95,14 @@ func BenchmarkMassiveAgents(b *testing.B) {
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("%d_agents", size), func(b *testing.B) {
 			store := NewMockJobStore()
-			leader := New("local-agent", store, nil)
-			ctx, cancel := context.WithCancel(context.Background())
+			leader, cancel := startStressLeader(store)
 			defer cancel()
-			go leader.stateLoop(ctx)
 
 			// Register agents once
 			for i := 0; i < size; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 			}
 
 			b.ResetTimer()
@@ -119,16 +125,14 @@ func BenchmarkMassiveJobs(b *testing.B) {
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("%d_jobs", size), func(b *testing.B) {
 			store := NewMockJobStore()
-			leader := New("local-agent", store, nil)
-			ctx, cancel := context.WithCancel(context.Background())
+			leader, cancel := startStressLeader(store)
 			defer cancel()
-			go leader.stateLoop(ctx)
 
 			// Register agents
 			for i := 0; i < 10; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 			}
 
 			// Create jobs
@@ -162,10 +166,8 @@ func BenchmarkJobLookupScale(b *testing.B) {
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("%d_jobs", size), func(b *testing.B) {
 			store := NewMockJobStore()
-			leader := New("local-agent", store, nil)
-			ctx, cancel := context.WithCancel(context.Background())
+			leader, cancel := startStressLeader(store)
 			defer cancel()
-			go leader.stateLoop(ctx)
 
 			// Create jobs
 			for i := 0; i < size; i++ {
@@ -175,7 +177,9 @@ func BenchmarkJobLookupScale(b *testing.B) {
 					Command: "echo test",
 				}
 				store.StoreJob(job)
+				leader.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 			}
+			time.Sleep(10 * time.Millisecond)
 
 			b.ResetTimer()
 			b.ReportAllocs()
@@ -200,16 +204,14 @@ func BenchmarkHeartbeatScale(b *testing.B) {
 	for _, count := range agentCounts {
 		b.Run(fmt.Sprintf("%d_agents", count), func(b *testing.B) {
 			store := NewMockJobStore()
-			leader := New("local-agent", store, nil)
-			ctx, cancel := context.WithCancel(context.Background())
+			leader, cancel := startStressLeader(store)
 			defer cancel()
-			go leader.stateLoop(ctx)
 
 			// Pre-register agents
 			for i := 0; i < count; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 			}
 
 			b.ResetTimer()
@@ -218,7 +220,7 @@ func BenchmarkHeartbeatScale(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				agentID := fmt.Sprintf("agent-%d", i%count)
 				endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i%count)
-				leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
 			}
 
 			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "heartbeats/sec")
@@ -242,16 +244,14 @@ func BenchmarkPlacementScale(b *testing.B) {
 		name := fmt.Sprintf("%dA_%dJ_%dI", s.agents, s.jobs, s.count)
 		b.Run(name, func(b *testing.B) {
 			store := NewMockJobStore()
-			leader := New("local-agent", store, nil)
-			ctx, cancel := context.WithCancel(context.Background())
+			leader, cancel := startStressLeader(store)
 			defer cancel()
-			go leader.stateLoop(ctx)
 
 			// Register agents
 			for i := 0; i < s.agents; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 			}
 
 			// Create placement for all jobs
@@ -290,16 +290,14 @@ func BenchmarkPlacementScale(b *testing.B) {
 // BenchmarkMemoryFootprint measures memory usage with large state
 func BenchmarkMemoryFootprint(b *testing.B) {
 	store := NewMockJobStore()
-	leader := New("local-agent", store, nil)
-	ctx, cancel := context.WithCancel(context.Background())
+	leader, cancel := startStressLeader(store)
 	defer cancel()
-	go leader.stateLoop(ctx)
 
 	// Massive scale: 1000 agents, 10000 jobs, 3 instances each = 30k placements
 	for i := 0; i < 1000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
 	}
 
 	for i := 0; i < 10000; i++ {
@@ -313,6 +311,7 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 			Tags:        map[string]string{"service": "api", "env": "prod"},
 		}
 		store.StoreJob(job)
+		leader.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 
 		// Simulate placement
 		for j := 0; j < 3; j++ {

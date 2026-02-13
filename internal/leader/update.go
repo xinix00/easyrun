@@ -51,6 +51,7 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 	// try to re-dispatch old instances during the rolling update.
 	// We still have the old Job in memory for stopOneInstance.
 	l.jobStore.DeleteJob(old.ID)
+	// Index stays pointing to old.ID — will be updated when new is stored
 
 	for i := 0; i < count; i++ {
 		log.Printf("Rolling update %d/%d (old ID %s → new ID %s)", i+1, count, old.ID, new.ID)
@@ -59,6 +60,7 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 		if err := l.dispatchToAvailableAgent(new); err != nil {
 			// Restore old job — its instances are still running
 			l.jobStore.StoreJob(old)
+			l.do(func(s *leaderState) { s.nameToID[old.Name] = old.ID })
 			return fmt.Errorf("failed at instance %d/%d: %w", i+1, count, err)
 		}
 
@@ -73,6 +75,7 @@ func (l *Leader) updateRolling(old, new *types.Job) error {
 
 	// Store new job definition
 	l.jobStore.StoreJob(new)
+	l.do(func(s *leaderState) { s.nameToID[new.Name] = new.ID })
 	return nil
 }
 
@@ -88,6 +91,7 @@ func (l *Leader) updateBlueGreen(old, new *types.Job) error {
 		// DispatchJob always stores the job — clean up on failure
 		// so the old version remains the only entry for this name.
 		l.jobStore.DeleteJob(new.ID)
+		l.do(func(s *leaderState) { s.nameToID[old.Name] = old.ID })
 		return err
 	}
 	l.DeleteJobByID(old) // Deletes old by ID, new stays (different ID!)

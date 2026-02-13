@@ -10,7 +10,9 @@ import (
 func init() {
 	// Fast timeouts for tests - no waiting for fake agents
 	HTTPClientTimeout = 10 * time.Millisecond
+	DeleteClientTimeout = 10 * time.Millisecond
 	VerifyInterval = 10 * time.Millisecond
+	RollingUpdateDelay = 1 * time.Millisecond
 }
 
 // MockJobStore implements JobStore for testing
@@ -41,18 +43,6 @@ func (m *MockJobStore) GetJob(id string) *types.Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.jobs[id]
-}
-
-// GetJobByName finds a job by name (for test convenience - jobs are stored by ID)
-func (m *MockJobStore) GetJobByName(name string) *types.Job {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	for _, job := range m.jobs {
-		if job.Name == name {
-			return job
-		}
-	}
-	return nil
 }
 
 func (m *MockJobStore) StoreJob(job *types.Job) {

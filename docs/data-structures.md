@@ -261,7 +261,7 @@ A registered agent with the leader.
 type Agent struct {
     ID       string    // Unique identifier
     Endpoint string    // HTTP endpoint (http://ip:port)
-    Version  string    // Agent version (e.g., "v0.5.8")
+    Version  string    // Agent version (injected at build time)
     LastSeen time.Time // Last heartbeat
 }
 ```
