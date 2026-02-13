@@ -382,7 +382,7 @@ func TestDownloadHTTPRawBinary(t *testing.T) {
 func TestDownloadArtifactUnsupportedExtract(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("data"))
+		_, _ = w.Write([]byte("data"))
 	}))
 	defer srv.Close()
 
@@ -534,7 +534,7 @@ func createZip(t *testing.T, path string, files map[string]string) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		w.Write([]byte(content))
+		_, _ = w.Write([]byte(content))
 	}
 	zw.Close()
 }

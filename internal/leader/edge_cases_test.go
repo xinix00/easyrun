@@ -147,7 +147,7 @@ func TestLeaderGetClusterStatusWithFailingAgent(t *testing.T) {
 	workingServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/tasks" {
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[{"id":"task-1","state":"running"}]`))
+			_, _ = w.Write([]byte(`[{"id":"task-1","state":"running"}]`))
 			return
 		}
 		w.WriteHeader(http.StatusNotFound)

@@ -332,11 +332,11 @@ func TestLeaderDispatchAccepts202(t *testing.T) {
 			// Return running task after first /run call
 			if taskReturned {
 				w.Header().Set("Content-Type", "application/json")
-				w.Write([]byte(`[{"id":"task-1","job_name":"async-job","state":"running"}]`))
+				_, _ = w.Write([]byte(`[{"id":"task-1","job_name":"async-job","state":"running"}]`))
 			} else {
 				taskReturned = true
 				w.Header().Set("Content-Type", "application/json")
-				w.Write([]byte(`[{"id":"task-1","job_name":"async-job","state":"running"}]`))
+				_, _ = w.Write([]byte(`[{"id":"task-1","job_name":"async-job","state":"running"}]`))
 			}
 		default:
 			w.WriteHeader(http.StatusOK)
@@ -383,7 +383,7 @@ func TestLeaderDispatchAccepts201(t *testing.T) {
 			w.WriteHeader(http.StatusCreated) // 201
 		case "/tasks":
 			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(`[{"id":"task-1","job_name":"created-job","state":"running"}]`))
+			_, _ = w.Write([]byte(`[{"id":"task-1","job_name":"created-job","state":"running"}]`))
 		default:
 			w.WriteHeader(http.StatusOK)
 		}
