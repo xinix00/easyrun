@@ -9,7 +9,7 @@ import (
 func WriteJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 // WriteError writes a JSON error response
@@ -38,13 +38,13 @@ type SSE struct {
 
 // WriteEvent writes a named SSE event with data and flushes
 func (s *SSE) WriteEvent(event, data string) {
-	s.w.Write([]byte("event: " + event + "\ndata: " + data + "\n\n"))
+	_, _ = s.w.Write([]byte("event: " + event + "\ndata: " + data + "\n\n"))
 	s.f.Flush()
 }
 
 // WriteData writes an SSE data-only event and flushes
 func (s *SSE) WriteData(data string) {
-	s.w.Write([]byte("data: " + data + "\n\n"))
+	_, _ = s.w.Write([]byte("data: " + data + "\n\n"))
 	s.f.Flush()
 }
 

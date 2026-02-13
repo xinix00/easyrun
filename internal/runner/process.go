@@ -114,7 +114,7 @@ func (r *ExecRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 
 	// Wait for process in background
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 
 	return &types.Task{
@@ -159,7 +159,7 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 	done := make(chan struct{})
 	go func() {
 		if cmd != nil {
-			cmd.Wait()
+			_ = cmd.Wait()
 		} else {
 			// Poll for process exit
 			for i := 0; i < processExitPollAttempts; i++ {
@@ -277,7 +277,7 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 	}
 
 	// Copy /etc/resolv.conf for DNS resolution
-	r.copyFile("/etc/resolv.conf", filepath.Join(taskDir, "resolv.conf"))
+	_ = r.copyFile("/etc/resolv.conf", filepath.Join(taskDir, "resolv.conf"))
 
 	// Setup volume mounts (symlinks from host to task dir)
 	for hostPath, taskPath := range job.Volumes {
@@ -318,14 +318,14 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) {
 		filepath.Join(taskDir, "etc"),
 	}
 	for _, dir := range dirs {
-		os.MkdirAll(dir, 0755)
+		_ = os.MkdirAll(dir, 0755)
 	}
 
 	// Symlink shell
-	os.Symlink("/bin/sh", filepath.Join(taskDir, "bin", "sh"))
+	_ = os.Symlink("/bin/sh", filepath.Join(taskDir, "bin", "sh"))
 
 	// Copy resolv.conf to /etc
-	r.copyFile("/etc/resolv.conf", filepath.Join(taskDir, "etc", "resolv.conf"))
+	_ = r.copyFile("/etc/resolv.conf", filepath.Join(taskDir, "etc", "resolv.conf"))
 
 	// Platform-specific library linking
 	r.linkLibraries(taskDir)
@@ -344,9 +344,9 @@ func (r *ExecRunner) cleanupTaskDir(taskID string) {
 
 	if taskDir != "" {
 		// Unmount any volumes before removing
-		filepath.Walk(taskDir, func(path string, info os.FileInfo, err error) error {
+		_ = filepath.Walk(taskDir, func(path string, info os.FileInfo, err error) error {
 			if err == nil && info.IsDir() && path != taskDir {
-				r.unmountVolume(path) // ignore errors, may not be a mount
+				_ = r.unmountVolume(path) // ignore errors, may not be a mount
 			}
 			return nil
 		})

@@ -508,7 +508,7 @@ func doRequest(method, path string, body any) ([]byte, error) {
 
 	if resp.StatusCode >= 400 {
 		var errResp map[string]string
-		json.Unmarshal(respBody, &errResp)
+		_ = json.Unmarshal(respBody, &errResp)
 		if msg, ok := errResp["error"]; ok {
 			return nil, fmt.Errorf("%s", msg)
 		}

@@ -347,7 +347,7 @@ func TestHandleDeleteNonExistentJob(t *testing.T) {
 	}
 
 	var resp map[string]int
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 
 	if resp["deleted"] != 0 {
 		t.Errorf("deleted = %d, want 0", resp["deleted"])
@@ -854,7 +854,7 @@ func TestHandleLogsStdoutStream(t *testing.T) {
 
 	// Write a log line
 	time.Sleep(20 * time.Millisecond)
-	broadcaster.Write([]byte("test log line"))
+	_, _ = broadcaster.Write([]byte("test log line"))
 
 	// Give time for the message to be processed
 	time.Sleep(50 * time.Millisecond)

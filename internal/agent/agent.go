@@ -296,7 +296,7 @@ func (a *Agent) shutdown() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	a.server.Shutdown(ctx)
+	_ = a.server.Shutdown(ctx)
 
 	tasks := query(a, func(s *agentState) []*types.Task { return markRunningAsStopping(s) })
 	a.stopTasks(tasks)
@@ -469,16 +469,6 @@ func (a *Agent) SaveState() {
 	if err := os.WriteFile(path, data, 0644); err != nil {
 		log.Printf("Failed to save state: %v", err)
 	}
-}
-
-// findJobByName is a helper to find job by name within state (jobs stored by ID)
-func findJobByName(s *agentState, jobName string) *types.Job {
-	for _, job := range s.jobs {
-		if job.Name == jobName {
-			return job
-		}
-	}
-	return nil
 }
 
 // resourceUsage returns total CPU shares and memory used by running/stopping tasks + reservations.

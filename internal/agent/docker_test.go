@@ -394,7 +394,7 @@ func TestHandleLogsDockerTask(t *testing.T) {
 	}()
 
 	time.Sleep(20 * time.Millisecond)
-	broadcaster.Write([]byte("docker log line"))
+	_, _ = broadcaster.Write([]byte("docker log line"))
 	time.Sleep(50 * time.Millisecond)
 
 	reqCancel()

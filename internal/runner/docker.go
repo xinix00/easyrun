@@ -132,7 +132,7 @@ func (r *DockerRunner) Stop(task *types.Task) error {
 	// Stop log streaming process
 	r.mu.Lock()
 	if cmd := r.logCmds[task.ID]; cmd != nil && cmd.Process != nil {
-		cmd.Process.Kill()
+		_ = cmd.Process.Kill()
 	}
 	delete(r.logCmds, task.ID)
 	if b := r.stdoutLog[task.ID]; b != nil {
@@ -188,7 +188,7 @@ func (r *DockerRunner) Cleanup() error {
 		if name == "" {
 			continue
 		}
-		exec.Command("docker", "rm", "-f", name).Run()
+		_ = exec.Command("docker", "rm", "-f", name).Run()
 	}
 	return nil
 }
@@ -225,6 +225,6 @@ func (r *DockerRunner) startLogStreaming(taskID, containerName string) {
 	go PipeReader(stderrB, stderr)
 
 	go func() {
-		cmd.Wait()
+		_ = cmd.Wait()
 	}()
 }

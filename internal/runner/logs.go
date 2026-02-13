@@ -76,7 +76,7 @@ func (b *LogBroadcaster) Close() {
 func PipeReader(broadcaster *LogBroadcaster, reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
-		broadcaster.Write(append(scanner.Bytes(), '\n'))
+		_, _ = broadcaster.Write(append(scanner.Bytes(), '\n'))
 	}
 	// Reader closed (process exited), close broadcaster
 	broadcaster.Close()

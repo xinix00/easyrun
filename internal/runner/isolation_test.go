@@ -40,7 +40,7 @@ func TestIsolationEnabledByDefault(t *testing.T) {
 
 func TestSetupCommandWithIsolation(t *testing.T) {
 	taskDir := t.TempDir()
-	os.MkdirAll(filepath.Join(taskDir, "tmp"), 0755)
+	_ = os.MkdirAll(filepath.Join(taskDir, "tmp"), 0755)
 
 	cfg := &Config{
 		RootfsBase: taskDir,
@@ -81,7 +81,7 @@ func TestSetupCommandWithIsolation(t *testing.T) {
 
 func TestSetupCommandWithoutIsolation(t *testing.T) {
 	taskDir := t.TempDir()
-	os.MkdirAll(filepath.Join(taskDir, "tmp"), 0755)
+	_ = os.MkdirAll(filepath.Join(taskDir, "tmp"), 0755)
 
 	cfg := &Config{
 		RootfsBase: taskDir,
@@ -134,7 +134,7 @@ func TestRunnerRunWithIsolation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Clean up
-	runner.Stop(task)
+	_ = runner.Stop(task)
 }
 
 func TestRunnerRunWithoutIsolation(t *testing.T) {
@@ -164,7 +164,7 @@ func TestRunnerRunWithoutIsolation(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Clean up
-	runner.Stop(task)
+	_ = runner.Stop(task)
 }
 
 func TestIsolationWithVolumes(t *testing.T) {
@@ -174,7 +174,7 @@ func TestIsolationWithVolumes(t *testing.T) {
 
 	// Create a file in the volume
 	testFile := filepath.Join(volumeDir, "test.txt")
-	os.WriteFile(testFile, []byte("volume data"), 0644)
+	_ = os.WriteFile(testFile, []byte("volume data"), 0644)
 
 	cfg := &Config{
 		RootfsBase: taskDir,
@@ -198,7 +198,7 @@ func TestIsolationWithVolumes(t *testing.T) {
 	// Give it time to run
 	time.Sleep(200 * time.Millisecond)
 
-	runner.Stop(task)
+	_ = runner.Stop(task)
 }
 
 func TestIsolationWithEnvVars(t *testing.T) {

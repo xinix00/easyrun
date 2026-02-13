@@ -49,7 +49,7 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 	// Copy response headers and status
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, resp.Body)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // proxySSEToLeader forwards the SSE event stream from the leader.
@@ -375,7 +375,7 @@ func (a *Agent) restartTask(task *types.Task) {
 	}
 
 	// Clean up old runner entries (process already dead, this just removes maps + task dir)
-	a.runnerFor(task.Driver).Stop(task)
+	_ = a.runnerFor(task.Driver).Stop(task)
 
 	ports, err := a.allocatePortsForJob(job)
 	if err != nil {

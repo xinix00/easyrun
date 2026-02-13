@@ -38,7 +38,7 @@ func TestLogBroadcasterMultipleSubscribers(t *testing.T) {
 	ch2 := b.Subscribe()
 	ch3 := b.Subscribe()
 
-	b.Write([]byte("test message\n"))
+	_, _ = b.Write([]byte("test message\n"))
 
 	// All subscribers should receive the message
 	for i, ch := range []chan string{ch1, ch2, ch3} {
@@ -72,7 +72,7 @@ func TestLogBroadcasterUnsubscribe(t *testing.T) {
 	}
 
 	// ch2 should still work
-	b.Write([]byte("after unsubscribe\n"))
+	_, _ = b.Write([]byte("after unsubscribe\n"))
 
 	select {
 	case line := <-ch2:
@@ -147,7 +147,7 @@ func TestLogBroadcasterConcurrentAccess(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			for j := 0; j < 100; j++ {
-				b.Write([]byte("concurrent write\n"))
+				_, _ = b.Write([]byte("concurrent write\n"))
 			}
 		}(i)
 	}

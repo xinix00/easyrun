@@ -174,7 +174,7 @@ func TestHandleRunAffinityMismatch(t *testing.T) {
 	}
 
 	var resp map[string]string
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 	if resp["error"] != "affinity mismatch" {
 		t.Errorf("error = %q, want %q", resp["error"], "affinity mismatch")
 	}
@@ -389,7 +389,7 @@ func TestCapacityIncludesAttributes(t *testing.T) {
 	agent.handleCapacity(w, req)
 
 	var resp CapacityResponse
-	json.NewDecoder(w.Body).Decode(&resp)
+	_ = json.NewDecoder(w.Body).Decode(&resp)
 
 	if resp.Attributes["node.id"] != "node-1" {
 		t.Errorf("attributes[node.id] = %q, want %q", resp.Attributes["node.id"], "node-1")

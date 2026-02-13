@@ -48,7 +48,7 @@ func TestDownloadHTTPSuccess(t *testing.T) {
 	content := []byte("binary content here")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write(content)
+		_, _ = w.Write(content)
 	}))
 	defer srv.Close()
 
@@ -75,7 +75,7 @@ func TestDownloadHTTPBasicAuth(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedAuth = r.Header.Get("Authorization")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer srv.Close()
 
@@ -106,7 +106,7 @@ func TestDownloadHTTPCustomHeaders(t *testing.T) {
 		receivedToken = r.Header.Get("Authorization")
 		receivedAPIKey = r.Header.Get("X-API-Key")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	}))
 	defer srv.Close()
 
@@ -194,12 +194,12 @@ func TestExtractTarPathTraversal(t *testing.T) {
 	// Create tar with path traversal attempt
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
-	tw.WriteHeader(&tar.Header{
+	_ = tw.WriteHeader(&tar.Header{
 		Name: "../../../etc/evil",
 		Mode: 0644,
 		Size: 4,
 	})
-	tw.Write([]byte("evil"))
+	_, _ = tw.Write([]byte("evil"))
 	tw.Close()
 
 	err := extractTar(&buf, destDir)
@@ -487,12 +487,12 @@ func createTarGz(t *testing.T, path string, files map[string]string) {
 	tw := tar.NewWriter(gw)
 
 	for name, content := range files {
-		tw.WriteHeader(&tar.Header{
+		_ = tw.WriteHeader(&tar.Header{
 			Name: name,
 			Mode: 0644,
 			Size: int64(len(content)),
 		})
-		tw.Write([]byte(content))
+		_, _ = tw.Write([]byte(content))
 	}
 
 	tw.Close()
@@ -507,12 +507,12 @@ func createTarGzBytes(t *testing.T, files map[string]string) []byte {
 	tw := tar.NewWriter(gw)
 
 	for name, content := range files {
-		tw.WriteHeader(&tar.Header{
+		_ = tw.WriteHeader(&tar.Header{
 			Name: name,
 			Mode: 0644,
 			Size: int64(len(content)),
 		})
-		tw.Write([]byte(content))
+		_, _ = tw.Write([]byte(content))
 	}
 
 	tw.Close()
@@ -549,7 +549,7 @@ func createZipBytes(t *testing.T, files map[string]string) []byte {
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.WriteString(w, content)
+		_, _ = io.WriteString(w, content)
 	}
 	zw.Close()
 	return buf.Bytes()

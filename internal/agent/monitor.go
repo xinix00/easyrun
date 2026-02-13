@@ -96,7 +96,7 @@ func (a *Agent) checkTasks() {
 				})
 				go func() {
 					a.notifyLeader(task.JobName)
-					a.runnerFor(task.Driver).Stop(task)
+					_ = a.runnerFor(task.Driver).Stop(task)
 					a.restartTask(task)
 				}()
 			}

@@ -105,7 +105,7 @@ func (r *ExecRunner) linkLibraries(taskDir string) {
 	}
 	for _, lib := range libs {
 		if _, err := os.Stat(lib); err == nil {
-			os.Symlink(lib, filepath.Join(taskDir, lib))
+			_ = os.Symlink(lib, filepath.Join(taskDir, lib))
 		}
 	}
 }

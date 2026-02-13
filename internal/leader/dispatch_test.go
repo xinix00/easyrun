@@ -261,7 +261,7 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{ID: "easydns-id", Name: "easydns", Command: "/usr/bin/easydns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
-	leader.DispatchJob(job)
+	_ = leader.DispatchJob(job)
 	time.Sleep(10 * time.Millisecond)
 
 	if agent1.TaskCount() != 1 {
@@ -301,7 +301,7 @@ func TestLeaderConcurrentDispatchAndDelete(t *testing.T) {
 		go func(n int) {
 			defer wg.Done()
 			job := &types.Job{Name: "job-" + string(rune('0'+n)), Command: "echo", HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
-			leader.DispatchJob(job)
+			_ = leader.DispatchJob(job)
 		}(i)
 	}
 

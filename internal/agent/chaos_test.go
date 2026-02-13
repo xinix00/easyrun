@@ -301,8 +301,8 @@ func TestChaos_StateCorruption(t *testing.T) {
 	// Add jobs
 	job1 := &types.Job{Name: "job-1", Command: "./app1"}
 	job2 := &types.Job{Name: "job-2", Command: "./app2"}
-	agent.startJob(job1)
-	agent.startJob(job2)
+	_, _ = agent.startJob(job1)
+	_, _ = agent.startJob(job2)
 
 	// Simulate corruption: task references non-existent job
 	agent.do(func(s *agentState) {

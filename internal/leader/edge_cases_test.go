@@ -77,7 +77,7 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 			w.WriteHeader(http.StatusCreated)
 		case "/tasks":
 			mu.Lock()
-			json.NewEncoder(w).Encode(tasks)
+			_ = json.NewEncoder(w).Encode(tasks)
 			mu.Unlock()
 		default:
 			w.WriteHeader(http.StatusOK)
