@@ -105,11 +105,19 @@ func (l *Leader) SetSettleDelay(d time.Duration) {
 
 // stateLoop is the single goroutine that owns all mutable state
 func (l *Leader) stateLoop(ctx context.Context) {
+	// Build nameToID index from existing jobs in store.
+	// Without this, GetPlacedByJobName can't map jobIDs to names
+	// and placed counts would show as 0 after leader restart.
+	nameToID := make(map[string]string)
+	for _, job := range l.jobStore.GetJobs() {
+		nameToID[job.Name] = job.ID
+	}
+
 	state := &leaderState{
 		agents:      make(map[string]*types.Agent),
 		placed:      make(map[string]map[string]int),
 		dispatching: make(map[string]bool),
-		nameToID:    make(map[string]string),
+		nameToID:    nameToID,
 		settled:     l.settleDelay == 0,
 	}
 
