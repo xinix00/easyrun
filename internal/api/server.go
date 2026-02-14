@@ -272,7 +272,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEvents streams SSE notifications when cluster state changes.
-// SSE event types: "ping" (initial), "agent", "job".
+// SSE event types: "ping" (initial), "agent", "job", "task".
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	sse := httputil.SSEWriter(w)
 	if sse == nil {
@@ -298,10 +298,11 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			case strings.HasPrefix(msg, "agent:"):
 				sse.WriteEvent("agent", fmt.Sprintf(`{"id":%q}`, strings.TrimPrefix(msg, "agent:")))
 			case strings.HasPrefix(msg, "job:"):
-				// "job:name" or "job:name:event" (start/started/crash/stop)
+				// "job:name" = job-level change (dispatched/deleted)
+				// "job:name:event" = task lifecycle (start/started/crash/stop)
 				rest := strings.TrimPrefix(msg, "job:")
 				if name, event, ok := strings.Cut(rest, ":"); ok {
-					sse.WriteEvent("job", fmt.Sprintf(`{"name":%q,"event":%q}`, name, event))
+					sse.WriteEvent("task", fmt.Sprintf(`{"job":%q,"event":%q}`, name, event))
 				} else {
 					sse.WriteEvent("job", fmt.Sprintf(`{"name":%q}`, rest))
 				}

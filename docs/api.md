@@ -365,9 +365,11 @@ data: {"id": "agent-1"}
 event: job
 data: {"name": "api"}
 
-event: job
-data: {"name": "api", "event": "started"}
+event: task
+data: {"job": "api", "event": "started"}
 ```
+
+Task events: `start` (process started), `started` (healthy), `crash`, `stop`.
 
 ### Notify (internal, called by agents)
 

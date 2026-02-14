@@ -672,11 +672,14 @@ func TestSSEEventFormat(t *testing.T) {
 	}
 	event := string(buf[:n])
 
-	// Should contain event type in the data
+	// Should be a "task" event with job name and event type
+	if !containsSSEData(event, "event: task") {
+		t.Errorf("SSE event type should be 'task', got: %s", event)
+	}
 	if !containsSSEData(event, `"event":"started"`) {
 		t.Errorf("SSE event should contain event type, got: %s", event)
 	}
-	if !containsSSEData(event, `"name":"my-api"`) {
+	if !containsSSEData(event, `"job":"my-api"`) {
 		t.Errorf("SSE event should contain job name, got: %s", event)
 	}
 }
