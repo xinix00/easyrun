@@ -160,20 +160,25 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 // Returns (nil, false) if agent is unknown — caller should return 404 to force re-register.
 func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, placed map[string]int, stateTime time.Time, version string) ([]*types.Job, bool) {
 	known := query(l, func(s *leaderState) bool {
-		if agent, ok := s.agents[id]; ok {
-			agent.LastSeen = time.Now()
-			agent.Version = version
-			// Update placed from agent's ground truth
-			if placed != nil {
-				s.placed[id] = placed
-			}
-			return true
+		agent, ok := s.agents[id]
+		if !ok {
+			return false
 		}
-		return false
+		agent.LastSeen = time.Now()
+		agent.Version = version
+		if placed != nil {
+			s.placed[id] = placed
+		}
+		return true
 	})
 
 	if !known {
 		return nil, false
+	}
+
+	// Notify SSE so GUI stays in sync — debounced client-side
+	if placed != nil {
+		l.eventBus.Notify("heartbeat:" + id)
 	}
 
 	// Sync job definitions if agent has newer state
