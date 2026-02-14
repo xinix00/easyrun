@@ -164,11 +164,12 @@ curl -X POST http://localhost:9080/v1/jobs \
       "/data/shared": "data"
     },
     "health_check": {
+      "type": "http",
       "path": "/health",
       "port": "http",
-      "interval": "10s",
       "timeout": "5s",
-      "initial_timeout": "30s"
+      "initial_timeout": "30s",
+      "failure_threshold": 3
     },
     "max_restarts": 5,
     "update_policy": "rolling"
@@ -194,9 +195,13 @@ curl -X POST http://localhost:9080/v1/jobs \
 - `env` (map): Environment variables (note: node attributes are auto-injected as `ER_ATTR_<KEY>`, user env takes priority)
 - `tags` (map): Labels for service discovery
 - `volumes` (map): Host path → task path (symlinked)
-- `health_check`: HTTP health monitoring
-  - `port` (string): Named port to check (default "http")
+- `health_check`: Health monitoring (optional)
+  - `type` (string): `"http"` (default), `"tcp"`, or `"file"`
+  - `path` (string): HTTP endpoint path (http) or absolute file path (file)
+  - `port` (string): Named port to check (http/tcp, default "http")
+  - `timeout` (duration): Request/connect timeout (http/tcp, default 5s)
   - `initial_timeout` (duration): Grace period for slow-starting services (default 30s)
+  - `failure_threshold` (int): Consecutive failures before restart (default 3)
 - `max_restarts` (int): Max restart attempts (0 = default 5, -1 = unlimited)
 - `update_policy` (string): `rolling` (default), `recreate`, or `blue-green`
 

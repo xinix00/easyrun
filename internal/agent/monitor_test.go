@@ -3,8 +3,10 @@ package agent
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -60,9 +62,10 @@ func TestCheckHealthBadStatus(t *testing.T) {
 		Ports: map[string]int{"http": port},
 	}
 	hc := &types.HealthCheck{
-		Path:    "/health",
-		Port:    "http",
-		Timeout: time.Second,
+		Path:             "/health",
+		Port:             "http",
+		Timeout:          time.Second,
+		FailureThreshold: 1,
 	}
 
 	if agent.checkHealth(task, hc) {
@@ -113,9 +116,10 @@ func TestCheckHealthTimeout(t *testing.T) {
 		Ports: map[string]int{"http": port},
 	}
 	hc := &types.HealthCheck{
-		Path:    "/health",
-		Port:    "http",
-		Timeout: 50 * time.Millisecond, // Very short timeout
+		Path:             "/health",
+		Port:             "http",
+		Timeout:          50 * time.Millisecond, // Very short timeout
+		FailureThreshold: 1,
 	}
 
 	if agent.checkHealth(task, hc) {
@@ -132,8 +136,9 @@ func TestCheckHealthMissingPort(t *testing.T) {
 		Ports: map[string]int{"grpc": 9090}, // No "http" port
 	}
 	hc := &types.HealthCheck{
-		Path: "/health",
-		Port: "http", // Refers to non-existent port
+		Path:             "/health",
+		Port:             "http", // Refers to non-existent port
+		FailureThreshold: 1,
 	}
 
 	if agent.checkHealth(task, hc) {
@@ -235,9 +240,10 @@ func TestCheckTasksHealthCheckFails(t *testing.T) {
 		Command: "echo hello",
 		Ports:   map[string]int{"http": 0},
 		HealthCheck: &types.HealthCheck{
-			Path:    "/health",
-			Port:    "http",
-			Timeout: time.Second,
+			Path:             "/health",
+			Port:             "http",
+			Timeout:          time.Second,
+			FailureThreshold: 1,
 		},
 	}
 
@@ -343,6 +349,233 @@ func TestCheckTasksHealthCheckSucceeds(t *testing.T) {
 	})
 	if state != types.TaskRunning {
 		t.Errorf("Task state = %q, want %q", state, types.TaskRunning)
+	}
+}
+
+// --- failure threshold tests ---
+
+func TestCheckHealthFailureThreshold(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+
+	port := getPort(t, srv)
+	task := &types.Task{
+		ID:    "task-threshold",
+		Ports: map[string]int{"http": port},
+	}
+	hc := &types.HealthCheck{
+		Path:             "/health",
+		Port:             "http",
+		Timeout:          time.Second,
+		FailureThreshold: 3,
+	}
+
+	// First two failures should still return true (under threshold)
+	if !agent.checkHealth(task, hc) {
+		t.Error("checkHealth should return true on failure 1/3")
+	}
+	if !agent.checkHealth(task, hc) {
+		t.Error("checkHealth should return true on failure 2/3")
+	}
+	// Third failure should return false (at threshold)
+	if agent.checkHealth(task, hc) {
+		t.Error("checkHealth should return false on failure 3/3")
+	}
+}
+
+func TestCheckHealthFailureThresholdResets(t *testing.T) {
+	var healthy atomic.Bool
+	healthy.Store(false)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if healthy.Load() {
+			w.WriteHeader(http.StatusOK)
+		} else {
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+
+	port := getPort(t, srv)
+	task := &types.Task{
+		ID:    "task-reset",
+		Ports: map[string]int{"http": port},
+	}
+	hc := &types.HealthCheck{
+		Path:             "/health",
+		Port:             "http",
+		Timeout:          time.Second,
+		FailureThreshold: 3,
+	}
+
+	// Two failures
+	agent.checkHealth(task, hc)
+	agent.checkHealth(task, hc)
+
+	// Success resets counter
+	healthy.Store(true)
+	if !agent.checkHealth(task, hc) {
+		t.Error("checkHealth should return true after success")
+	}
+
+	// Need 3 more failures to trigger
+	healthy.Store(false)
+	if !agent.checkHealth(task, hc) {
+		t.Error("checkHealth should return true on failure 1/3 after reset")
+	}
+	if !agent.checkHealth(task, hc) {
+		t.Error("checkHealth should return true on failure 2/3 after reset")
+	}
+	if agent.checkHealth(task, hc) {
+		t.Error("checkHealth should return false on failure 3/3 after reset")
+	}
+}
+
+// --- TCP health check tests ---
+
+func TestCheckHealthTCP(t *testing.T) {
+	// Start a TCP listener
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to start TCP listener: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	var port int
+	fmt.Sscanf(ln.Addr().String(), "127.0.0.1:%d", &port)
+
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+
+	task := &types.Task{
+		ID:    "task-tcp",
+		Ports: map[string]int{"redis": port},
+	}
+	hc := &types.HealthCheck{
+		Type:    types.CheckTCP,
+		Port:    "redis",
+		Timeout: time.Second,
+	}
+
+	if !agent.checkHealth(task, hc) {
+		t.Error("TCP health check should succeed for open port")
+	}
+}
+
+func TestCheckHealthTCPRefused(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+
+	task := &types.Task{
+		ID:    "task-tcp-fail",
+		Ports: map[string]int{"redis": 1}, // Port 1 should be refused
+	}
+	hc := &types.HealthCheck{
+		Type:             types.CheckTCP,
+		Port:             "redis",
+		Timeout:          100 * time.Millisecond,
+		FailureThreshold: 1,
+	}
+
+	if agent.checkHealth(task, hc) {
+		t.Error("TCP health check should fail for closed port")
+	}
+}
+
+// --- FILE health check tests ---
+
+func TestCheckHealthFile(t *testing.T) {
+	// Create a temp file
+	f, err := os.CreateTemp("", "healthcheck-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(f.Name())
+	f.Close()
+
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+
+	task := &types.Task{ID: "task-file"}
+	hc := &types.HealthCheck{
+		Type: types.CheckFile,
+		Path: f.Name(),
+	}
+
+	// First check: file exists = healthy
+	if !agent.checkHealth(task, hc) {
+		t.Error("FILE health check should succeed on first check (file exists)")
+	}
+
+	// Touch the file to update mtime
+	time.Sleep(10 * time.Millisecond)
+	os.Chtimes(f.Name(), time.Now(), time.Now())
+
+	if !agent.checkHealth(task, hc) {
+		t.Error("FILE health check should succeed when file was recently modified")
+	}
+}
+
+func TestCheckHealthFileNotModified(t *testing.T) {
+	f, err := os.CreateTemp("", "healthcheck-*")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(f.Name())
+	f.Close()
+
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+
+	task := &types.Task{ID: "task-file-stale"}
+	hc := &types.HealthCheck{
+		Type:             types.CheckFile,
+		Path:             f.Name(),
+		FailureThreshold: 1,
+	}
+
+	// First check succeeds (no previous check time)
+	if !agent.checkHealth(task, hc) {
+		t.Error("FILE health check should succeed on first check")
+	}
+
+	// Second check without modifying file should fail (mtime hasn't changed)
+	time.Sleep(10 * time.Millisecond)
+	if agent.checkHealth(task, hc) {
+		t.Error("FILE health check should fail when file not modified since last check")
+	}
+}
+
+func TestCheckHealthFileNotExists(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+
+	task := &types.Task{ID: "task-file-missing"}
+	hc := &types.HealthCheck{
+		Type:             types.CheckFile,
+		Path:             "/tmp/nonexistent-healthcheck-file-12345",
+		FailureThreshold: 1,
+	}
+
+	if agent.checkHealth(task, hc) {
+		t.Error("FILE health check should fail for non-existent file")
 	}
 }
 

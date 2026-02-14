@@ -278,24 +278,31 @@ Easyrun only stores tags - external tooling does the discovery logic.
 
 ## Health Checks
 
+Three check types: HTTP, TCP, and file-based.
+
 ```json
-{
-  "health_check": {
-    "path": "/health",
-    "port": "http",
-    "interval": "10s",
-    "timeout": "5s",
-    "initial_timeout": "30s"
-  }
-}
+// HTTP (default) — GET request, 200-399 = healthy
+{"health_check": {"path": "/health", "port": "http"}}
+
+// TCP — connect to port, success = healthy
+{"health_check": {"type": "tcp", "port": "redis"}}
+
+// FILE — check file mtime since last check, modified = healthy
+{"health_check": {"type": "file", "path": "/tmp/worker-alive"}}
 ```
 
 **Agent monitoring loop (5s):**
 1. Check if process is still alive
-2. If health_check: HTTP GET to `http://127.0.0.1:{port}{path}`
-3. On failure: kill + restart (max_restarts limit)
+2. If health_check configured:
+   - `http`: HTTP GET to `http://127.0.0.1:{port}{path}`, status 200-399 = healthy
+   - `tcp`: TCP connect to `127.0.0.1:{port}`, connection success = healthy
+   - `file`: `os.Stat(path)`, file modified since last check = healthy
+3. On failure: increment consecutive failure count
+4. After `failure_threshold` (default 3) consecutive failures: kill + restart
 
-**Initial timeout:** New tasks get `initial_timeout` (default 30s) grace period before health checks start failing.
+**Initial timeout:** New tasks get `initial_timeout` (default 30s) grace period before health checks start.
+
+**Failure threshold:** Prevents flapping from transient failures. Default 3 = task must fail 3 consecutive checks (15s with 5s monitor interval) before being marked unhealthy.
 
 ## Failure Scenarios
 
@@ -317,7 +324,7 @@ Easyrun only stores tags - external tooling does the discovery logic.
 1. Agent detects via monitor loop (5s)
 2. Agent restarts task **locally** (same agent)
 3. Max restart limit prevents infinite loops (default 5, -1 = unlimited)
-4. On health check failure: kill + restart
+4. On health check failure (after failure_threshold consecutive failures): kill + restart
 
 ### Agent isolated (network partition)
 1. Agent can't reach leader

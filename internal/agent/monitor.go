@@ -4,11 +4,21 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"time"
 
 	"easyrun/internal/types"
 )
+
+const defaultFailureThreshold = 3
+
+// checkState tracks consecutive health check failures per task (monitor goroutine only)
+type checkState struct {
+	failCount     int
+	lastCheckTime time.Time // for file mtime comparison
+}
 
 // monitorTasks periodically checks task states and health
 func (a *Agent) monitorTasks(ctx context.Context) {
@@ -75,6 +85,7 @@ func (a *Agent) checkTasks() {
 					t.State = state
 				}
 			})
+			delete(a.checkStates, task.ID)
 			go a.notifyLeader(task.JobName)
 			go a.restartTask(task)
 			continue
@@ -94,6 +105,7 @@ func (a *Agent) checkTasks() {
 						t.State = types.TaskFailed
 					}
 				})
+				delete(a.checkStates, task.ID)
 				go func() {
 					a.notifyLeader(task.JobName)
 					_ = a.runnerFor(task.Driver).Stop(task)
@@ -104,8 +116,45 @@ func (a *Agent) checkTasks() {
 	}
 }
 
-// checkHealth performs a health check on a task
+// checkHealth performs a health check with failure threshold counting.
+// Returns true if task is healthy (or not yet at failure threshold).
 func (a *Agent) checkHealth(task *types.Task, hc *types.HealthCheck) bool {
+	var healthy bool
+	switch hc.Type {
+	case types.CheckTCP:
+		healthy = a.checkHealthTCP(task, hc)
+	case types.CheckFile:
+		healthy = a.checkHealthFile(task, hc)
+	default: // "" or "http"
+		healthy = a.checkHealthHTTP(task, hc)
+	}
+
+	cs := a.checkStates[task.ID]
+	if cs == nil {
+		cs = &checkState{}
+		a.checkStates[task.ID] = cs
+	}
+
+	if healthy {
+		cs.failCount = 0
+		cs.lastCheckTime = time.Now()
+		return true
+	}
+
+	cs.failCount++
+	cs.lastCheckTime = time.Now()
+
+	threshold := hc.FailureThreshold
+	if threshold <= 0 {
+		threshold = defaultFailureThreshold
+	}
+
+	log.Printf("Task %s health check failed (%d/%d)", task.ID, cs.failCount, threshold)
+	return cs.failCount < threshold // still under threshold = treat as healthy
+}
+
+// checkHealthHTTP performs an HTTP health check
+func (a *Agent) checkHealthHTTP(task *types.Task, hc *types.HealthCheck) bool {
 	timeout := hc.Timeout
 	if timeout == 0 {
 		timeout = defaultHealthTimeout
@@ -132,4 +181,45 @@ func (a *Agent) checkHealth(task *types.Task, hc *types.HealthCheck) bool {
 	defer resp.Body.Close()
 
 	return resp.StatusCode >= 200 && resp.StatusCode < 400
+}
+
+// checkHealthTCP performs a TCP connect health check
+func (a *Agent) checkHealthTCP(task *types.Task, hc *types.HealthCheck) bool {
+	timeout := hc.Timeout
+	if timeout == 0 {
+		timeout = defaultHealthTimeout
+	}
+
+	portName := hc.Port
+	if portName == "" {
+		portName = "http"
+	}
+
+	port, ok := task.Ports[portName]
+	if !ok {
+		log.Printf("Task %s has no port named %s for health check", task.ID, portName)
+		return false
+	}
+
+	conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), timeout)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
+}
+
+// checkHealthFile checks if a file has been modified since the last check
+func (a *Agent) checkHealthFile(task *types.Task, hc *types.HealthCheck) bool {
+	info, err := os.Stat(hc.Path)
+	if err != nil {
+		return false // file doesn't exist
+	}
+
+	cs := a.checkStates[task.ID]
+	if cs == nil || cs.lastCheckTime.IsZero() {
+		return true // first check: file exists = healthy
+	}
+
+	return info.ModTime().After(cs.lastCheckTime)
 }

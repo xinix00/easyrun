@@ -21,13 +21,22 @@ type Artifact struct {
 	Extract string            `json:"extract,omitempty"` // "tar.gz", "zip", "" (empty = raw file, chmod +x, no extraction)
 }
 
+// Health check types
+const (
+	CheckHTTP = "http"
+	CheckTCP  = "tcp"
+	CheckFile = "file"
+)
+
 // HealthCheck configuration for a job
 type HealthCheck struct {
-	Path           string        `json:"path"`                      // e.g., "/health"
-	Port           string        `json:"port,omitempty"`            // named port (default "http")
-	Interval       time.Duration `json:"interval,omitempty"`        // check interval (default 10s)
-	Timeout        time.Duration `json:"timeout,omitempty"`         // per-request timeout (default 5s)
-	InitialTimeout time.Duration `json:"initial_timeout,omitempty"` // max time after start to become healthy (default 30s)
+	Type             string        `json:"type,omitempty"`              // "http" (default), "tcp", "file"
+	Path             string        `json:"path"`                       // http: endpoint path, file: absolute file path
+	Port             string        `json:"port,omitempty"`             // http/tcp: named port (default "http")
+	Interval         time.Duration `json:"interval,omitempty"`         // check interval (default 10s)
+	Timeout          time.Duration `json:"timeout,omitempty"`          // http/tcp: per-request timeout (default 5s)
+	InitialTimeout   time.Duration `json:"initial_timeout,omitempty"`  // max time after start to become healthy (default 30s)
+	FailureThreshold int           `json:"failure_threshold,omitempty"` // consecutive failures before unhealthy (default 3)
 }
 
 // UpdatePolicy defines how job updates are handled

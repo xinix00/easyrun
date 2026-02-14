@@ -64,7 +64,8 @@ type Agent struct {
 	getLeader  func() string // returns current leader address (for proxying)
 	httpClient *http.Client
 
-	needsSave atomic.Bool // flag for debounced persistence
+	needsSave   atomic.Bool // flag for debounced persistence
+	checkStates map[string]*checkState // health check state per task (monitor goroutine only)
 }
 
 // New creates a new agent with optional runner (nil uses default ExecRunner)
@@ -108,7 +109,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		attributes:   attrs,
 		ops:          make(chan func(*agentState), stateChannelBufferSize),
 		httpClient:   &http.Client{Timeout: proxyTimeout},
-		// needsSave is zero-initialized (false)
+		checkStates:  make(map[string]*checkState),
 	}
 }
 

@@ -62,6 +62,10 @@ func deployCommand() *cli.Command {
 			&cli.StringSliceFlag{Name: "env", Usage: "Environment variables (KEY=VALUE)"},
 			&cli.StringSliceFlag{Name: "affinity", Usage: "Node affinity constraints (key=value, e.g. node.arch=arm64)"},
 			&cli.StringFlag{Name: "update-policy", Usage: "Update policy: rolling (default), recreate, or blue-green", Value: "rolling"},
+			&cli.StringFlag{Name: "check-type", Usage: "Health check type: http, tcp, or file"},
+			&cli.StringFlag{Name: "check-path", Usage: "Health check path (HTTP endpoint or file path)"},
+			&cli.StringFlag{Name: "check-port", Usage: "Health check port name (for http/tcp, default: http)"},
+			&cli.IntFlag{Name: "check-failures", Usage: "Consecutive failures before unhealthy (default: 3)"},
 		},
 		Action: deployJob,
 	}
@@ -145,6 +149,15 @@ func deployJob(c *cli.Context) error {
 					break
 				}
 			}
+		}
+	}
+
+	if c.IsSet("check-type") || c.IsSet("check-path") {
+		job.HealthCheck = &types.HealthCheck{
+			Type:             c.String("check-type"),
+			Path:             c.String("check-path"),
+			Port:             c.String("check-port"),
+			FailureThreshold: c.Int("check-failures"),
 		}
 	}
 

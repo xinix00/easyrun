@@ -20,7 +20,7 @@ type Job struct {
     Env          map[string]string // Extra environment variables
     Tags         map[string]string // Labels for service discovery/grouping
     Volumes      map[string]string // host_path → task_path (symlinked / Docker -v)
-    HealthCheck  *HealthCheck      // HTTP health check config (optional)
+    HealthCheck  *HealthCheck      // Health check config (optional, http/tcp/file)
     MaxRestarts  int               // Max restart attempts (0=default 5, -1=unlimited)
     UpdatePolicy UpdatePolicy      // How to update: rolling | recreate | blue-green
 }
@@ -208,15 +208,27 @@ S3:
 
 ```go
 type HealthCheck struct {
-    Path           string        // HTTP path (e.g., "/health")
-    Port           string        // Named port (default "http")
-    Interval       time.Duration // Check interval (default 10s)
-    Timeout        time.Duration // Request timeout (default 5s)
-    InitialTimeout time.Duration // Max time after start to become healthy (default 30s)
+    Type             string        // "http" (default), "tcp", "file"
+    Path             string        // HTTP: endpoint path, File: absolute file path
+    Port             string        // HTTP/TCP: named port (default "http")
+    Interval         time.Duration // Check interval (default 10s)
+    Timeout          time.Duration // HTTP/TCP: request/connect timeout (default 5s)
+    InitialTimeout   time.Duration // Max time after start to become healthy (default 30s)
+    FailureThreshold int           // Consecutive failures before unhealthy (default 3)
 }
 ```
 
-**InitialTimeout:** Allows slow-starting services time to initialize before health checks begin failing.
+**Check types:**
+
+| Type | Check | Fields used |
+|------|-------|-------------|
+| `http` (default) | HTTP GET, 200-399 = healthy | `Path`, `Port`, `Timeout` |
+| `tcp` | TCP connect, success = healthy | `Port`, `Timeout` |
+| `file` | File mtime since last check = healthy | `Path` |
+
+**FailureThreshold:** Task must fail N consecutive checks before being marked unhealthy and restarted. Default 3 (= 15s with 5s monitor interval).
+
+**InitialTimeout:** Allows slow-starting services time to initialize before health checks begin.
 
 ## Task
 

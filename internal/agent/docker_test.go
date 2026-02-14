@@ -477,9 +477,10 @@ func TestCheckTasksDockerHealthCheckFails(t *testing.T) {
 		Image: "myapp:v1",
 		Ports: map[string]int{"http": 80},
 		HealthCheck: &types.HealthCheck{
-			Path:    "/health",
-			Port:    "http",
-			Timeout: time.Second,
+			Path:             "/health",
+			Port:             "http",
+			Timeout:          time.Second,
+			FailureThreshold: 1,
 		},
 	}
 

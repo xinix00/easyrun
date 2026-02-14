@@ -90,8 +90,14 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 | `--env` | Environment variables (KEY=VALUE, repeatable) |
 | `--affinity` | Node affinity constraints (key=value, repeatable, e.g. `node.arch=arm64`) |
 | `--update-policy` | Update policy: rolling (default), recreate, or blue-green |
+| `--check-type` | Health check type: `http`, `tcp`, or `file` |
+| `--check-path` | Health check path (HTTP endpoint or file path) |
+| `--check-port` | Health check port name (for http/tcp, default: http) |
+| `--check-failures` | Consecutive failures before unhealthy (default: 3) |
 
 Either `--command` or `--image` (or both) is required.
+
+Setting `--check-type` or `--check-path` enables health checks.
 
 **Note:** The API currently always requires `command`. For Docker-only deploys without a command override, pass `--command` with the container's default entrypoint.
 

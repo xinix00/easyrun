@@ -11,7 +11,7 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 - **Job updates**: Rolling, recreate, or blue-green deployments
 - **Named ports**: Flexible port allocation per service
 - **Service discovery**: Tags for external load balancers
-- **Health checks**: HTTP-based monitoring with auto-restart and initial grace period
+- **Health checks**: HTTP, TCP, and file-based monitoring with failure threshold and auto-restart
 - **Live log streaming**: Real-time stdout/stderr via SSE (no persistence)
 - **Artifact downloads**: HTTP and S3 with extraction support (tar.gz, tar.bz2, zip, raw binary)
 - **Platform-specific artifacts**: Multiple artifacts per job, agent picks first matching
@@ -134,11 +134,12 @@ go build -o bin/run ./cmd/cli
   "tags": {"service": "api", "easylb-urlprefix": "*.api.example.com"},
   "volumes": {"/data/shared": "data"},
   "health_check": {
+    "type": "http",
     "path": "/health",
     "port": "http",
-    "interval": "10s",
     "timeout": "5s",
-    "initial_timeout": "30s"
+    "initial_timeout": "30s",
+    "failure_threshold": 3
   },
   "max_restarts": 5,
   "update_policy": "rolling"
@@ -165,8 +166,13 @@ go build -o bin/run ./cmd/cli
 - **env**: Environment variables (note: node attributes are auto-injected as `ER_ATTR_<KEY>`, user env takes priority)
 - **tags**: Labels for service discovery / grouping
 - **volumes**: Host path -> task path mappings (symlinked into task directory)
-- **health_check**: HTTP health check (optional)
+- **health_check**: Health check config (optional)
+  - **type**: `"http"` (default), `"tcp"`, or `"file"`
+  - **path**: HTTP endpoint path or absolute file path (for file checks)
+  - **port**: Named port to check (http/tcp, default "http")
+  - **timeout**: Request/connect timeout (http/tcp, default 5s)
   - **initial_timeout**: Grace period after start to become healthy (default 30s)
+  - **failure_threshold**: Consecutive failures before restart (default 3)
 - **max_restarts**: Max restart attempts (0 = default 5, -1 = unlimited)
 - **update_policy**: rolling (default), recreate, or blue-green
 
@@ -240,7 +246,7 @@ SSE format, live stream only, no storage. Pipe to external tools for persistence
 ### Task Failures
 - Agent detects crash (monitor loop, 5s interval)
 - Auto-restart locally (up to max_restarts, 0 = default 5, -1 = unlimited)
-- Health check failures -> kill + restart
+- Health check failures -> kill + restart (after failure_threshold consecutive failures, default 3)
 
 ### Agent Failures
 - Leader detects missing heartbeat (30s timeout)

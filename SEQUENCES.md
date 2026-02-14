@@ -465,10 +465,20 @@ sequenceDiagram
         else Process running + health check geconfigureerd
             alt Binnen initialTimeout grace period
                 Note over Mon: Skip health check
-            else Health check faalt
-                Mon->>S: do: task.State = failed
-                Mon->>R: go Stop(task)
-                Mon->>A: go restartTask(task)
+            else Health check uitvoeren (http/tcp/file)
+                Mon->>Mon: checkHealth(task, hc)
+                Note over Mon: http: HTTP GET 127.0.0.1:{port}{path}<br/>tcp: net.DialTimeout 127.0.0.1:{port}<br/>file: os.Stat(path), mtime > lastCheckTime
+
+                alt Check succeeds
+                    Mon->>Mon: failCount = 0
+                else Check fails, under threshold
+                    Mon->>Mon: failCount++ (< failure_threshold)
+                    Note over Mon: Log warning, task blijft running
+                else Check fails, at threshold (default 3)
+                    Mon->>S: do: task.State = failed
+                    Mon->>R: go Stop(task)
+                    Mon->>A: go restartTask(task)
+                end
             end
         end
     end
