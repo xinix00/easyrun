@@ -127,6 +127,9 @@ func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobID string) {
 		log.Printf("Failed to create delete request for %s on %s: %v", jobID, agent.ID, err)
 		return
 	}
+	if l.apiKey != "" {
+		req.Header.Set("X-API-Key", l.apiKey)
+	}
 	client := &http.Client{Timeout: DeleteClientTimeout}
 	resp, err := client.Do(req)
 	if err != nil {

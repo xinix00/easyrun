@@ -70,6 +70,7 @@ type Leader struct {
 	agentTimeout time.Duration
 	settleDelay  time.Duration // wait before first reconciliation (0 = settled immediately)
 	eventBus     *EventBus
+	apiKey       string
 }
 
 // New creates a new leader with optional HTTP client (nil uses default)
@@ -85,6 +86,11 @@ func New(localAgentID string, jobStore JobStore, client *http.Client) *Leader {
 		httpClient:   client,
 		eventBus:     NewEventBus(),
 	}
+}
+
+// SetAPIKey sets the API key used for leader→agent HTTP requests
+func (l *Leader) SetAPIKey(key string) {
+	l.apiKey = key
 }
 
 // EnableSettle enables settle period (waits agentTimeout before first reconciliation)

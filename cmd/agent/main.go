@@ -269,6 +269,7 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 
 	// Start leader with settle delay - wait for agents to register with placed counts
 	*l = leader.New(ag.ID(), ag, nil)
+	(*l).SetAPIKey(apiKey)
 	(*l).EnableSettle()
 
 	// Start leader state loop + health checker BEFORE any state operations

@@ -276,6 +276,9 @@ func (l *Leader) fetchAgentTasks(ctx context.Context, agent *types.Agent) ([]*ty
 	if err != nil {
 		return nil, err
 	}
+	if l.apiKey != "" {
+		req.Header.Set("X-API-Key", l.apiKey)
+	}
 
 	resp, err := l.httpClient.Do(req)
 	if err != nil {

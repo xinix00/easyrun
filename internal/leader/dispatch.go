@@ -205,6 +205,9 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if l.apiKey != "" {
+		req.Header.Set("X-API-Key", l.apiKey)
+	}
 
 	resp, err := l.httpClient.Do(req)
 	if err != nil {
