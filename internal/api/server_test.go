@@ -652,7 +652,7 @@ func TestSSEEventFormat(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Read initial "changed" event (sent on connect)
+	// Read initial "ping" event (sent on connect)
 	buf := make([]byte, 4096)
 	n, err := resp.Body.Read(buf)
 	if err != nil {
@@ -676,7 +676,7 @@ func TestSSEEventFormat(t *testing.T) {
 	if !containsSSEData(event, `"event":"started"`) {
 		t.Errorf("SSE event should contain event type, got: %s", event)
 	}
-	if !containsSSEData(event, `"job":"my-api"`) {
+	if !containsSSEData(event, `"name":"my-api"`) {
 		t.Errorf("SSE event should contain job name, got: %s", event)
 	}
 }

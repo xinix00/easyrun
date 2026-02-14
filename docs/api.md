@@ -353,12 +353,20 @@ This means easydns/easylb/easyprom can query their local agent and automatically
 GET /v1/events
 ```
 
-Server-Sent Events stream that notifies on cluster state changes (job dispatches, agent registrations, etc.). Each event is a `changed` event with a JSON payload indicating what changed:
+Server-Sent Events stream that notifies on cluster state changes (job dispatches, agent registrations, etc.). SSE event types map directly to the resource that changed:
 
-```json
-{"job": "api"}
-{"agent": "agent-1"}
-{}
+```
+event: ping
+data: {}
+
+event: agent
+data: {"id": "agent-1"}
+
+event: job
+data: {"name": "api"}
+
+event: job
+data: {"name": "api", "event": "started"}
 ```
 
 ### Notify (internal, called by agents)

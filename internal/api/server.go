@@ -272,7 +272,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEvents streams SSE notifications when cluster state changes.
-// Each event includes the job name that changed (empty = generic).
+// SSE event types: "ping" (initial), "agent", "job".
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	sse := httputil.SSEWriter(w)
 	if sse == nil {
@@ -284,7 +284,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	defer s.leader.EventBus().Unsubscribe(ch)
 
 	// Initial ping so client does an immediate refetch
-	sse.WriteEvent("changed", "{}")
+	sse.WriteEvent("ping", "{}")
 
 	for {
 		select {
@@ -296,17 +296,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			switch {
 			case strings.HasPrefix(msg, "agent:"):
-				sse.WriteEvent("changed", fmt.Sprintf(`{"agent":%q}`, strings.TrimPrefix(msg, "agent:")))
+				sse.WriteEvent("agent", fmt.Sprintf(`{"id":%q}`, strings.TrimPrefix(msg, "agent:")))
 			case strings.HasPrefix(msg, "job:"):
 				// "job:name" or "job:name:event" (start/started/crash/stop)
 				rest := strings.TrimPrefix(msg, "job:")
 				if name, event, ok := strings.Cut(rest, ":"); ok {
-					sse.WriteEvent("changed", fmt.Sprintf(`{"job":%q,"event":%q}`, name, event))
+					sse.WriteEvent("job", fmt.Sprintf(`{"name":%q,"event":%q}`, name, event))
 				} else {
-					sse.WriteEvent("changed", fmt.Sprintf(`{"job":%q}`, rest))
+					sse.WriteEvent("job", fmt.Sprintf(`{"name":%q}`, rest))
 				}
-			default:
-				sse.WriteEvent("changed", "{}")
 			}
 		}
 	}
