@@ -56,23 +56,16 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 		shellCmd := fmt.Sprintf("cd %s && %s", taskDir, command)
 		cmd = exec.Command("sandbox-exec", "-f", profilePath, "/bin/sh", "-c", shellCmd)
 		log.Printf("Executing command: sandbox-exec -f %s /bin/sh -c '%s'", profilePath, shellCmd)
-		cmd.Env = []string{
-			fmt.Sprintf("HOME=%s", taskDir),
-			fmt.Sprintf("TMPDIR=%s/tmp", taskDir),
-			"PATH=/usr/local/bin:/usr/bin:/bin",
-		}
 	} else {
-		// Non-isolated mode
 		cmd = exec.Command("/bin/sh", "-c", command)
 		cmd.Dir = taskDir
-		cmd.Env = []string{
-			fmt.Sprintf("HOME=%s", taskDir),
-			fmt.Sprintf("TMPDIR=%s/tmp", taskDir),
-			"PATH=/usr/local/bin:/usr/bin:/bin",
-		}
 	}
 
-	cmd.Env = append(cmd.Env, portEnvVars...)
+	cmd.Env = append([]string{
+		fmt.Sprintf("HOME=%s", taskDir),
+		fmt.Sprintf("TMPDIR=%s/tmp", taskDir),
+		"PATH=/usr/local/bin:/usr/bin:/bin",
+	}, portEnvVars...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}

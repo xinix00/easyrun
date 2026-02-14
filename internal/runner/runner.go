@@ -7,20 +7,25 @@ import (
 	"easyrun/internal/types"
 )
 
+// envKey converts a name to an uppercase environment variable key
+// (e.g. "node.os" → "NODE_OS", "http-port" → "HTTP_PORT")
+func envKey(name string) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' {
+			return r - 32
+		}
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			return r
+		}
+		return '_'
+	}, name)
+}
+
 // PortEnvVars builds ER_PORT_<NAME>=<port> environment variables for all ports
 func PortEnvVars(ports map[string]int) []string {
 	vars := make([]string, 0, len(ports))
 	for name, port := range ports {
-		upper := strings.Map(func(r rune) rune {
-			if r >= 'a' && r <= 'z' {
-				return r - 32
-			}
-			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-				return r
-			}
-			return '_'
-		}, name)
-		vars = append(vars, fmt.Sprintf("ER_PORT_%s=%d", upper, port))
+		vars = append(vars, fmt.Sprintf("ER_PORT_%s=%d", envKey(name), port))
 	}
 	return vars
 }
@@ -30,16 +35,7 @@ func PortEnvVars(ports map[string]int) []string {
 func AttrEnvVars(attrs map[string]string) []string {
 	vars := make([]string, 0, len(attrs))
 	for name, val := range attrs {
-		upper := strings.Map(func(r rune) rune {
-			if r >= 'a' && r <= 'z' {
-				return r - 32
-			}
-			if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
-				return r
-			}
-			return '_'
-		}, name)
-		vars = append(vars, fmt.Sprintf("ER_ATTR_%s=%s", upper, val))
+		vars = append(vars, fmt.Sprintf("ER_ATTR_%s=%s", envKey(name), val))
 	}
 	return vars
 }

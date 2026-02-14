@@ -64,7 +64,6 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 			"TMPDIR=/tmp",
 			"PATH=/bin:/usr/bin",
 		}
-		cmd.Env = append(cmd.Env, portEnvVars...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Chroot:  taskDir,
 			Setpgid: true,
@@ -82,12 +81,12 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 			fmt.Sprintf("TMPDIR=%s/tmp", taskDir),
 			"PATH=/usr/local/bin:/usr/bin:/bin",
 		}
-		cmd.Env = append(cmd.Env, portEnvVars...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{
 			Setpgid: true,
 		}
 	}
 
+	cmd.Env = append(cmd.Env, portEnvVars...)
 	for k, v := range job.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}

@@ -158,28 +158,31 @@ func (a *Agent) checkHealth(task *types.Task, hc *types.HealthCheck) bool {
 	return cs.failCount < threshold // still under threshold = treat as healthy
 }
 
-// checkHealthHTTP performs an HTTP health check
-func (a *Agent) checkHealthHTTP(task *types.Task, hc *types.HealthCheck) bool {
+// resolveHealthPort returns the port number and timeout for a health check.
+func resolveHealthPort(task *types.Task, hc *types.HealthCheck) (int, time.Duration, bool) {
 	timeout := hc.Timeout
 	if timeout == 0 {
 		timeout = defaultHealthTimeout
 	}
-
 	portName := hc.Port
 	if portName == "" {
 		portName = "http"
 	}
-
 	port, ok := task.Ports[portName]
 	if !ok {
 		log.Printf("Task %s has no port named %s for health check", task.ID, portName)
+	}
+	return port, timeout, ok
+}
+
+// checkHealthHTTP performs an HTTP health check
+func (a *Agent) checkHealthHTTP(task *types.Task, hc *types.HealthCheck) bool {
+	port, timeout, ok := resolveHealthPort(task, hc)
+	if !ok {
 		return false
 	}
 
-	client := &http.Client{Timeout: timeout}
-
-	url := fmt.Sprintf("http://127.0.0.1:%d%s", port, hc.Path)
-	resp, err := client.Get(url)
+	resp, err := (&http.Client{Timeout: timeout}).Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, hc.Path))
 	if err != nil {
 		return false
 	}
@@ -190,19 +193,8 @@ func (a *Agent) checkHealthHTTP(task *types.Task, hc *types.HealthCheck) bool {
 
 // checkHealthTCP performs a TCP connect health check
 func (a *Agent) checkHealthTCP(task *types.Task, hc *types.HealthCheck) bool {
-	timeout := hc.Timeout
-	if timeout == 0 {
-		timeout = defaultHealthTimeout
-	}
-
-	portName := hc.Port
-	if portName == "" {
-		portName = "http"
-	}
-
-	port, ok := task.Ports[portName]
+	port, timeout, ok := resolveHealthPort(task, hc)
 	if !ok {
-		log.Printf("Task %s has no port named %s for health check", task.ID, portName)
 		return false
 	}
 

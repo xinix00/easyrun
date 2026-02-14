@@ -273,9 +273,6 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 		}
 	}
 
-	// Copy /etc/resolv.conf for DNS resolution
-	_ = r.copyFile("/etc/resolv.conf", filepath.Join(taskDir, "resolv.conf"))
-
 	// Setup volume mounts (symlinks from host to task dir)
 	for hostPath, taskPath := range job.Volumes {
 		// Ensure host path exists

@@ -123,7 +123,6 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 	return fmt.Errorf("no agent has capacity after trying %d agents", tried)
 }
 
-
 // DeleteJobByID sends delete requests to all agents in parallel, waits for
 // all stops to complete, then reconciles so freed capacity is immediately usable.
 func (l *Leader) DeleteJobByID(job *types.Job) {
