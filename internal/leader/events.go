@@ -2,11 +2,12 @@ package leader
 
 import "sync"
 
-// EventBus broadcasts job change notifications to SSE subscribers.
-// Channels have buffer 1 for natural coalescing. If a subscriber
-// is slow, the event is dropped (next event catches up).
+// EventBus broadcasts notifications to SSE subscribers.
+// Channels have buffer 1 for natural coalescing of identical events.
+// Latest event always wins: if the channel is full, the stale event
+// is drained and replaced so subscribers always see the most recent state.
 type EventBus struct {
-	mu        sync.RWMutex
+	mu        sync.Mutex
 	listeners []chan string
 }
 
@@ -37,15 +38,24 @@ func (e *EventBus) Unsubscribe(ch chan string) {
 	}
 }
 
-// Notify sends a job change notification to all subscribers.
-// If the channel is full, the event is dropped (safety ticker catches up).
-func (e *EventBus) Notify(job string) {
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+// Notify sends a notification to all subscribers.
+// If the channel is full, the stale event is replaced with the latest.
+func (e *EventBus) Notify(topic string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	for _, ch := range e.listeners {
 		select {
-		case ch <- job:
+		case ch <- topic:
 		default:
+			// Drain stale event, send latest
+			select {
+			case <-ch:
+			default:
+			}
+			select {
+			case ch <- topic:
+			default:
+			}
 		}
 	}
 }
