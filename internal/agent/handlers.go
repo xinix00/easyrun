@@ -38,6 +38,11 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
+	if key := r.Header.Get("X-API-Key"); key != "" {
+		req.Header.Set("X-API-Key", key)
+	} else if a.apiKey != "" {
+		req.Header.Set("X-API-Key", a.apiKey)
+	}
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -69,6 +74,11 @@ func (a *Agent) proxySSEToLeader(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "failed to create request")
 		return
+	}
+	if key := r.Header.Get("X-API-Key"); key != "" {
+		req.Header.Set("X-API-Key", key)
+	} else if a.apiKey != "" {
+		req.Header.Set("X-API-Key", a.apiKey)
 	}
 
 	// No timeout — SSE is long-lived
@@ -104,7 +114,15 @@ func (a *Agent) notifyLeader(jobName string) {
 		return
 	}
 	body := strings.NewReader(fmt.Sprintf(`{"job":%q}`, jobName))
-	resp, err := http.Post(fmt.Sprintf("http://%s/v1/notify", addr), "application/json", body)
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/v1/notify", addr), body)
+	if err != nil {
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if a.apiKey != "" {
+		req.Header.Set("X-API-Key", a.apiKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return
 	}

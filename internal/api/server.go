@@ -23,36 +23,40 @@ type Server struct {
 }
 
 // NewServer creates a new API server
-func NewServer(l *leader.Leader, addr string) *Server {
+func NewServer(l *leader.Leader, addr string, apiKey string) *Server {
 	s := &Server{
 		leader: l,
 	}
 
+	auth := func(h http.HandlerFunc) http.HandlerFunc {
+		return httputil.RequireAPIKey(apiKey, h)
+	}
+
 	mux := http.NewServeMux()
 
-	// Health
+	// Health (public - needed for discovery)
 	mux.HandleFunc("/health", s.handleHealth)
 
-	// Agents
-	mux.HandleFunc("GET /v1/agents", s.handleGetAgents)
-	mux.HandleFunc("POST /v1/agents", s.handleRegisterAgent)
-	mux.HandleFunc("POST /v1/heartbeat", s.handleHeartbeat)
-	mux.HandleFunc("DELETE /v1/agents/", s.handleUnregisterAgent)
+	// Agents (authenticated)
+	mux.HandleFunc("GET /v1/agents", auth(s.handleGetAgents))
+	mux.HandleFunc("POST /v1/agents", auth(s.handleRegisterAgent))
+	mux.HandleFunc("POST /v1/heartbeat", auth(s.handleHeartbeat))
+	mux.HandleFunc("DELETE /v1/agents/", auth(s.handleUnregisterAgent))
 
-	// Jobs
-	mux.HandleFunc("GET /v1/jobs", s.handleGetJobs)
-	mux.HandleFunc("POST /v1/jobs", s.handleRunJob)
-	mux.HandleFunc("DELETE /v1/jobs/", s.handleDeleteJob)
+	// Jobs (authenticated)
+	mux.HandleFunc("GET /v1/jobs", auth(s.handleGetJobs))
+	mux.HandleFunc("POST /v1/jobs", auth(s.handleRunJob))
+	mux.HandleFunc("DELETE /v1/jobs/", auth(s.handleDeleteJob))
 
-	// Status
-	mux.HandleFunc("GET /v1/status", s.handleStatus)
+	// Status (authenticated)
+	mux.HandleFunc("GET /v1/status", auth(s.handleStatus))
 
-	// Events (SSE)
-	mux.HandleFunc("GET /v1/events", s.handleEvents)
-	mux.HandleFunc("POST /v1/notify", s.handleNotify)
+	// Events (authenticated)
+	mux.HandleFunc("GET /v1/events", auth(s.handleEvents))
+	mux.HandleFunc("POST /v1/notify", auth(s.handleNotify))
 
-	// Per-job status
-	mux.HandleFunc("GET /v1/jobs/{name}/status", s.handleJobStatus)
+	// Per-job status (authenticated)
+	mux.HandleFunc("GET /v1/jobs/{name}/status", auth(s.handleJobStatus))
 
 	s.server = &http.Server{
 		Addr:    addr,

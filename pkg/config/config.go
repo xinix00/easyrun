@@ -15,6 +15,7 @@ type Config struct {
 	Paths    PathsConfig    `yaml:"paths"`
 	Runner   RunnerConfig   `yaml:"runner"`
 	Timeouts TimeoutsConfig `yaml:"timeouts"`
+	APIKey   string         `yaml:"api_key"`
 }
 
 // NodeConfig holds node-specific configuration

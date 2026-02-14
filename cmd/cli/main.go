@@ -18,7 +18,10 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
-var leaderAddr string
+var (
+	leaderAddr string
+	apiKey     string
+)
 
 func main() {
 	app := &cli.App{
@@ -31,6 +34,12 @@ func main() {
 				Value:       "localhost:9080",
 				Destination: &leaderAddr,
 				EnvVars:     []string{"EASYRUN_LEADER"},
+			},
+			&cli.StringFlag{
+				Name:        "api-key",
+				Usage:       "API key for authentication",
+				Destination: &apiKey,
+				EnvVars:     []string{"EASYRUN_API_KEY"},
 			},
 		},
 		Commands: []*cli.Command{
@@ -507,6 +516,9 @@ func doRequest(method, path string, body any) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

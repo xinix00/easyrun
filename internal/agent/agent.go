@@ -18,6 +18,7 @@ import (
 	"easyrun/internal/runner"
 	"easyrun/internal/types"
 	"easyrun/pkg/config"
+	"easyrun/pkg/httputil"
 )
 
 // State represents persisted state
@@ -63,6 +64,7 @@ type Agent struct {
 	server     *http.Server
 	getLeader  func() string // returns current leader address (for proxying)
 	httpClient *http.Client
+	apiKey     string // API key for authenticating with leader and protecting local endpoints
 
 	needsSave   atomic.Bool // flag for debounced persistence
 	checkStates map[string]*checkState // health check state per task (monitor goroutine only)
@@ -109,6 +111,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		attributes:   attrs,
 		ops:          make(chan func(*agentState), stateChannelBufferSize),
 		httpClient:   &http.Client{Timeout: proxyTimeout},
+		apiKey:       cfg.APIKey,
 		checkStates:  make(map[string]*checkState),
 	}
 }
@@ -212,21 +215,25 @@ func (a *Agent) Run(ctx context.Context) error {
 	// Start the state loop
 	go a.stateLoop(ctx)
 
+	auth := func(h http.HandlerFunc) http.HandlerFunc {
+		return httputil.RequireAPIKey(a.apiKey, h)
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", a.handleHealth)
-	mux.HandleFunc("/capacity", a.handleCapacity)
-	mux.HandleFunc("/tasks", a.handleTasks)
-	mux.HandleFunc("/run", a.handleRun)
-	mux.HandleFunc("/delete/", a.handleDelete)
-	mux.HandleFunc("/logs/", a.handleLogs)
+	mux.HandleFunc("/capacity", auth(a.handleCapacity))
+	mux.HandleFunc("/tasks", auth(a.handleTasks))
+	mux.HandleFunc("/run", auth(a.handleRun))
+	mux.HandleFunc("/delete/", auth(a.handleDelete))
+	mux.HandleFunc("/logs/", auth(a.handleLogs))
 	mux.HandleFunc("/leader", a.handleLeader)
 
 	// Proxy endpoints - forward to leader for cluster-wide operations
-	mux.HandleFunc("/v1/agents", a.proxyToLeader)
-	mux.HandleFunc("/v1/jobs", a.proxyToLeader)
-	mux.HandleFunc("/v1/jobs/", a.proxyToLeader) // DELETE /v1/jobs/{id}
-	mux.HandleFunc("/v1/status", a.proxyToLeader)
-	mux.HandleFunc("/v1/events", a.proxySSEToLeader)
+	mux.HandleFunc("/v1/agents", auth(a.proxyToLeader))
+	mux.HandleFunc("/v1/jobs", auth(a.proxyToLeader))
+	mux.HandleFunc("/v1/jobs/", auth(a.proxyToLeader))
+	mux.HandleFunc("/v1/status", auth(a.proxyToLeader))
+	mux.HandleFunc("/v1/events", auth(a.proxySSEToLeader))
 
 	addr := fmt.Sprintf("%s:%d", a.config.Node.IP, a.config.Node.Port)
 	a.server = &http.Server{
@@ -308,7 +315,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
 
 		// Handle preflight
 		if r.Method == "OPTIONS" {

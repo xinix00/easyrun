@@ -35,6 +35,7 @@ func main() {
 	clusterName := flag.String("cluster", "", "Cluster name (e.g., easyflor-prod)")
 	raftEndpoint := flag.String("raft", "", "EasyRaft endpoint (overrides config file)")
 	standalone := flag.Bool("standalone", false, "Run without easyraft (single-node mode)")
+	apiKey := flag.String("api-key", "", "API key for authentication (overrides config file)")
 	flag.Parse()
 
 	// Load config (returns defaults if no file)
@@ -49,6 +50,9 @@ func main() {
 	}
 	if *raftEndpoint != "" && !*standalone {
 		cfg.Cluster.RaftEndpoints = []string{*raftEndpoint}
+	}
+	if *apiKey != "" {
+		cfg.APIKey = *apiKey
 	}
 
 	// Validate
@@ -159,13 +163,13 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				} else {
 					failCount = 0
 					leaderAddr = fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
-					_, _ = sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetPlacedTaskCounts(), ag.GetStateTime())
+					_, _ = sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetPlacedTaskCounts(), ag.GetStateTime(), cfg.APIKey)
 				}
 			} else if leaderAddr != "" {
 				// On startup (or after leader change): register first with placed counts
 				if !registered {
 					log.Printf("Registering with leader %s...", leaderAddr)
-					if err := registerAgent(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetPlacedTaskCounts()); err != nil {
+					if err := registerAgent(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetPlacedTaskCounts(), cfg.APIKey); err != nil {
 						failCount++
 						log.Printf("Register failed (%d): %v", failCount, err)
 						if failCount >= 3 {
@@ -181,7 +185,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				}
 
 				// Already registered → heartbeat
-				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetPlacedTaskCounts(), ag.GetStateTime())
+				resp, err := sendHeartbeat(leaderAddr, ag.ID(), ag.Endpoint(), ag.GetJobs(), ag.GetPlacedTaskCounts(), ag.GetStateTime(), cfg.APIKey)
 				if err != nil {
 					if errors.Is(err, errNotRegistered) {
 						// Leader doesn't know us (new leader?) → re-register next tick
@@ -197,7 +201,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 							log.Println("Leader seems dead, trying to become leader...")
 							lastLeaderAddr = ""
 							if disc.TryBecomeLeader() {
-								becomeLeader(ctx, cfg, ag, &l, &leaderCancel)
+								becomeLeader(ctx, cfg, ag, &l, &leaderCancel, cfg.APIKey)
 								failCount = 0
 							}
 							// If we couldn't become leader, failCount keeps incrementing
@@ -216,7 +220,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 				failCount++
 				log.Printf("No leader found (%d), trying to become leader...", failCount)
 				if disc.TryBecomeLeader() {
-					becomeLeader(ctx, cfg, ag, &l, &leaderCancel)
+					becomeLeader(ctx, cfg, ag, &l, &leaderCancel, cfg.APIKey)
 					failCount = 0
 				}
 			}
@@ -256,7 +260,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	}
 }
 
-func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, cancelOut *context.CancelFunc) {
+func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, cancelOut *context.CancelFunc, apiKey string) {
 	log.Println("Became leader!")
 
 	// Leader gets its own context — cancelled on leadership loss (not just shutdown)
@@ -273,7 +277,7 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 
 	// Start API server so other agents can register/heartbeat
 	leaderAddr := fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
-	srv := api.NewServer(*l, leaderAddr)
+	srv := api.NewServer(*l, leaderAddr, apiKey)
 	go func() {
 		if err := srv.Run(leaderCtx); err != nil {
 			log.Printf("Leader API error: %v", err)
@@ -292,7 +296,7 @@ type heartbeatResponse struct {
 	StateTime time.Time    `json:"state_time"`
 }
 
-func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]int) error {
+func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]int, apiKey string) error {
 	url := fmt.Sprintf("http://%s/v1/agents", leaderAddr)
 
 	body, _ := json.Marshal(map[string]any{
@@ -302,7 +306,16 @@ func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]
 		"placed":   placed, // jobID -> count (what's running on this agent)
 	})
 
-	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -316,7 +329,7 @@ func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]
 
 var errNotRegistered = errors.New("not registered with leader")
 
-func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, placed map[string]int, stateTime time.Time) (*heartbeatResponse, error) {
+func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, placed map[string]int, stateTime time.Time, apiKey string) (*heartbeatResponse, error) {
 	url := fmt.Sprintf("http://%s/v1/heartbeat", leaderAddr)
 
 	body, _ := json.Marshal(map[string]any{
@@ -328,7 +341,16 @@ func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job,
 		"state_time": stateTime,
 	})
 
-	resp, err := httpClient.Post(url, "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
+	}
+
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
