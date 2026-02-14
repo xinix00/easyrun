@@ -176,11 +176,6 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, placed map[st
 		return nil, false
 	}
 
-	// Notify SSE so GUI stays in sync — debounced client-side
-	if placed != nil {
-		l.eventBus.Notify("heartbeat:" + id)
-	}
-
 	// Sync job definitions if agent has newer state
 	myStateTime := l.jobStore.GetStateTime()
 	if stateTime.After(myStateTime) && len(jobs) > 0 {

@@ -16,8 +16,9 @@ const defaultFailureThreshold = 3
 
 // checkState tracks consecutive health check failures per task (monitor goroutine only)
 type checkState struct {
-	failCount     int
-	lastCheckTime time.Time // for file mtime comparison
+	failCount       int
+	lastCheckTime   time.Time // for file mtime comparison
+	notifiedHealthy bool      // true after first "started" event fired
 }
 
 // monitorTasks periodically checks task states and health
@@ -86,7 +87,7 @@ func (a *Agent) checkTasks() {
 				}
 			})
 			delete(a.checkStates, task.ID)
-			go a.notifyLeader(task.JobName)
+			go a.notifyLeader(task.JobName, "crash")
 			go a.restartTask(task)
 			continue
 		}
@@ -107,10 +108,14 @@ func (a *Agent) checkTasks() {
 				})
 				delete(a.checkStates, task.ID)
 				go func() {
-					a.notifyLeader(task.JobName)
+					a.notifyLeader(task.JobName, "crash")
 					_ = a.runnerFor(task.Driver).Stop(task)
 					a.restartTask(task)
 				}()
+			} else if cs := a.checkStates[task.ID]; cs != nil && !cs.notifiedHealthy {
+				// First health check pass → task is ready to serve traffic
+				cs.notifiedHealthy = true
+				go a.notifyLeader(task.JobName, "started")
 			}
 		}
 	}

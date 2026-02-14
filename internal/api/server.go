@@ -298,7 +298,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			case strings.HasPrefix(msg, "agent:"):
 				sse.WriteEvent("changed", fmt.Sprintf(`{"agent":%q}`, strings.TrimPrefix(msg, "agent:")))
 			case strings.HasPrefix(msg, "job:"):
-				sse.WriteEvent("changed", fmt.Sprintf(`{"job":%q}`, strings.TrimPrefix(msg, "job:")))
+				// "job:name" or "job:name:event" (start/started/crash/stop)
+				rest := strings.TrimPrefix(msg, "job:")
+				if name, event, ok := strings.Cut(rest, ":"); ok {
+					sse.WriteEvent("changed", fmt.Sprintf(`{"job":%q,"event":%q}`, name, event))
+				} else {
+					sse.WriteEvent("changed", fmt.Sprintf(`{"job":%q}`, rest))
+				}
 			default:
 				sse.WriteEvent("changed", "{}")
 			}
@@ -306,14 +312,20 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleNotify receives agent task-change notifications and fires the event bus
+// handleNotify receives agent task-change notifications and fires the event bus.
+// Events: "start" (process started), "started" (healthy), "crash", "stop".
 func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Job string `json:"job"`
+		Job   string `json:"job"`
+		Event string `json:"event"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req) // best-effort, empty body = generic notify
 	if req.Job != "" {
-		s.leader.EventBus().Notify("job:" + req.Job)
+		topic := "job:" + req.Job
+		if req.Event != "" {
+			topic += ":" + req.Event
+		}
+		s.leader.EventBus().Notify(topic)
 	} else {
 		s.leader.EventBus().Notify("")
 	}

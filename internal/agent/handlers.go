@@ -104,8 +104,9 @@ func (a *Agent) proxySSEToLeader(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// notifyLeader sends a lightweight ping to the leader's /v1/notify endpoint
-func (a *Agent) notifyLeader(jobName string) {
+// notifyLeader sends a lightweight event to the leader's /v1/notify endpoint.
+// Events: "start" (process started), "started" (healthy), "crash", "stop".
+func (a *Agent) notifyLeader(jobName, event string) {
 	if a.getLeader == nil {
 		return
 	}
@@ -113,7 +114,7 @@ func (a *Agent) notifyLeader(jobName string) {
 	if addr == "" {
 		return
 	}
-	body := strings.NewReader(fmt.Sprintf(`{"job":%q}`, jobName))
+	body := strings.NewReader(fmt.Sprintf(`{"job":%q,"event":%q}`, jobName, event))
 	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/v1/notify", addr), body)
 	if err != nil {
 		return
@@ -322,6 +323,11 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 	a.scheduleSave()
 
 	log.Printf("Started task %s (job %s) with ports %v, pid %d", task.ID, job.Name, ports, task.Pid)
+	if job.HealthCheck != nil {
+		go a.notifyLeader(job.Name, "start")
+	} else {
+		go a.notifyLeader(job.Name, "started")
+	}
 	return task, nil
 }
 
@@ -429,7 +435,15 @@ func (a *Agent) restartTask(task *types.Task) {
 // deleteJobByID removes job definition AND cleans up all tasks by job ID
 func (a *Agent) deleteJobByID(jobID string) int {
 	// Remove job, mark tasks as stopping (prevents monitor from restarting)
-	tasksToStop := query(a, func(s *agentState) []*types.Task {
+	type deleteResult struct {
+		tasks   []*types.Task
+		jobName string
+	}
+	result := query(a, func(s *agentState) deleteResult {
+		var jobName string
+		if j := s.jobs[jobID]; j != nil {
+			jobName = j.Name
+		}
 		delete(s.jobs, jobID)
 		var tasks []*types.Task
 		for _, task := range s.tasks {
@@ -438,14 +452,18 @@ func (a *Agent) deleteJobByID(jobID string) int {
 				tasks = append(tasks, task)
 			}
 		}
-		return tasks
+		return deleteResult{tasks, jobName}
 	})
 	a.scheduleSave()
 
-	a.stopTasks(tasksToStop)
-	log.Printf("Deleted job %s: %d tasks stopped", jobID, len(tasksToStop))
+	a.stopTasks(result.tasks)
+	log.Printf("Deleted job %s: %d tasks stopped", jobID, len(result.tasks))
 
-	return len(tasksToStop)
+	if result.jobName != "" {
+		go a.notifyLeader(result.jobName, "stop")
+	}
+
+	return len(result.tasks)
 }
 
 // handleLogs streams task logs (stdout or stderr)

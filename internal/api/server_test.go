@@ -520,6 +520,171 @@ func TestStatusEndpointWithAgents(t *testing.T) {
 	}
 }
 
+// --- Notify / SSE Event Tests ---
+
+func TestNotifyWithEventType(t *testing.T) {
+	_, l, cancel := setupTestServer(t)
+	defer cancel()
+
+	// Subscribe to EventBus before sending notify
+	ch := l.EventBus().Subscribe()
+	defer l.EventBus().Unsubscribe(ch)
+
+	// Drain the initial event (SSE sends one on subscribe via handleEvents)
+	// EventBus.Notify is called directly, so no initial event here.
+
+	// Simulate agent sending notify with event type
+	l.EventBus().Notify("job:my-api:started")
+
+	select {
+	case msg := <-ch:
+		if msg != "job:my-api:started" {
+			t.Errorf("EventBus received %q, want %q", msg, "job:my-api:started")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for EventBus notification")
+	}
+}
+
+func TestNotifyEndpointWithEvent(t *testing.T) {
+	server, l, cancel := setupTestServer(t)
+	defer cancel()
+
+	ch := l.EventBus().Subscribe()
+	defer l.EventBus().Unsubscribe(ch)
+
+	// POST to /v1/notify with event field
+	w := doRequest(server, "POST", "/v1/notify", map[string]string{
+		"job":   "my-api",
+		"event": "started",
+	})
+
+	if w.Code != 204 {
+		t.Errorf("Status = %d, want 204", w.Code)
+	}
+
+	select {
+	case msg := <-ch:
+		if msg != "job:my-api:started" {
+			t.Errorf("EventBus received %q, want %q", msg, "job:my-api:started")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for EventBus notification")
+	}
+}
+
+func TestNotifyEndpointWithoutEvent(t *testing.T) {
+	server, l, cancel := setupTestServer(t)
+	defer cancel()
+
+	ch := l.EventBus().Subscribe()
+	defer l.EventBus().Unsubscribe(ch)
+
+	// POST without event field (backwards compatible)
+	w := doRequest(server, "POST", "/v1/notify", map[string]string{
+		"job": "my-api",
+	})
+
+	if w.Code != 204 {
+		t.Errorf("Status = %d, want 204", w.Code)
+	}
+
+	select {
+	case msg := <-ch:
+		if msg != "job:my-api" {
+			t.Errorf("EventBus received %q, want %q", msg, "job:my-api")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Timeout waiting for EventBus notification")
+	}
+}
+
+func TestNotifyEventTypes(t *testing.T) {
+	server, l, cancel := setupTestServer(t)
+	defer cancel()
+
+	events := []string{"start", "started", "crash", "stop"}
+	for _, event := range events {
+		t.Run(event, func(t *testing.T) {
+			ch := l.EventBus().Subscribe()
+			defer l.EventBus().Unsubscribe(ch)
+
+			w := doRequest(server, "POST", "/v1/notify", map[string]string{
+				"job":   "test-job",
+				"event": event,
+			})
+
+			if w.Code != 204 {
+				t.Errorf("Status = %d, want 204", w.Code)
+			}
+
+			select {
+			case msg := <-ch:
+				want := "job:test-job:" + event
+				if msg != want {
+					t.Errorf("EventBus received %q, want %q", msg, want)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Timeout waiting for EventBus notification")
+			}
+		})
+	}
+}
+
+// TestSSEEventFormat verifies the SSE output includes event type.
+// Uses a real HTTP server since httptest.Recorder doesn't support Flusher.
+func TestSSEEventFormat(t *testing.T) {
+	store := newMockJobStore()
+	l := leader.New("local-agent", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	server := NewServer(l, ":0", "")
+	ts := httptest.NewServer(server.server.Handler)
+	defer ts.Close()
+
+	// Connect to SSE endpoint
+	resp, err := http.Get(ts.URL + "/v1/events")
+	if err != nil {
+		t.Fatalf("Failed to connect to SSE: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// Read initial "changed" event (sent on connect)
+	buf := make([]byte, 4096)
+	n, err := resp.Body.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read initial SSE event: %v", err)
+	}
+	initial := string(buf[:n])
+	if !containsSSEData(initial, "{}") {
+		t.Errorf("Initial event should be {}, got: %s", initial)
+	}
+
+	// Fire a notify with event type
+	l.EventBus().Notify("job:my-api:started")
+
+	n, err = resp.Body.Read(buf)
+	if err != nil {
+		t.Fatalf("Failed to read SSE event: %v", err)
+	}
+	event := string(buf[:n])
+
+	// Should contain event type in the data
+	if !containsSSEData(event, `"event":"started"`) {
+		t.Errorf("SSE event should contain event type, got: %s", event)
+	}
+	if !containsSSEData(event, `"job":"my-api"`) {
+		t.Errorf("SSE event should contain job name, got: %s", event)
+	}
+}
+
+func containsSSEData(sse, substr string) bool {
+	return bytes.Contains([]byte(sse), []byte(substr))
+}
+
 // --- Mock Agent for dispatch tests ---
 
 type testMockAgent struct {
