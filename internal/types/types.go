@@ -102,6 +102,8 @@ type Task struct {
 	RestartCount int            `json:"restart_count"`
 	CPUShares    int            `json:"cpu_shares,omitempty"`
 	MemoryLimit  uint64         `json:"memory_limit,omitempty"`
+	CPUPercent   float64        `json:"cpu_percent"`
+	MemPercent   float64        `json:"mem_percent"`
 }
 
 // Agent represents a registered agent

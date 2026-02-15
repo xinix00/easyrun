@@ -14,11 +14,15 @@ import (
 
 const defaultFailureThreshold = 3
 
-// checkState tracks consecutive health check failures per task (monitor goroutine only)
+// checkState tracks consecutive health check failures and resource usage per task (monitor goroutine only)
 type checkState struct {
 	failCount       int
 	lastCheckTime   time.Time // for file mtime comparison
 	notifiedHealthy bool      // true after first "started" event fired
+
+	// Resource usage tracking (for CPU delta calculation)
+	lastCPUSeconds float64
+	lastMeasureAt  time.Time
 }
 
 // monitorTasks periodically checks task states and health
@@ -95,6 +99,9 @@ func (a *Agent) checkTasks() {
 			continue
 		}
 
+		// Measure resource usage
+		a.measureTaskUsage(task)
+
 		// Check health if configured (skip during initial startup grace period)
 		if job != nil && job.HealthCheck != nil {
 			if job.HealthCheck.InitialTimeout > 0 && time.Since(task.StartedAt) < job.HealthCheck.InitialTimeout {
@@ -122,6 +129,67 @@ func (a *Agent) checkTasks() {
 			}
 		}
 	}
+}
+
+// measureTaskUsage measures CPU% and Mem% for a running task and updates it in state.
+func (a *Agent) measureTaskUsage(task *types.Task) {
+	cs := a.checkStates[task.ID]
+	if cs == nil {
+		cs = &checkState{}
+		a.checkStates[task.ID] = cs
+	}
+
+	now := time.Now()
+	var cpuPercent, memPercent float64
+
+	hostCores := float64(a.sysInfo.CPUCores)
+	allocCores := float64(task.CPUShares) / 1024.0
+	if allocCores == 0 {
+		allocCores = hostCores
+	}
+	allocMem := float64(task.MemoryLimit)
+	if allocMem == 0 {
+		allocMem = float64(a.sysInfo.MemoryBytes)
+	}
+
+	if task.Driver == types.DriverDocker {
+		// Docker: CPUPerc 200% = 2 cores, MemPerc = % of container limit (or host if no limit)
+		dockerCPU, dockerMem, err := getDockerUsage(task.ID)
+		if err != nil {
+			return
+		}
+		// CPU: dockerCPU/100 = cores used, scale to allocation
+		cpuPercent = (dockerCPU / 100.0) / allocCores * 100
+		// Mem: Docker already gives % of limit — use directly
+		memPercent = dockerMem
+	} else {
+		// Exec: ps gives cumulative CPU seconds + RSS bytes
+		cpuSec, memBytes, err := getProcessUsage(task.Pid)
+		if err != nil {
+			return
+		}
+		// CPU: delta since last measurement
+		if !cs.lastMeasureAt.IsZero() {
+			deltaCPU := cpuSec - cs.lastCPUSeconds
+			deltaWall := now.Sub(cs.lastMeasureAt).Seconds()
+			if deltaWall > 0 {
+				cpuPercent = (deltaCPU / deltaWall) / allocCores * 100
+			}
+		}
+		cs.lastCPUSeconds = cpuSec
+		cs.lastMeasureAt = now
+		// Mem: RSS bytes / allocation
+		if allocMem > 0 {
+			memPercent = float64(memBytes) / allocMem * 100
+		}
+	}
+
+	a.do(func(s *agentState) {
+		if t := s.tasks[task.ID]; t != nil {
+			t.CPUPercent = cpuPercent
+			t.MemPercent = memPercent
+		}
+	})
 }
 
 // checkHealth performs a health check with failure threshold counting.
