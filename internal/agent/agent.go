@@ -345,7 +345,8 @@ func (a *Agent) GetJobs() []*types.Job {
 }
 
 // GetPlacedTaskCounts returns a map of jobID -> number of placed tasks on this agent.
-// Counts ALL tasks (not just running) because placed = what the leader dispatched here.
+// Counts ALL tasks (including failed) because failed tasks exhausted their restart
+// counter and should NOT be re-dispatched by the leader.
 func (a *Agent) GetPlacedTaskCounts() map[string]int {
 	return query(a, func(s *agentState) map[string]int {
 		counts := make(map[string]int)

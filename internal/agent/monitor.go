@@ -80,10 +80,13 @@ func (a *Agent) checkTasks() {
 		if state != types.TaskRunning {
 			log.Printf("Task %s crashed (was %s, now %s)", task.ID, task.State, state)
 
-			// Update state and restart
+			// Mark as Stopping (not Failed!) so it still counts for capacity.
+			// restartTask will either atomic-swap (restart) or set Failed (maxRestarts exceeded).
+			// Without this, there's a race: Failed frees capacity → leader dispatches new task
+			// → restartTask also creates replacement → over-provisioning.
 			a.do(func(s *agentState) {
 				if t := s.tasks[task.ID]; t != nil {
-					t.State = state
+					t.State = types.TaskStopping
 				}
 			})
 			delete(a.checkStates, task.ID)

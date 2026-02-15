@@ -1486,3 +1486,61 @@ func TestFailoverAgentDiesRealisticHeartbeat(t *testing.T) {
 	// Note: GetPlaced() may have stale entries from dead agent.
 	// KISS refactor doesn't rely on placement for reconciliation - it queries GetClusterStatus().
 }
+
+// TestFailoverFailedTasksNotRedispatched verifies that failed tasks (which exhausted
+// their restart counter) are NOT re-dispatched during leader failover.
+//
+// Failed tasks count as "placed" because the leader dispatched them and the agent's
+// monitor already tried restarting them. Re-dispatching would just fail again.
+//
+// Scenario:
+// 1. Job "my-api" has count=3
+// 2. Agent A has 2 running + 1 failed task (restart counter exhausted)
+// 3. Agent A registers with new leader: placed = {my-api: 3} (includes failed)
+// 4. Leader sees: 3 placed, 3 desired → no re-dispatch
+// 5. CORRECT: failed task stays failed, no unnecessary dispatch
+func TestFailoverFailedTasksNotRedispatched(t *testing.T) {
+	agentA := newMockAgent()
+	defer agentA.Close()
+	agentB := newMockAgent()
+	defer agentB.Close()
+
+	store := NewMockJobStore()
+	job := &types.Job{
+		ID:      "api-id",
+		Name:    "my-api",
+		Command: "./api",
+		Count:   3,
+	}
+	store.StoreJob(job)
+
+	leader := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader.SetSettleDelay(100 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+
+	// Agent A has 2 running + 1 failed task (restart counter exhausted)
+	agentA.mu.Lock()
+	agentA.tasks = []*types.Task{
+		{ID: "task-1", JobID: "api-id", JobName: "my-api", State: types.TaskRunning},
+		{ID: "task-2", JobID: "api-id", JobName: "my-api", State: types.TaskRunning},
+		{ID: "task-3", JobID: "api-id", JobName: "my-api", State: types.TaskFailed},
+	}
+	agentA.mu.Unlock()
+
+	// GetPlacedTaskCounts includes failed tasks (3 total, not 2)
+	leader.RegisterAgent("agent-a", agentA.URL(), "", map[string]int{"api-id": 3})
+	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
+
+	// Wait for settle + reconciliation
+	time.Sleep(300 * time.Millisecond)
+
+	// Leader sees 3 placed (including failed), 3 desired → no action
+	// Failed task already exhausted restarts, re-dispatching would just fail again
+	totalRuns := agentA.RunCallCount() + agentB.RunCallCount()
+	if totalRuns != 0 {
+		t.Errorf("Leader should NOT re-dispatch for failed tasks (restart counter exhausted), but dispatched %d", totalRuns)
+	}
+}

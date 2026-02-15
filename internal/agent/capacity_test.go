@@ -574,3 +574,73 @@ func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 		t.Error("hasCapacity should not fit 150 CPU (900 used, 124 remaining)")
 	}
 }
+
+// TestCrashedTaskStillReservesCapacity verifies that when a task crashes and the
+// monitor detects it, capacity is NOT freed before restartTask runs.
+//
+// BUG: monitor sets state to TaskFailed → resourceUsage() no longer counts it →
+// handleRun sees free capacity → accepts new dispatch → restartTask also creates
+// replacement → over-provisioning (more tasks than CPU cores).
+//
+// The fix: monitor sets state to TaskStopping (still counts for capacity) instead
+// of TaskFailed. restartTask handles the final state transition.
+func TestCrashedTaskStillReservesCapacity(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 1, MemoryBytes: 1024 * 1024}) // 1024 CPU shares
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	// Fill capacity: 1 task using all 1024 CPU shares
+	job := &types.Job{
+		ID:        "job-id",
+		Name:      "my-job",
+		CPUShares: 1024,
+	}
+	agent.StoreJob(job)
+	agent.do(func(s *agentState) {
+		s.tasks["task-1"] = &types.Task{
+			ID:          "task-1",
+			JobID:       "job-id",
+			JobName:     "my-job",
+			State:       types.TaskRunning,
+			CPUShares:   1024,
+		}
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	// Simulate process crash: remove from runner so Status() returns TaskFailed
+	mockRunner.mu.Lock()
+	delete(mockRunner.tasks, "task-1")
+	mockRunner.mu.Unlock()
+
+	// Make runner.Stop() slow to simulate Docker cleanup (restartTask calls Stop before swap)
+	stopStarted := make(chan struct{})
+	stopDone := make(chan struct{})
+	mockRunner.onStop = func(task *types.Task) error {
+		close(stopStarted)
+		<-stopDone // block until test signals
+		return nil
+	}
+
+	// Run one monitor cycle (this detects the crash and starts restartTask in background)
+	agent.checkTasks()
+
+	// Wait for restartTask to begin (it's inside the slow Stop)
+	<-stopStarted
+
+	// BUG: During restart (Stop still running), capacity should still be reserved.
+	// A new task with 1024 CPU should NOT fit.
+	newJob := &types.Job{Name: "new-job", CPUShares: 1024}
+	if agent.hasCapacity(newJob) {
+		t.Error("BUG: capacity freed after crash before restart completed — " +
+			"crashed task should still reserve capacity until restart decision is made")
+	}
+
+	// Unblock restartTask so test cleanup works
+	close(stopDone)
+	time.Sleep(20 * time.Millisecond)
+}
