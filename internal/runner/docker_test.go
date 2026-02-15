@@ -13,7 +13,8 @@ func TestDockerRunnerRequiresImage(t *testing.T) {
 		Command: "echo hello",
 	}
 
-	_, err := r.Run(job, nil)
+	task := &types.Task{ID: "test-task"}
+	err := r.Run(job, task)
 	if err == nil {
 		t.Error("Run should fail without image")
 	}

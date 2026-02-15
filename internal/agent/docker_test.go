@@ -137,8 +137,8 @@ func TestStartDockerJob(t *testing.T) {
 		Ports: map[string]int{"http": 80},
 	}
 
-	task, err := agent.startJob(job)
-	if err != nil {
+	task := newTask(job)
+	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 
@@ -178,8 +178,8 @@ func TestStartProcessJob(t *testing.T) {
 		Command: "echo hello",
 	}
 
-	task, err := agent.startJob(job)
-	if err != nil {
+	task := newTask(job)
+	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 
@@ -370,8 +370,8 @@ func TestHandleLogsDockerTask(t *testing.T) {
 
 	// Start a docker job
 	job := &types.Job{ID: "job-1", Name: "log-docker", Image: "nginx:latest"}
-	task, err := agent.startJob(job)
-	if err != nil {
+	task := newTask(job)
+	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 
@@ -423,8 +423,8 @@ func TestCheckTasksDockerCrash(t *testing.T) {
 
 	// Start a docker job
 	job := &types.Job{ID: "job-1", Name: "crash-docker", Image: "myapp:v1"}
-	task, err := agent.startJob(job)
-	if err != nil {
+	task := newTask(job)
+	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 
@@ -437,9 +437,14 @@ func TestCheckTasksDockerCrash(t *testing.T) {
 	agent.checkTasks()
 	time.Sleep(100 * time.Millisecond)
 
-	// Should have restarted via docker runner (new task exists)
+	// Should have restarted via docker runner (new task, old ID gone)
 	info := query(agent, func(s *agentState) *types.Task {
-		return s.tasks[task.ID]
+		for _, t := range s.tasks {
+			if t.JobName == "crash-docker" {
+				return t
+			}
+		}
+		return nil
 	})
 
 	if info == nil {

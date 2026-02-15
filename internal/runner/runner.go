@@ -42,8 +42,10 @@ func AttrEnvVars(attrs map[string]string) []string {
 
 // Runner interface for executing jobs
 type Runner interface {
-	// Run starts a job and returns the task
-	Run(job *types.Job, ports map[string]int) (*types.Task, error)
+	// Run starts a job process. The task is pre-created by the caller;
+	// the runner fills in process-specific fields (Pid) and registers
+	// internal state (process handle, log broadcasters).
+	Run(job *types.Job, task *types.Task) error
 
 	// Stop stops a running task
 	Stop(task *types.Task) error

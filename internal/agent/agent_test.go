@@ -66,7 +66,8 @@ func TestAgentStartJob(t *testing.T) {
 		Command: "echo hello",
 	}
 
-	task, err := agent.startJob(job)
+	task := newTask(job)
+	err := agent.startJob(job, task)
 	if err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
@@ -97,12 +98,10 @@ func TestAgentStartJobRunnerError(t *testing.T) {
 		Command: "echo",
 	}
 
-	task, err := agent.startJob(job)
+	task := newTask(job)
+	err := agent.startJob(job, task)
 	if err == nil {
 		t.Error("startJob should fail when runner returns error")
-	}
-	if task != nil {
-		t.Error("task should be nil when runner fails")
 	}
 }
 

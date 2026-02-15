@@ -184,8 +184,8 @@ func TestCheckTasksDetectsCrashedProcess(t *testing.T) {
 
 	// Start a job so we have a task
 	job := &types.Job{ID: "job-1", Name: "test-job", Command: "echo hello"}
-	task, err := agent.startJob(job)
-	if err != nil {
+	task := newTask(job)
+	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 
@@ -198,16 +198,22 @@ func TestCheckTasksDetectsCrashedProcess(t *testing.T) {
 	agent.checkTasks()
 	time.Sleep(100 * time.Millisecond)
 
-	// After checkTasks + restartTask: the task entry is reused with new Pid and Running state
+	// After checkTasks + restartTask: new task replaces old (atomic swap, no capacity gap)
 	info := query(agent, func(s *agentState) *types.Task {
-		return s.tasks[task.ID]
+		for _, t := range s.tasks {
+			if t.JobName == "test-job" {
+				return t
+			}
+		}
+		return nil
 	})
 
 	if info == nil {
 		t.Fatal("Task not found after crash detection + restart")
 	}
-
-	// restartTask updates the existing task entry with new Pid and Running state
+	if info.ID == task.ID {
+		t.Error("Task ID should change after restart")
+	}
 	if info.State != types.TaskRunning {
 		t.Errorf("Task state = %q, want %q (after restart)", info.State, types.TaskRunning)
 	}
@@ -611,27 +617,27 @@ func TestRestartTaskSuccess(t *testing.T) {
 	agent.restartTask(task)
 	time.Sleep(50 * time.Millisecond)
 
-	// After restart: old task replaced by new one (mock generates "task-" + job.Name)
+	// After restart: new task ID, old one gone
 	info := query(agent, func(s *agentState) *types.Task {
-		return s.tasks["task-restart-me"]
+		for _, t := range s.tasks {
+			if t.JobName == "restart-me" {
+				return t
+			}
+		}
+		return nil
 	})
 
 	if info == nil {
-		t.Fatal("New task not found after restart")
+		t.Fatal("Task not found after restart")
+	}
+	if info.ID == "task-restart" {
+		t.Error("Task ID should change after restart")
 	}
 	if info.State != types.TaskRunning {
 		t.Errorf("State = %q, want %q", info.State, types.TaskRunning)
 	}
 	if info.RestartCount != 1 {
 		t.Errorf("RestartCount = %d, want 1", info.RestartCount)
-	}
-
-	// Old task should be gone
-	old := query(agent, func(s *agentState) *types.Task {
-		return s.tasks["task-restart"]
-	})
-	if old != nil {
-		t.Error("Old task should be removed from state after restart")
 	}
 }
 
@@ -725,10 +731,12 @@ func TestRestartTaskUnlimitedRestarts(t *testing.T) {
 	agent.restartTask(task)
 	time.Sleep(50 * time.Millisecond)
 
-	// Should have restarted despite high restart count
+	// Should have restarted despite high restart count (new task ID)
 	state := query(agent, func(s *agentState) types.TaskState {
-		if t := s.tasks["task-unlimited"]; t != nil {
-			return t.State
+		for _, t := range s.tasks {
+			if t.JobName == "unlimited" {
+				return t.State
+			}
 		}
 		return ""
 	})

@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"easyrun/internal/runner"
 	"easyrun/internal/types"
@@ -209,8 +210,13 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check capacity AND reserve atomically (prevents TOCTOU race)
-	reserved := query(a, func(s *agentState) bool {
+	// Ensure job has ID and driver, then create the task.
+	initJob(&job)
+	task := newTask(&job)
+
+	// Check capacity AND add task to state atomically.
+	// The task in state IS the capacity reservation — no separate reservation needed.
+	added := query(a, func(s *agentState) bool {
 		usedCPU, usedMem := s.resourceUsage()
 		if job.CPUShares > 0 && usedCPU+job.CPUShares > a.sysInfo.CPUCores*1024 {
 			return false
@@ -218,12 +224,12 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.sysInfo.MemoryBytes {
 			return false
 		}
-		s.reservedCPU += job.CPUShares
-		s.reservedMem += job.MemoryLimit
+		s.jobs[job.ID] = &job
+		s.tasks[task.ID] = task
 		return true
 	})
 
-	if !reserved {
+	if !added {
 		httputil.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{
 			"error": "insufficient capacity",
 		})
@@ -238,16 +244,14 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		"message": "job accepted, starting in background",
 	})
 
-	// Start job in background (includes artifact download)
+	// Start process in background (task already in state)
 	go func() {
-		task, err := a.startJob(&job)
-		// Release reservation (task now tracks its own resources, or start failed)
-		a.do(func(s *agentState) {
-			s.reservedCPU -= job.CPUShares
-			s.reservedMem -= job.MemoryLimit
-		})
-		if err != nil {
+		if err := a.startJob(&job, task); err != nil {
 			log.Printf("Failed to start job %s: %v", job.Name, err)
+			// Remove task from state (process never started)
+			a.do(func(s *agentState) {
+				delete(s.tasks, task.ID)
+			})
 			return
 		}
 		log.Printf("Job %s started successfully (task %s)", job.Name, task.ID)
@@ -271,23 +275,41 @@ func (a *Agent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
 }
 
-// startJob starts a job and returns the task
-func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
-	// Ensure job has an ID (for tests or direct calls without leader)
+// initJob sets defaults on a job (ID, driver) if not already set.
+func initJob(job *types.Job) {
 	if job.ID == "" {
 		job.ID = uuid.New().String()
 	}
-
-	// Derive driver from image if not set
 	if job.Driver == "" {
 		job.Driver = types.DriverFor(job.Image)
 	}
+}
+
+// newTask creates a Task from a Job. Call initJob(job) first.
+func newTask(job *types.Job) *types.Task {
+	return &types.Task{
+		ID:          uuid.New().String(),
+		JobID:       job.ID,
+		JobName:     job.Name,
+		Driver:      job.Driver,
+		Image:       job.Image,
+		State:       types.TaskRunning,
+		CPUShares:   job.CPUShares,
+		MemoryLimit: job.MemoryLimit,
+		StartedAt:   time.Now(),
+	}
+}
+
+// startJob prepares and starts a job process. The task must be pre-created
+// (via newTask). startJob allocates ports, runs the process, and stores in state.
+func (a *Agent) startJob(job *types.Job, task *types.Task) error {
+	initJob(job)
 
 	// Resolve platform-specific artifact (pick first matching this node's attributes)
 	if len(job.Artifacts) > 0 {
 		resolved := a.resolveArtifact(job.Artifacts)
 		if resolved == nil {
-			return nil, fmt.Errorf("no matching artifact for this node's attributes")
+			return fmt.Errorf("no matching artifact for this node's attributes")
 		}
 		job.Artifacts = []types.Artifact{*resolved}
 	}
@@ -307,15 +329,16 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 
 	ports, err := a.allocatePortsForJob(job)
 	if err != nil {
-		return nil, fmt.Errorf("failed to allocate ports: %w", err)
+		return fmt.Errorf("failed to allocate ports: %w", err)
+	}
+	task.Ports = ports
+
+	// Runner fills in Pid and registers internal state
+	if err := a.runnerFor(job.Driver).Run(job, task); err != nil {
+		return fmt.Errorf("failed to start: %w", err)
 	}
 
-	task, err := a.runnerFor(job.Driver).Run(job, ports)
-	if err != nil {
-		return nil, fmt.Errorf("failed to start: %w", err)
-	}
-
-	// Store in state and persist
+	// Store in state
 	a.do(func(s *agentState) {
 		s.jobs[job.ID] = job
 		s.tasks[task.ID] = task
@@ -328,7 +351,7 @@ func (a *Agent) startJob(job *types.Job) (*types.Task, error) {
 	} else {
 		go a.notifyLeader(job.Name, "started")
 	}
-	return task, nil
+	return nil
 }
 
 // allocatePorts allocates ports based on job port config
@@ -407,29 +430,35 @@ func (a *Agent) restartTask(task *types.Task) {
 		return
 	}
 
-	newTask, err := a.runnerFor(job.Driver).Run(job, ports)
-	if err != nil {
+	// Atomic swap: new task via newTask(), preserve RestartCount, no capacity gap
+	replacement := newTask(job)
+	replacement.Ports = ports
+	swapped := query(a, func(s *agentState) bool {
+		old := s.tasks[task.ID]
+		if old == nil {
+			return false
+		}
+		replacement.RestartCount = old.RestartCount + 1
+		delete(s.tasks, task.ID)
+		s.tasks[replacement.ID] = replacement
+		return true
+	})
+	if !swapped {
+		log.Printf("Task %s disappeared from state during restart", task.ID)
+		return
+	}
+
+	if err := a.runnerFor(job.Driver).Run(job, replacement); err != nil {
 		log.Printf("Failed to restart task %s: %v", task.ID, err)
 		a.do(func(s *agentState) {
-			if t := s.tasks[task.ID]; t != nil {
-				t.RestartCount++
+			if t := s.tasks[replacement.ID]; t != nil {
+				t.State = types.TaskFailed
 			}
 		})
 		return
 	}
 
-	// Replace old task with new in state (preserving RestartCount)
-	a.do(func(s *agentState) {
-		oldRestart := 0
-		if t := s.tasks[task.ID]; t != nil {
-			oldRestart = t.RestartCount
-		}
-		delete(s.tasks, task.ID)
-		newTask.RestartCount = oldRestart + 1
-		s.tasks[newTask.ID] = newTask
-	})
-
-	log.Printf("Restarted task %s -> %s (job %s), restart #%d", task.ID, newTask.ID, job.Name, restartCount+1)
+	log.Printf("Restarted task %s -> %s (job %s), restart #%d", task.ID, replacement.ID, job.Name, replacement.RestartCount)
 }
 
 // deleteJobByID removes job definition AND cleans up all tasks by job ID

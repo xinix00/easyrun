@@ -121,13 +121,9 @@ func TestRunnerRunWithIsolation(t *testing.T) {
 		Command: "echo isolated",
 	}
 
-	task, err := runner.Run(job, nil)
-	if err != nil {
+	task := &types.Task{ID: "test-isolated-task"}
+	if err := runner.Run(job, task); err != nil {
 		t.Fatalf("Run failed: %v", err)
-	}
-
-	if task == nil {
-		t.Fatal("Run returned nil task")
 	}
 
 	// Give it time to start
@@ -151,13 +147,9 @@ func TestRunnerRunWithoutIsolation(t *testing.T) {
 		Command: "echo not isolated",
 	}
 
-	task, err := runner.Run(job, nil)
-	if err != nil {
+	task := &types.Task{ID: "test-no-isolation-task"}
+	if err := runner.Run(job, task); err != nil {
 		t.Fatalf("Run failed: %v", err)
-	}
-
-	if task == nil {
-		t.Fatal("Run returned nil task")
 	}
 
 	// Wait for short-lived process to finish, then clean up.
@@ -189,8 +181,8 @@ func TestIsolationWithVolumes(t *testing.T) {
 		},
 	}
 
-	task, err := runner.Run(job, nil)
-	if err != nil {
+	task := &types.Task{ID: "test-volumes-task"}
+	if err := runner.Run(job, task); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -321,8 +313,8 @@ func TestIsolatedProcessCannotAccessRoot(t *testing.T) {
 		Command: "cat /etc/shadow 2>/dev/null && echo 'ACCESS_GRANTED' || echo 'ACCESS_DENIED'",
 	}
 
-	task, err := runner.Run(job, nil)
-	if err != nil {
+	task := &types.Task{ID: "test-isolation-check-task"}
+	if err := runner.Run(job, task); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 
@@ -364,8 +356,8 @@ func TestCleanupRemovesTaskDir(t *testing.T) {
 		Command: "sleep 10",
 	}
 
-	task, err := runner.Run(job, nil)
-	if err != nil {
+	task := &types.Task{ID: "test-cleanup-task"}
+	if err := runner.Run(job, task); err != nil {
 		t.Fatalf("Run failed: %v", err)
 	}
 

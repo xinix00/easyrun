@@ -41,12 +41,6 @@ type agentState struct {
 	jobs  map[string]*types.Job
 	tasks map[string]*types.Task
 	stateTime  time.Time
-
-	// Capacity reservations: resources claimed by accepted-but-not-yet-started jobs.
-	// Prevents TOCTOU race where concurrent /run requests all pass hasCapacity
-	// before any task appears in state.
-	reservedCPU int
-	reservedMem uint64
 }
 
 // Agent runs jobs and reports status
@@ -479,11 +473,9 @@ func (a *Agent) SaveState() {
 	}
 }
 
-// resourceUsage returns total CPU shares and memory used by running/stopping tasks + reservations.
+// resourceUsage returns total CPU shares and memory used by running/stopping tasks.
 // Stopping tasks count because they still consume resources until fully stopped.
 func (s *agentState) resourceUsage() (cpu int, mem uint64) {
-	cpu = s.reservedCPU
-	mem = s.reservedMem
 	for _, task := range s.tasks {
 		if task.State == types.TaskRunning || task.State == types.TaskStopping {
 			cpu += task.CPUShares

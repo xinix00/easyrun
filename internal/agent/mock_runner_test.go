@@ -3,7 +3,6 @@ package agent
 import (
 	"errors"
 	"sync"
-	"time"
 
 	"easyrun/internal/runner"
 	"easyrun/internal/types"
@@ -40,42 +39,28 @@ func NewMockRunner() *MockRunner {
 }
 
 // Run implements runner.Runner
-func (m *MockRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
+func (m *MockRunner) Run(job *types.Job, task *types.Task) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.onRun != nil {
 		if err := m.onRun(job); err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	if m.runErr != nil {
-		return nil, m.runErr
+		return m.runErr
 	}
 
-	taskID := "task-" + job.Name
 	m.nextPid++
+	task.Pid = m.nextPid
 
-	task := &types.Task{
-		ID:          taskID,
-		JobID:       job.ID,
-		JobName:     job.Name,
-		Driver:      types.DriverFor(job.Image),
-		Image:       job.Image,
-		Ports:       ports,
-		Pid:         m.nextPid,
-		State:       types.TaskRunning,
-		StartedAt:   time.Now(),
-		CPUShares:   job.CPUShares,
-		MemoryLimit: job.MemoryLimit,
-	}
+	m.tasks[task.ID] = task
+	m.stdout[task.ID] = runner.NewLogBroadcaster()
+	m.stderr[task.ID] = runner.NewLogBroadcaster()
 
-	m.tasks[taskID] = task
-	m.stdout[taskID] = runner.NewLogBroadcaster()
-	m.stderr[taskID] = runner.NewLogBroadcaster()
-
-	return task, nil
+	return nil
 }
 
 // Stop implements runner.Runner

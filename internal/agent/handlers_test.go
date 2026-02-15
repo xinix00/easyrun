@@ -828,8 +828,8 @@ func TestHandleLogsStdoutStream(t *testing.T) {
 
 	// Start a job to create a task with log broadcasters
 	job := &types.Job{ID: "job-1", Name: "log-test", Command: "echo hello"}
-	task, err := agent.startJob(job)
-	if err != nil {
+	task := newTask(job)
+	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 

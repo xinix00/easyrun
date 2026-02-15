@@ -34,8 +34,8 @@ func TestChaos_AllTasksCrashSimultaneously(t *testing.T) {
 			MaxRestarts: 2,
 		}
 
-		task, err := agent.startJob(job)
-		if err != nil {
+		task := newTask(job)
+		if err := agent.startJob(job, task); err != nil {
 			t.Fatalf("Failed to start job %d: %v", i, err)
 		}
 		mockRunner.tasks[task.ID] = task
@@ -87,8 +87,8 @@ func TestChaos_TaskExceedsMaxRestarts(t *testing.T) {
 		MaxRestarts: 3,
 	}
 
-	task, err := agent.startJob(job)
-	if err != nil {
+	task := newTask(job)
+	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("Failed to start: %v", err)
 	}
 
@@ -175,14 +175,16 @@ func TestChaos_CapacityExhaustion(t *testing.T) {
 		MemoryLimit: 512 * 1024 * 1024, // 512MB
 	}
 
-	task1, _ := agent.startJob(bigJob)
+	task1 := newTask(bigJob)
+	_ = agent.startJob(bigJob, task1)
 	task2Job := &types.Job{
 		Name:        "big-job-2",
 		Command:     "./big2",
 		CPUShares:   512,
 		MemoryLimit: 512 * 1024 * 1024,
 	}
-	task2, _ := agent.startJob(task2Job)
+	task2 := newTask(task2Job)
+	_ = agent.startJob(task2Job, task2)
 
 	// Try to add another job - should fail (no capacity)
 	overflowJob := &types.Job{
@@ -220,7 +222,8 @@ func TestChaos_TaskZombie(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	job := &types.Job{Name: "zombie-job", Command: "./app", MaxRestarts: 2}
-	task, _ := agent.startJob(job)
+	task := newTask(job)
+	_ = agent.startJob(job, task)
 
 	// Runner reports task as stopped (process died) but task state says running
 	zombieRunner.tasks[task.ID].actualState = types.TaskStopped
@@ -256,19 +259,10 @@ type zombieRunner struct {
 	tasks map[string]*zombieTask
 }
 
-func (r *zombieRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
-	task := &types.Task{
-		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		JobID:       job.ID,
-		JobName:     job.Name,
-		State:       types.TaskRunning,
-		Ports:       ports,
-		Pid:         12345,
-		CPUShares:   job.CPUShares,
-		MemoryLimit: job.MemoryLimit,
-	}
+func (r *zombieRunner) Run(job *types.Job, task *types.Task) error {
+	task.Pid = 12345
 	r.tasks[task.ID] = &zombieTask{task: task, actualState: types.TaskRunning}
-	return task, nil
+	return nil
 }
 
 func (r *zombieRunner) Stop(task *types.Task) error {
@@ -304,8 +298,8 @@ func TestChaos_StateCorruption(t *testing.T) {
 	// Add jobs
 	job1 := &types.Job{Name: "job-1", Command: "./app1"}
 	job2 := &types.Job{Name: "job-2", Command: "./app2"}
-	_, _ = agent.startJob(job1)
-	_, _ = agent.startJob(job2)
+	_ = agent.startJob(job1, newTask(job1))
+	_ = agent.startJob(job2, newTask(job2))
 
 	// Simulate corruption: task references non-existent job
 	agent.do(func(s *agentState) {
@@ -346,7 +340,7 @@ func TestChaos_RapidJobDeletionAndCreation(t *testing.T) {
 			Command: fmt.Sprintf("./app-v%d", i),
 		}
 
-		_, err := agent.startJob(job)
+		err := agent.startJob(job, newTask(job))
 		if err != nil {
 			t.Fatalf("Failed to start job %d: %v", i, err)
 		}
@@ -377,17 +371,8 @@ type crashingTask struct {
 	state types.TaskState
 }
 
-func (r *crashingRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
-	task := &types.Task{
-		ID:          fmt.Sprintf("task-%d", time.Now().UnixNano()),
-		JobID:       job.ID,
-		JobName:     job.Name,
-		State:       types.TaskRunning,
-		Ports:       ports,
-		Pid:         12345,
-		CPUShares:   job.CPUShares,
-		MemoryLimit: job.MemoryLimit,
-	}
+func (r *crashingRunner) Run(job *types.Job, task *types.Task) error {
+	task.Pid = 12345
 	r.mu.Lock()
 	r.tasks[task.ID] = &crashingTask{task: task, state: types.TaskRunning}
 	r.mu.Unlock()
@@ -403,7 +388,7 @@ func (r *crashingRunner) Run(job *types.Job, ports map[string]int) (*types.Task,
 		r.mu.Unlock()
 	}()
 
-	return task, nil
+	return nil
 }
 
 func (r *crashingRunner) Stop(task *types.Task) error {

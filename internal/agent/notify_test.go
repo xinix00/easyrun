@@ -75,8 +75,7 @@ func TestStartJobNotify_WithoutHealthCheck(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{ID: "job-1", Name: "my-api", Command: "echo hello"}
-	_, err := agent.startJob(job)
-	if err != nil {
+	if err := agent.startJob(job, newTask(job)); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 
@@ -121,8 +120,7 @@ func TestStartJobNotify_WithHealthCheck(t *testing.T) {
 			Timeout: time.Second,
 		},
 	}
-	_, err := agent.startJob(job)
-	if err != nil {
+	if err := agent.startJob(job, newTask(job)); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 
@@ -355,8 +353,8 @@ func TestCrashEventFired(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{ID: "job-1", Name: "crasher", Command: "echo hello"}
-	task, err := agent.startJob(job)
-	if err != nil {
+	task := newTask(job)
+	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
 

@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"easyrun/internal/types"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -37,19 +35,19 @@ func NewDockerRunner() *DockerRunner {
 	}
 }
 
-// Run starts a Docker container for the job
-func (r *DockerRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
+// Run starts a Docker container for the job. The task is pre-created by the caller;
+// Run registers internal state (log streaming).
+func (r *DockerRunner) Run(job *types.Job, task *types.Task) error {
 	if job.Image == "" {
-		return nil, fmt.Errorf("image is required for docker runner")
+		return fmt.Errorf("image is required for docker runner")
 	}
 
-	taskID := uuid.New().String()
-	containerName := containerPrefix + taskID
+	containerName := containerPrefix + task.ID
 
 	args := []string{"run", "-d", "--name", containerName}
 
 	// Port mappings: -p hostPort:containerPort
-	for name, hostPort := range ports {
+	for name, hostPort := range task.Ports {
 		containerPort := job.Ports[name]
 		if containerPort == 0 {
 			containerPort = hostPort
@@ -63,7 +61,7 @@ func (r *DockerRunner) Run(job *types.Job, ports map[string]int) (*types.Task, e
 	}
 
 	// Port env vars (same convention as ExecRunner)
-	for _, env := range PortEnvVars(ports) {
+	for _, env := range PortEnvVars(task.Ports) {
 		args = append(args, "-e", env)
 	}
 
@@ -91,24 +89,13 @@ func (r *DockerRunner) Run(job *types.Job, ports map[string]int) (*types.Task, e
 	cmd := exec.Command("docker", args...)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("docker run failed: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("docker run failed: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 
 	// Start log streaming
-	r.startLogStreaming(taskID, containerName)
+	r.startLogStreaming(task.ID, containerName)
 
-	return &types.Task{
-		ID:          taskID,
-		JobID:       job.ID,
-		JobName:     job.Name,
-		Driver:      types.DriverDocker,
-		Image:       job.Image,
-		Ports:       ports,
-		State:       types.TaskRunning,
-		StartedAt:   time.Now(),
-		CPUShares:   job.CPUShares,
-		MemoryLimit: job.MemoryLimit,
-	}, nil
+	return nil
 }
 
 // Stop stops and removes a Docker container

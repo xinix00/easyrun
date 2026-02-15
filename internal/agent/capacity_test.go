@@ -459,6 +459,78 @@ func TestConcurrentDispatchRespectsCapacity(t *testing.T) {
 	}
 }
 
+// TestTaskInStateImmediatelyAfterAccept verifies that after handleRun returns
+// 202 Accepted, the task is immediately visible in state (resourceUsage counts it).
+//
+// BUG: Currently, handleRun uses a reservation system (reservedCPU/reservedMem)
+// as a placeholder until the goroutine finishes runner.Run() and adds the task
+// to state. But restartTask doesn't use reservations, and the reservation system
+// adds complexity. The real fix: add the task to state BEFORE running the process.
+func TestTaskInStateImmediatelyAfterAccept(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+
+	// Slow runner: simulates process startup taking time
+	started := make(chan struct{})
+	mockRunner.onRun = func(job *types.Job) error {
+		<-started // block until test releases
+		return nil
+	}
+
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 2, MemoryBytes: 1024 * 1024 * 1024}) // 2 cores = 2048 shares
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Send /run request (1024 CPU shares = 1 core)
+	job := types.Job{
+		ID:        "job-1",
+		Name:      "test-job",
+		Command:   "echo hello",
+		CPUShares: 1024,
+	}
+	body, _ := json.Marshal(job)
+	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	agent.handleRun(w, req)
+
+	if w.Code != 202 {
+		t.Fatalf("expected 202, got %d", w.Code)
+	}
+
+	// Runner is still blocked — task should already be in state
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		result := make([]*types.Task, 0)
+		for _, task := range s.tasks {
+			result = append(result, task)
+		}
+		return result
+	})
+
+	if len(tasks) != 1 {
+		t.Errorf("expected 1 task in state immediately after accept, got %d "+
+			"(task only appears after runner.Run completes — overbooking window!)", len(tasks))
+	}
+
+	// Resource usage should reflect the accepted task
+	cpu := query(agent, func(s *agentState) int {
+		c, _ := s.resourceUsage()
+		return c
+	})
+
+	if cpu < 1024 {
+		t.Errorf("expected resourceUsage CPU >= 1024 after accept, got %d "+
+			"(only reservedCPU counts it, not a real task)", cpu)
+	}
+
+	// Release runner so goroutine can finish
+	close(started)
+	time.Sleep(50 * time.Millisecond)
+}
+
 func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()

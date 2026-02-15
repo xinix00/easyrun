@@ -13,8 +13,6 @@ import (
 	"time"
 
 	"easyrun/internal/types"
-
-	"github.com/google/uuid"
 )
 
 const (
@@ -47,18 +45,19 @@ func NewExecRunner(config *Config) *ExecRunner {
 	}
 }
 
-// Run starts a job
-func (r *ExecRunner) Run(job *types.Job, ports map[string]int) (*types.Task, error) {
+// Run starts a process for the job. The task is pre-created by the caller;
+// Run fills in Pid and registers internal state (process handle, log broadcasters).
+func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 	if job.Command == "" {
-		return nil, errors.New("command is required")
+		return errors.New("command is required")
 	}
 
-	taskID := uuid.New().String()
+	taskID := task.ID
 
 	// Setup task directory
 	taskDir, err := r.setupTaskDir(taskID, job)
 	if err != nil {
-		return nil, fmt.Errorf("failed to setup task directory: %w", err)
+		return fmt.Errorf("failed to setup task directory: %w", err)
 	}
 
 	// Download artifact if specified (agent already resolved to first matching entry)
@@ -66,12 +65,12 @@ func (r *ExecRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 		// Download directly to taskDir so commands like "./binary" work
 		if err := downloadArtifact(&job.Artifacts[0], taskDir); err != nil {
 			r.cleanupTaskDir(taskID)
-			return nil, fmt.Errorf("failed to download artifact: %w", err)
+			return fmt.Errorf("failed to download artifact: %w", err)
 		}
 	}
 
 	// Build port environment variables
-	portEnvVars := PortEnvVars(ports)
+	portEnvVars := PortEnvVars(task.Ports)
 
 	// Setup command with platform-specific isolation
 	cmd := r.setupCommand(job, taskDir, portEnvVars)
@@ -83,19 +82,19 @@ func (r *ExecRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
 		r.cleanupTaskDir(taskID)
-		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
 		r.cleanupTaskDir(taskID)
-		return nil, fmt.Errorf("failed to create stderr pipe: %w", err)
+		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
 	// Start the process
 	if err := cmd.Start(); err != nil {
 		r.cleanupTaskDir(taskID)
-		return nil, fmt.Errorf("failed to start process: %w", err)
+		return fmt.Errorf("failed to start process: %w", err)
 	}
 
 	// Start log broadcasting
@@ -117,18 +116,8 @@ func (r *ExecRunner) Run(job *types.Job, ports map[string]int) (*types.Task, err
 		_ = cmd.Wait()
 	}()
 
-	return &types.Task{
-		ID:          taskID,
-		JobID:       job.ID,
-		JobName:     job.Name,
-		Driver:      types.DriverExec,
-		Ports:       ports,
-		Pid:         cmd.Process.Pid,
-		State:       types.TaskRunning,
-		StartedAt:   time.Now(),
-		CPUShares:   job.CPUShares,
-		MemoryLimit: job.MemoryLimit,
-	}, nil
+	task.Pid = cmd.Process.Pid
+	return nil
 }
 
 // Stop stops a running task
