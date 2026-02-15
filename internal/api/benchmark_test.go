@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -304,6 +305,7 @@ func BenchmarkJSONDecoding(b *testing.B) {
 
 // mockJobStore for API benchmarks
 type mockJobStore struct {
+	mu   sync.Mutex
 	jobs map[string]*types.Job
 }
 
@@ -314,6 +316,8 @@ func newMockJobStore() *mockJobStore {
 }
 
 func (m *mockJobStore) GetJobs() []*types.Job {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	jobs := make([]*types.Job, 0, len(m.jobs))
 	for _, j := range m.jobs {
 		jobs = append(jobs, j)
@@ -322,14 +326,20 @@ func (m *mockJobStore) GetJobs() []*types.Job {
 }
 
 func (m *mockJobStore) GetJob(id string) *types.Job {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.jobs[id]
 }
 
 func (m *mockJobStore) StoreJob(job *types.Job) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.jobs[job.ID] = job
 }
 
 func (m *mockJobStore) DeleteJob(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	delete(m.jobs, id)
 }
 
@@ -338,6 +348,8 @@ func (m *mockJobStore) GetStateTime() time.Time {
 }
 
 func (m *mockJobStore) SyncJobs(jobs []*types.Job, updated time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	for _, job := range jobs {
 		m.jobs[job.ID] = job
 	}
