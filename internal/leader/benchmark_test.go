@@ -30,7 +30,7 @@ func BenchmarkDispatchJob(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -76,7 +76,7 @@ func BenchmarkHeartbeat(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		agentID := fmt.Sprintf("agent-%d", i%100)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i%100)
-		leader.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
+		leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 	}
 }
 
@@ -90,7 +90,7 @@ func BenchmarkGetAgents(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -144,7 +144,7 @@ func BenchmarkRoundRobinSelection(b *testing.B) {
 	for i := 0; i < 100; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -179,7 +179,7 @@ func BenchmarkConcurrentHeartbeats(b *testing.B) {
 		for pb.Next() {
 			agentID := fmt.Sprintf("agent-%d", i%1000)
 			endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i%1000)
-			leader.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
+			leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 			i++
 		}
 	})
@@ -195,7 +195,7 @@ func BenchmarkPlacedUpdate(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()

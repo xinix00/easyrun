@@ -50,7 +50,7 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
+		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 	}
 
 	req := httptest.NewRequest("GET", "/v1/agents", nil)
@@ -118,7 +118,7 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
-		l.Heartbeat(agentID, agentEndpoint(ts), nil, nil, time.Time{}, "")
+		l.Heartbeat(agentID, agentEndpoint(ts), nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()
@@ -196,7 +196,7 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
-		l.Heartbeat(agentID, agentEndpoint(ts), nil, nil, time.Time{}, "")
+		l.Heartbeat(agentID, agentEndpoint(ts), nil, time.Time{}, "")
 	}
 
 	req := httptest.NewRequest("GET", "/v1/status", nil)
@@ -230,7 +230,7 @@ func BenchmarkConcurrentRequests(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
-		l.Heartbeat(agentID, agentEndpoint(ts), nil, nil, time.Time{}, "")
+		l.Heartbeat(agentID, agentEndpoint(ts), nil, time.Time{}, "")
 	}
 
 	b.ResetTimer()

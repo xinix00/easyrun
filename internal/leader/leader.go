@@ -155,10 +155,11 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 	return <-result
 }
 
-// Heartbeat updates agent's LastSeen, syncs placed counts, and syncs jobs.
+// Heartbeat updates agent's LastSeen and syncs jobs.
+// Does NOT update placed counts — leader tracks those from dispatch only.
 // Does NOT trigger reconciliation — that's RegisterAgent's job.
 // Returns (nil, false) if agent is unknown — caller should return 404 to force re-register.
-func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, placed map[string]int, stateTime time.Time, version string) ([]*types.Job, bool) {
+func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime time.Time, version string) ([]*types.Job, bool) {
 	known := query(l, func(s *leaderState) bool {
 		agent, ok := s.agents[id]
 		if !ok {
@@ -166,9 +167,6 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, placed map[st
 		}
 		agent.LastSeen = time.Now()
 		agent.Version = version
-		if placed != nil {
-			s.placed[id] = placed
-		}
 		return true
 	})
 

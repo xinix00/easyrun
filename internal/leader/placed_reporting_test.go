@@ -50,8 +50,8 @@ func TestGetPlacedByJobName_PreExistingJobs(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Heartbeat with same stateTime (NOT newer → nameToID NOT updated via heartbeat)
-	l.Heartbeat("agent-1", "http://10.0.0.1:8080", jobs, nil, store.stateTime, "")
-	l.Heartbeat("agent-2", "http://10.0.0.2:8080", jobs, nil, store.stateTime, "")
+	l.Heartbeat("agent-1", "http://10.0.0.1:8080", jobs, store.stateTime, "")
+	l.Heartbeat("agent-2", "http://10.0.0.2:8080", jobs, store.stateTime, "")
 	time.Sleep(20 * time.Millisecond)
 
 	// BUG: GetPlacedByJobName returned empty map because nameToID was empty
@@ -181,23 +181,29 @@ func TestGetPlacedByJobName_DaemonJob(t *testing.T) {
 
 // TestGetPlacedByJobName_UpdatedJob verifies that after a rolling update
 // (old job ID → new job ID), placed counts still work correctly.
+// Placed is tracked via trackPlacement (dispatch) and RegisterAgent, NOT heartbeat.
 func TestGetPlacedByJobName_UpdatedJob(t *testing.T) {
+	agent1 := newMockAgent()
+	agent2 := newMockAgent()
+	defer agent1.Close()
+	defer agent2.Close()
+
 	store := NewMockJobStore()
-
-	// Job v1 in store
-	jobV1 := &types.Job{ID: "v1-id", Name: "myapp", Command: "./myapp-v1", Count: 2}
-	store.StoreJob(jobV1)
-	store.stateTime = time.Now()
-
 	l := New("leader", store, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.stateLoop(ctx)
 
-	// Agents have v1 running
-	l.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", map[string]int{"v1-id": 1})
-	l.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", map[string]int{"v1-id": 1})
+	// Register agents and dispatch v1
+	l.RegisterAgent("agent-1", agent1.URL(), "", nil)
+	l.RegisterAgent("agent-2", agent2.URL(), "", nil)
+	time.Sleep(20 * time.Millisecond)
+
+	jobV1 := &types.Job{ID: "v1-id", Name: "myapp", Command: "./myapp-v1", Count: 2}
+	if err := l.DispatchJob(jobV1); err != nil {
+		t.Fatalf("DispatchJob v1 failed: %v", err)
+	}
 	time.Sleep(20 * time.Millisecond)
 
 	placed := l.GetPlacedByJobName()
@@ -205,21 +211,17 @@ func TestGetPlacedByJobName_UpdatedJob(t *testing.T) {
 		t.Errorf("before update: myapp placed = %d, want 2", placed["myapp"])
 	}
 
-	// Simulate: new job version stored, nameToID updated
+	// Rolling update: v1 → v2 (trackPlacement handles new placed counts)
 	jobV2 := &types.Job{ID: "v2-id", Name: "myapp", Command: "./myapp-v2", Count: 2}
-	store.StoreJob(jobV2)
-	l.do(func(s *leaderState) { s.nameToID["myapp"] = "v2-id" })
-
-	// Agent-1 now reports v2
-	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, map[string]int{"v2-id": 1}, time.Time{}, "")
-	// Agent-2 still on v1
-	l.Heartbeat("agent-2", "http://10.0.0.2:8080", nil, map[string]int{"v1-id": 1}, time.Time{}, "")
+	if err := l.UpdateJob(jobV2); err != nil {
+		t.Fatalf("UpdateJob v2 failed: %v", err)
+	}
 	time.Sleep(20 * time.Millisecond)
 
-	// Only v2 instances show up (nameToID points to v2-id now)
+	// After rolling update: nameToID points to v2-id, placed has v2-id counts
 	placed = l.GetPlacedByJobName()
-	if placed["myapp"] != 1 {
-		t.Errorf("after update: myapp placed = %d, want 1 (only v2 counted)", placed["myapp"])
+	if placed["myapp"] != 2 {
+		t.Errorf("after update: myapp placed = %d, want 2", placed["myapp"])
 	}
 }
 

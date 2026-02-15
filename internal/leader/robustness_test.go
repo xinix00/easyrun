@@ -34,9 +34,9 @@ func TestThreeNodeClusterOneDies(t *testing.T) {
 	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	l.RegisterAgent("agent-c", agentC.URL(), "", nil)
-	l.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-c", agentC.URL(), nil, nil, time.Time{}, "")
+	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-c", agentC.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
@@ -64,8 +64,8 @@ func TestThreeNodeClusterOneDies(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Keep A and C alive
-	l.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, nil, time.Now(), "")
-	l.Heartbeat("agent-c", agentC.URL(), []*types.Job{job}, nil, time.Now(), "")
+	l.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, time.Now(), "")
+	l.Heartbeat("agent-c", agentC.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	l.checkDeadAgents()
@@ -110,8 +110,8 @@ func TestDaemonStableDuringBlipNewNodeJoins(t *testing.T) {
 	// Dispatch daemon to A and B
 	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	l.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	daemon := &types.Job{
@@ -134,7 +134,7 @@ func TestDaemonStableDuringBlipNewNodeJoins(t *testing.T) {
 
 	// Agent A has network blip (stops heartbeating, timeout not reached)
 	time.Sleep(100 * time.Millisecond)
-	l.Heartbeat("agent-b", agentB.URL(), []*types.Job{daemon}, nil, time.Now(), "")
+	l.Heartbeat("agent-b", agentB.URL(), []*types.Job{daemon}, time.Now(), "")
 
 	// Agent C joins during A's blip via RegisterAgent
 	l.RegisterAgent("agent-c", agentC.URL(), "", nil)
@@ -154,7 +154,7 @@ func TestDaemonStableDuringBlipNewNodeJoins(t *testing.T) {
 	}
 
 	// Agent A recovers
-	l.Heartbeat("agent-a", agentA.URL(), []*types.Job{daemon}, nil, time.Now(), "")
+	l.Heartbeat("agent-a", agentA.URL(), []*types.Job{daemon}, time.Now(), "")
 	time.Sleep(50 * time.Millisecond)
 
 	// Still exactly 1 daemon per agent, 3 total
@@ -182,8 +182,8 @@ func TestHeartbeatReducedPlacedTriggersReconcile(t *testing.T) {
 
 	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	l.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
@@ -239,8 +239,8 @@ func TestMixedJobsAgentDies(t *testing.T) {
 
 	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	l.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
@@ -264,7 +264,7 @@ func TestMixedJobsAgentDies(t *testing.T) {
 	agentA.Close()
 	time.Sleep(300 * time.Millisecond)
 
-	l.Heartbeat("agent-b", agentB.URL(), []*types.Job{daemon, regular}, nil, time.Now(), "")
+	l.Heartbeat("agent-b", agentB.URL(), []*types.Job{daemon, regular}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	l.checkDeadAgents()
@@ -316,9 +316,9 @@ func TestGracefulLeaveThreeNodes(t *testing.T) {
 	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
 	l.RegisterAgent("agent-c", agentC.URL(), "", nil)
-	l.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-c", agentC.URL(), nil, nil, time.Time{}, "")
+	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-c", agentC.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
@@ -383,8 +383,8 @@ func TestAgentDiesAndRejoinsGetsDaemon(t *testing.T) {
 
 	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	l.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
@@ -401,7 +401,7 @@ func TestAgentDiesAndRejoinsGetsDaemon(t *testing.T) {
 	agentB.Close()
 	time.Sleep(300 * time.Millisecond)
 
-	l.Heartbeat("agent-a", agentA.URL(), []*types.Job{daemon}, nil, time.Now(), "")
+	l.Heartbeat("agent-a", agentA.URL(), []*types.Job{daemon}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	l.checkDeadAgents()
@@ -457,8 +457,8 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 
 	l.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	l.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	l.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	l.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	l.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
@@ -480,7 +480,7 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 	agentA.Close()
 	time.Sleep(300 * time.Millisecond)
 
-	l.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	l.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	l.checkDeadAgents()
@@ -509,7 +509,7 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 
 	// Zombie registers with its placed data and heartbeats for keepalive
 	l.RegisterAgent("agent-a", zombieA.URL(), "", map[string]int{job.ID: aTasks})
-	l.Heartbeat("agent-a", zombieA.URL(), []*types.Job{job}, nil, time.Now(), "")
+	l.Heartbeat("agent-a", zombieA.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(100 * time.Millisecond)
 
 	// No more tasks dispatched (totalPlaced > desired)

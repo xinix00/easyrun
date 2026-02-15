@@ -34,7 +34,7 @@ func TestUpdateJobRolling(t *testing.T) {
 	for i, agent := range agents {
 		agentID := string(rune('a' + i))
 		leader.RegisterAgent("agent-"+agentID, agent.URL(), "", nil)
-		leader.Heartbeat("agent-"+agentID, agent.URL(), nil, nil, time.Time{}, "")
+		leader.Heartbeat("agent-"+agentID, agent.URL(), nil, time.Time{}, "")
 	}
 
 	// Deploy initial version
@@ -104,7 +104,7 @@ func TestUpdateJobRecreate(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -160,7 +160,7 @@ func TestUpdateJobBlueGreen(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -229,7 +229,7 @@ func TestUpdateJobRollingFailureKeepsOld(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -297,7 +297,7 @@ func TestUpdateJobBlueGreenFailureKeepsOld(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", agent.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-1", agent.URL(), nil, time.Time{}, "")
 
 	// Deploy initial version
 	oldJob := &types.Job{

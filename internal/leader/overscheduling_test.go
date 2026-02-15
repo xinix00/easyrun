@@ -38,7 +38,7 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 
 	// Register agent-1
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
-	ldr.Heartbeat("agent-1", agent1.URL(), nil, nil, time.Time{}, "")
+	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{ID: "app-id", Name: "app", Command: "./app", Count: 20}
@@ -131,8 +131,8 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"app-id": 10})
 	ldr.RegisterAgent("agent-2", agent2.URL(), "", map[string]int{"app-id": 10})
 	// Heartbeat for keepalive
-	ldr.Heartbeat("agent-1", agent1.URL(), []*types.Job{job}, nil, time.Now(), "")
-	ldr.Heartbeat("agent-2", agent2.URL(), []*types.Job{job}, nil, time.Now(), "")
+	ldr.Heartbeat("agent-1", agent1.URL(), []*types.Job{job}, time.Now(), "")
+	ldr.Heartbeat("agent-2", agent2.URL(), []*types.Job{job}, time.Now(), "")
 
 	// Wait for settle timer + reconciliation
 	time.Sleep(500 * time.Millisecond)
@@ -147,6 +147,91 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	if total > 20 {
 		t.Errorf("Over-scheduling! Got %d total tasks, expected at most 20 "+
 			"(agents already had 10+10=20 from old leader)", total)
+	}
+}
+
+// TestAgentRestartHeartbeatRaceOverScheduling reproduces the 11/10 over-scheduling
+// bug when turning an agent off and on.
+//
+// Race condition:
+// 1. 3 agents, job count=10: placed a1=4, a2=3, a3=3
+// 2. Agent-2 goes down → leader dispatches 3 replacements to a1 and a3
+//    → trackPlacement updates: placed a1=6, a3=4 (total=10)
+// 3. Agent-1 sends heartbeat with placed={4} — stale because the newly
+//    dispatched tasks haven't appeared in s.tasks yet (handleRun returns
+//    202 Accepted, task starts in background goroutine)
+//    → leader REPLACES placed[a1] from 6 to 4 (2 dispatches lost!)
+//    → placed: a1=4, a3=4 (total=8)
+// 4. Agent-2 comes back → RegisterAgent → reconcileJobs sees total=8
+//    → dispatches 2 more → 12 total tasks dispatched (expected 10)
+func TestAgentRestartHeartbeatRaceOverScheduling(t *testing.T) {
+	agents := make([]*mockAgent, 3)
+	for i := range agents {
+		agents[i] = newMockAgent()
+		defer agents[i].Close()
+	}
+
+	store := NewMockJobStore()
+	ldr := New("leader", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ldr.stateLoop(ctx)
+
+	// Register all 3 agents
+	for i := range agents {
+		agentID := fmt.Sprintf("agent-%d", i+1)
+		ldr.RegisterAgent(agentID, agents[i].URL(), "", nil)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	// Dispatch job count=10 → round-robin: a1=4, a2=3, a3=3
+	job := &types.Job{ID: "app-id", Name: "app", Command: "./app", Count: 10}
+	if err := ldr.DispatchJob(job); err != nil {
+		t.Fatalf("DispatchJob failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Verify initial placement
+	a1Initial := agents[0].TaskCount()
+	a2Initial := agents[1].TaskCount()
+	a3Initial := agents[2].TaskCount()
+	total := a1Initial + a2Initial + a3Initial
+	t.Logf("Initial: a1=%d, a2=%d, a3=%d (total=%d)", a1Initial, a2Initial, a3Initial, total)
+	if total != 10 {
+		t.Fatalf("Initial dispatch should be 10, got %d", total)
+	}
+
+	// ---- Agent-2 goes down ----
+	agents[1].ClearTasks()
+	ldr.UnregisterAgent("agent-2")
+	time.Sleep(50 * time.Millisecond) // let trackPlacement ops settle
+
+	t.Logf("After a2 down: a1=%d (+%d), a3=%d (+%d)",
+		agents[0].TaskCount(), agents[0].TaskCount()-a1Initial,
+		agents[2].TaskCount(), agents[2].TaskCount()-a3Initial)
+
+	// ---- Stale heartbeat from agent-1 ----
+	// In production: agent-1 received /run (202 Accepted) but task hasn't
+	// appeared in s.tasks yet → GetPlacedTaskCounts() returns OLD count.
+	// This heartbeat REPLACES the leader's placed[a1] with stale data.
+	ldr.Heartbeat("agent-1", agents[0].URL(), nil, time.Time{}, "")
+	time.Sleep(20 * time.Millisecond)
+
+	// ---- Agent-2 comes back ----
+	ldr.RegisterAgent("agent-2", agents[1].URL(), "", nil)
+	time.Sleep(100 * time.Millisecond)
+
+	// Count total tasks across all agents
+	finalTotal := agents[0].TaskCount() + agents[1].TaskCount() + agents[2].TaskCount()
+	t.Logf("Final: a1=%d, a2=%d, a3=%d (total=%d, desired=10)",
+		agents[0].TaskCount(), agents[1].TaskCount(), agents[2].TaskCount(), finalTotal)
+
+	if finalTotal != 10 {
+		t.Errorf("Over-scheduling! Got %d total tasks, expected 10.\n"+
+			"Heartbeat from agent-1 replaced placed count from %d to %d (stale),\n"+
+			"causing reconcile to dispatch %d extra tasks.",
+			finalTotal, agents[0].TaskCount(), a1Initial, finalTotal-10)
 	}
 }
 
@@ -182,9 +267,9 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
 	ldr.RegisterAgent("agent-2", agent2.URL(), "", nil)
 	ldr.RegisterAgent("agent-3", agent3.URL(), "", nil)
-	ldr.Heartbeat("agent-1", agent1.URL(), nil, nil, time.Time{}, "")
-	ldr.Heartbeat("agent-2", agent2.URL(), nil, nil, time.Time{}, "")
-	ldr.Heartbeat("agent-3", agent3.URL(), nil, nil, time.Time{}, "")
+	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
+	ldr.Heartbeat("agent-2", agent2.URL(), nil, time.Time{}, "")
+	ldr.Heartbeat("agent-3", agent3.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Dispatch 20 tasks (round-robin across 3 agents → 7+7+6)

@@ -21,7 +21,7 @@ func TestCountMinusOneDispatchesOncePerAgent(t *testing.T) {
 	for i := 1; i <= 3; i++ {
 		agentID := string(rune('a' + i - 1))
 		leader.RegisterAgent("agent-"+agentID, "http://10.0.0.1:8080", "", nil)
-		leader.Heartbeat("agent-"+agentID, "http://10.0.0.1:8080", nil, nil, time.Time{}, "")
+		leader.Heartbeat("agent-"+agentID, "http://10.0.0.1:8080", nil, time.Time{}, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -60,9 +60,9 @@ func TestCountMinusOneWithTwoAgents(t *testing.T) {
 
 	// Register 2 agents
 	leader.RegisterAgent("agent-a", "http://10.0.0.1:8080", "", nil)
-	leader.Heartbeat("agent-a", "http://10.0.0.1:8080", nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-a", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	leader.RegisterAgent("agent-b", "http://10.0.0.2:8080", "", nil)
-	leader.Heartbeat("agent-b", "http://10.0.0.2:8080", nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-b", "http://10.0.0.2:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	agents := leader.GetAgents()
@@ -101,11 +101,11 @@ func TestCountMinusOneDoesNotUseRoundRobin(t *testing.T) {
 
 	// Register agents in specific order
 	leader.RegisterAgent("agent-a", "http://10.0.0.1:8080", "", nil)
-	leader.Heartbeat("agent-a", "http://10.0.0.1:8080", nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-a", "http://10.0.0.1:8080", nil, time.Time{}, "")
 	leader.RegisterAgent("agent-b", "http://10.0.0.2:8080", "", nil)
-	leader.Heartbeat("agent-b", "http://10.0.0.2:8080", nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-b", "http://10.0.0.2:8080", nil, time.Time{}, "")
 	leader.RegisterAgent("agent-c", "http://10.0.0.3:8080", "", nil)
-	leader.Heartbeat("agent-c", "http://10.0.0.3:8080", nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-c", "http://10.0.0.3:8080", nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
 	// Deploy count=-1 job twice (should hit same agents each time)

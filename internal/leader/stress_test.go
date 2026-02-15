@@ -44,7 +44,7 @@ func TestMassiveScale(t *testing.T) {
 				agentID := fmt.Sprintf("agent-%d", i)
 				endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 				leader.RegisterAgent(agentID, endpoint, "", nil)
-				leader.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 			}
 			registerTime := time.Since(start)
 
@@ -102,7 +102,7 @@ func BenchmarkMassiveAgents(b *testing.B) {
 			for i := 0; i < size; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 			}
 
 			b.ResetTimer()
@@ -132,7 +132,7 @@ func BenchmarkMassiveJobs(b *testing.B) {
 			for i := 0; i < 10; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 			}
 
 			// Create jobs
@@ -211,7 +211,7 @@ func BenchmarkHeartbeatScale(b *testing.B) {
 			for i := 0; i < count; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 			}
 
 			b.ResetTimer()
@@ -220,7 +220,7 @@ func BenchmarkHeartbeatScale(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				agentID := fmt.Sprintf("agent-%d", i%count)
 				endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i%count)
-				leader.Heartbeat(agentID, endpoint, nil, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
 			}
 
 			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "heartbeats/sec")
@@ -251,7 +251,7 @@ func BenchmarkPlacementScale(b *testing.B) {
 			for i := 0; i < s.agents; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 			}
 
 			// Create placement for all jobs
@@ -297,7 +297,7 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, nil, time.Time{}, "")
+		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
 	}
 
 	for i := 0; i < 10000; i++ {

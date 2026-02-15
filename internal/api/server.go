@@ -118,7 +118,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobs, known := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.Placed, req.StateTime, req.Version)
+	jobs, known := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime, req.Version)
 	if !known {
 		httputil.WriteError(w, http.StatusNotFound, "not registered")
 		return

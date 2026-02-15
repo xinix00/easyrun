@@ -67,7 +67,7 @@ func TestLeaderRestart_RejectUnknownHeartbeat(t *testing.T) {
 	// Other agents heartbeat → should be REJECTED (unknown)
 	for i := 1; i < 4; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		_, known := leader2.Heartbeat(agentID, agents[i].URL(), []*types.Job{job}, nil, time.Now(), "")
+		_, known := leader2.Heartbeat(agentID, agents[i].URL(), []*types.Job{job}, time.Now(), "")
 		if known {
 			t.Errorf("Agent %s heartbeat should be rejected (unknown), but was accepted", agentID)
 		}

@@ -40,8 +40,8 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 	// ===== STAP 1: 20 tasks over 2 nodes =====
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	leader.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
@@ -64,8 +64,8 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 	}
 
 	// Verse heartbeats zodat LastSeen recent is
-	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, nil, time.Now(), "")
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	aRunsBefore := agentA.RunCallCount()
@@ -76,9 +76,9 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 
 	// Agent-a stuurt geen heartbeats, agent-b wel
 	time.Sleep(100 * time.Millisecond)
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(100 * time.Millisecond)
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 
 	// Dead agent check: agent-a is ~300ms zonder heartbeat, timeout is 2s → NIET dead
 	leader.checkDeadAgents()
@@ -99,7 +99,7 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 	// ===== STAP 3: agent-c komt online binnen 2 sec =====
 	t.Log("STAP 3 - Agent C komt online")
 	leader.RegisterAgent("agent-c", agentC.URL(), "", nil)
-	leader.Heartbeat("agent-c", agentC.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-c", agentC.URL(), nil, time.Time{}, "")
 	time.Sleep(100 * time.Millisecond)
 
 	// Agent-c mag GEEN taken overnemen van agent-a!
@@ -125,7 +125,7 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 
 	// ===== STAP 5: agent-a komt terug, alles intact =====
 	t.Log("STAP 5 - Agent A netwerk hersteld")
-	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(50 * time.Millisecond)
 
 	aFinal := agentA.TaskCount()
@@ -176,8 +176,8 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	// 20 tasks over 2 nodes
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	leader.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
@@ -196,8 +196,8 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	t.Logf("Initieel: agent-a=%d, agent-b=%d", aTasks, bTasks)
 
 	// Verse heartbeats
-	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, nil, time.Now(), "")
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Agent-a wordt onbereikbaar (HTTP endpoint down)
@@ -205,7 +205,7 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	t.Log("Agent A HTTP endpoint down (maar nog niet getimeout)")
 
 	// Agent-b heartbeat normaal
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(50 * time.Millisecond)
 
 	// checkDeadAgents: agent-a is ~100ms zonder heartbeat, timeout=2s → NIET dead
@@ -215,7 +215,7 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	// Agent-c komt online
 	t.Log("Agent C komt online terwijl agent-a onbereikbaar is")
 	leader.RegisterAgent("agent-c", agentC.URL(), "", nil)
-	leader.Heartbeat("agent-c", agentC.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-c", agentC.URL(), nil, time.Time{}, "")
 	time.Sleep(100 * time.Millisecond)
 
 	// KRITIEK: GetClusterStatus kan agent-a niet bereiken → ziet maar 10 tasks.
@@ -263,7 +263,7 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	}
 	agentARecovered.mu.Unlock()
 
-	leader.Heartbeat("agent-a", agentARecovered.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-a", agentARecovered.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(100 * time.Millisecond)
 
 	aFinal := agentARecovered.TaskCount()
@@ -298,8 +298,8 @@ func TestNetworkBlipNoRedistribution(t *testing.T) {
 
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", agentA.URL(), nil, nil, time.Time{}, "")
-	leader.Heartbeat("agent-b", agentB.URL(), nil, nil, time.Time{}, "")
+	leader.Heartbeat("agent-a", agentA.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
@@ -318,8 +318,8 @@ func TestNetworkBlipNoRedistribution(t *testing.T) {
 	t.Logf("Initial: agent-a=%d, agent-b=%d", aTasks, bTasks)
 
 	// Verse heartbeats
-	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, nil, time.Now(), "")
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
 	aRunsBefore := agentA.RunCallCount()
@@ -327,9 +327,9 @@ func TestNetworkBlipNoRedistribution(t *testing.T) {
 
 	// Korte blip: agent-a mist heartbeats, agent-b blijft alive
 	time.Sleep(100 * time.Millisecond)
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(100 * time.Millisecond)
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(100 * time.Millisecond)
 
 	// agent-a is ~300ms zonder heartbeat, timeout=1s → NIET dead
@@ -337,8 +337,8 @@ func TestNetworkBlipNoRedistribution(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Agent-a hersteld
-	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, nil, time.Now(), "")
-	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, nil, time.Now(), "")
+	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{job}, time.Now(), "")
+	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(50 * time.Millisecond)
 
 	aRunsAfter := agentA.RunCallCount()
