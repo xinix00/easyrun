@@ -71,7 +71,7 @@ type Config struct {
 	// ArtifactsDir is where downloaded artifacts are stored
 	ArtifactsDir string
 
-	// MaxCPUShares is the total CPU shares for nice calculation
+	// MaxCPUShares is the total CPU shares for nice calculation (0 = auto-detect from CPU cores)
 	MaxCPUShares int
 
 	// Isolate enables process isolation (chroot on Linux, sandbox on macOS)

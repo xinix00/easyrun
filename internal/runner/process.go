@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -20,7 +21,6 @@ const (
 	killTimeout             = 5 * time.Second
 	processExitPollInterval = 100 * time.Millisecond
 	processExitPollAttempts = 50
-	defaultMaxCPUShares     = 14000
 	maxNiceValue            = 19
 )
 
@@ -224,7 +224,7 @@ func (r *ExecRunner) applyLimits(pid int, job *types.Job) {
 func (r *ExecRunner) applyNice(pid int, cpuShares int) {
 	maxShares := r.config.MaxCPUShares
 	if maxShares <= 0 {
-		maxShares = defaultMaxCPUShares
+		maxShares = runtime.NumCPU() * 1024
 	}
 
 	// More shares = lower nice = higher priority
