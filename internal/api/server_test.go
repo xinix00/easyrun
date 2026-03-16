@@ -28,7 +28,7 @@ func setupTestServer(t *testing.T) (*Server, *leader.Leader, context.CancelFunc)
 	ctx, cancel := context.WithCancel(context.Background())
 	go l.Run(ctx)
 	time.Sleep(10 * time.Millisecond) // allow stateLoop to start
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 	return server, l, cancel
 }
 
@@ -247,7 +247,7 @@ func TestGetJobsWithStored(t *testing.T) {
 		})
 	}
 
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 	w := doRequest(server, "GET", "/v1/jobs", nil)
 
 	if w.Code != 200 {
@@ -312,7 +312,7 @@ func TestRunJobCreatesNew(t *testing.T) {
 	l.Heartbeat("mock-agent", mockAgent.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 
 	w := doRequest(server, "POST", "/v1/jobs", types.Job{
 		Name:    "test-job",
@@ -382,7 +382,7 @@ func TestRunJobUpdateExisting(t *testing.T) {
 	l.Heartbeat("mock-agent", mockAgent.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 
 	// First: create job
 	w := doRequest(server, "POST", "/v1/jobs", types.Job{
@@ -641,7 +641,7 @@ func TestSSEEventFormat(t *testing.T) {
 	go l.Run(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	server := NewServer(l, ":0", "")
+	server := NewServer(l, ":0", "", "test")
 	ts := httptest.NewServer(server.server.Handler)
 	defer ts.Close()
 

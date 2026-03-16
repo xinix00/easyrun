@@ -18,14 +18,16 @@ import (
 
 // Server provides the HTTP API for the leader
 type Server struct {
-	leader *leader.Leader
-	server *http.Server
+	leader      *leader.Leader
+	server      *http.Server
+	clusterName string
 }
 
 // NewServer creates a new API server
-func NewServer(l *leader.Leader, addr string, apiKey string) *Server {
+func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string) *Server {
 	s := &Server{
-		leader: l,
+		leader:      l,
+		clusterName: clusterName,
 	}
 
 	auth := func(h http.HandlerFunc) http.HandlerFunc {
@@ -263,6 +265,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+		"cluster_name": s.clusterName,
 		"agents":       len(agents),
 		"jobs":         len(jobs),
 		"total_placed": totalPlaced,

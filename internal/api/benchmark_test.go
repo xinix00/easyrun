@@ -43,7 +43,7 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 
 	// Register 100 agents
 	for i := 0; i < 100; i++ {
@@ -75,7 +75,7 @@ func BenchmarkGetJobsEndpoint(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 
 	// Create 1000 jobs
 	for i := 0; i < 1000; i++ {
@@ -112,7 +112,7 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 
 	// Register agents pointing to mock server
 	for i := 0; i < 10; i++ {
@@ -150,7 +150,7 @@ func BenchmarkHeartbeatEndpoint(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 
 	// Pre-register 100 agents so heartbeats succeed
 	for i := 0; i < 100; i++ {
@@ -190,7 +190,7 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 
 	// Register agents pointing to mock server
 	for i := 0; i < 10; i++ {
@@ -224,7 +224,7 @@ func BenchmarkConcurrentRequests(b *testing.B) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go l.Run(ctx)
-	server := NewServer(l, ":9080", "")
+	server := NewServer(l, ":9080", "", "test")
 
 	// Register agents pointing to mock server
 	for i := 0; i < 10; i++ {

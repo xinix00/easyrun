@@ -27,7 +27,7 @@ func TestServerPortNotReleasedWithoutStop(t *testing.T) {
 
 	// Start server in goroutine (like becomeLeader does)
 	leaderCtx, leaderCancel := context.WithCancel(ctx)
-	srv := NewServer(l, addr, "")
+	srv := NewServer(l, addr, "", "test")
 	_ = srv
 	go srv.Run(leaderCtx)
 	waitForPort(t, addr)
@@ -37,7 +37,7 @@ func TestServerPortNotReleasedWithoutStop(t *testing.T) {
 
 	// Immediately try to bind again — no waiting!
 	// This simulates becomeLeader being called right after losing leadership.
-	srv2 := NewServer(l, addr, "")
+	srv2 := NewServer(l, addr, "", "test")
 	leaderCtx2, leaderCancel2 := context.WithCancel(ctx)
 	defer leaderCancel2()
 
@@ -69,7 +69,7 @@ func TestServerPortReleasedWithExplicitStop(t *testing.T) {
 
 	// Start server in goroutine (like becomeLeader does)
 	leaderCtx, leaderCancel := context.WithCancel(ctx)
-	srv := NewServer(l, addr, "")
+	srv := NewServer(l, addr, "", "test")
 	go srv.Run(leaderCtx)
 	waitForPort(t, addr)
 
@@ -78,7 +78,7 @@ func TestServerPortReleasedWithExplicitStop(t *testing.T) {
 	leaderCancel()
 
 	// New server should bind immediately
-	srv2 := NewServer(l, addr, "")
+	srv2 := NewServer(l, addr, "", "test")
 	leaderCtx2, leaderCancel2 := context.WithCancel(ctx)
 	defer leaderCancel2()
 
