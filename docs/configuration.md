@@ -46,6 +46,7 @@ timeouts:
 | `--cluster` | Cluster name | (from config) |
 | `--raft` | EasyRaft endpoint | (from config) |
 | `--standalone` | Run without easyraft (single-node mode) | false |
+| `--api-key` | API key for authentication (overrides config) | (from config) |
 
 ## Development Config
 

@@ -20,21 +20,26 @@ Returns `{"status": "ok"}`.
 GET /v1/status
 ```
 
-Returns cluster overview:
+Returns cluster overview (from placed data, no HTTP calls to agents):
 ```json
 {
+  "cluster_name": "prod-eu",
   "agents": 3,
-  "total_tasks": 5,
-  "running_tasks": 5,
+  "jobs": 5,
+  "total_placed": 12,
   "settling": false,
-  "tasks_by_agent": {
-    "agent-1": [{"id": "abc", "job_id": "def", "job_name": "web", "state": "running", ...}],
-    "agent-2": [...]
+  "placed": {
+    "my-api": 3,
+    "worker": 2
   }
 }
 ```
 
-**settling:** `true` during the settle period after leader election (30s). During this period, jobs are stored but not dispatched until agents have registered with their placed counts.
+- **cluster_name:** Cluster name from config — used by easydns for federation discovery.
+- **settling:** `true` during the settle period after leader election (30s). During this period, jobs are stored but not dispatched until agents have registered with their placed counts.
+- **placed:** Job name → total placed count across all agents.
+
+For per-job task details (state, pid, restarts), use `GET /v1/jobs/{name}/status`.
 
 ### Agents
 
