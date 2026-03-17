@@ -227,10 +227,8 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 		}
 	})
 
-	// Reconcile immediately — all capacity is freed
-	if len(agents) > 0 {
-		l.reconcileJobs()
-	}
+	// Reconcile immediately — frees capacity and renormalizes priorities (0..N-1)
+	go l.reconcileJobs()
 }
 
 // DeleteJob deletes a job by ID (or name as fallback for API/CLI compatibility).
