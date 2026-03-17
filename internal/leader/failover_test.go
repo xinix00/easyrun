@@ -26,6 +26,7 @@ type mockAgent struct {
 	failRuns        bool          // if true, all /run requests will fail with 503
 	rejectAffinity  bool          // if true, all /run requests will fail with 406
 	runDelay        time.Duration // delay before processing /run requests (simulates slow dispatch)
+	maxCapacity     int           // if > 0, reject with 503 when len(tasks) >= maxCapacity
 }
 
 func newMockAgent() *mockAgent {
@@ -60,6 +61,11 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	if ma.failRuns {
 		ma.mu.Unlock()
 		http.Error(w, "simulated failure", http.StatusServiceUnavailable)
+		return
+	}
+	if ma.maxCapacity > 0 && len(ma.tasks) >= ma.maxCapacity {
+		ma.mu.Unlock()
+		http.Error(w, "at capacity", http.StatusServiceUnavailable)
 		return
 	}
 	delay := ma.runDelay
@@ -102,6 +108,13 @@ func (ma *mockAgent) SetFailRuns(fail bool) {
 func (ma *mockAgent) SetRejectAffinity(reject bool) {
 	ma.mu.Lock()
 	ma.rejectAffinity = reject
+	ma.mu.Unlock()
+}
+
+// SetMaxCapacity limits how many tasks the agent will accept (0 = unlimited)
+func (ma *mockAgent) SetMaxCapacity(n int) {
+	ma.mu.Lock()
+	ma.maxCapacity = n
 	ma.mu.Unlock()
 }
 
@@ -176,13 +189,13 @@ func (ma *mockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	filtered := make([]*types.Task, 0, len(ma.tasks))
 	for _, task := range ma.tasks {
 		if task.JobID == jobID {
+			delete(ma.jobs, task.JobName) // ma.jobs is keyed by name
 			deleted++
 		} else {
 			filtered = append(filtered, task)
 		}
 	}
 	ma.tasks = filtered
-	delete(ma.jobs, jobID)
 	ma.mu.Unlock()
 
 	_ = json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})

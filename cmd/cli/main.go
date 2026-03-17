@@ -75,6 +75,7 @@ func runDeploy(args []string) error {
 	image := fs.String("image", "", "Docker image")
 	cpu := fs.Int("cpu", 0, "CPU shares")
 	memory := fs.String("memory", "", "Memory limit (e.g., 512M, 1G)")
+	priorityFlag := fs.Int("priority", -1, "Scheduling priority (0=highest, omit to append at end)")
 	updatePolicy := fs.String("update-policy", "rolling", "Update policy: rolling, recreate, or blue-green")
 	checkType := fs.String("check-type", "", "Health check type: http, tcp, or file")
 	checkPath := fs.String("check-path", "", "Health check path")
@@ -121,6 +122,10 @@ func runDeploy(args []string) error {
 		Image:        *image,
 		CPUShares:    *cpu,
 		UpdatePolicy: types.UpdatePolicy(*updatePolicy),
+	}
+	if *priorityFlag >= 0 {
+		p := *priorityFlag
+		job.Priority = &p
 	}
 
 	for _, art := range artifactFlags {

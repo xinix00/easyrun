@@ -86,6 +86,7 @@ type Job struct {
 	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
 	MaxRestarts  int               `json:"max_restarts,omitempty"`  // 0 = unlimited
 	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"` // rolling (default) | recreate | blue-green
+	Priority     *int              `json:"priority,omitempty"`      // nil=auto(end), 0=top, N=Nth position
 }
 
 // Task represents a running instance of a Job

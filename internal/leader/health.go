@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"time"
 
 	"easyrun/internal/types"
@@ -73,6 +74,14 @@ func (l *Leader) reconcileJobs() {
 	if len(agents) == 0 {
 		return
 	}
+
+	// Sort by priority so high-priority jobs get capacity first.
+	sort.Slice(jobs, func(i, j int) bool {
+		return effectivePriority(jobs[i].Priority) < effectivePriority(jobs[j].Priority)
+	})
+
+	// Reset round-robin so high-priority jobs start from a consistent position.
+	l.do(func(s *leaderState) { s.roundRobin = 0 })
 
 	for _, job := range jobs {
 		if job.ID == "" {

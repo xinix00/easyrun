@@ -57,8 +57,9 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 	mux.HandleFunc("GET /v1/events", auth(s.handleEvents))
 	mux.HandleFunc("POST /v1/notify", auth(s.handleNotify))
 
-	// Per-job status (authenticated)
+	// Per-job endpoints (authenticated)
 	mux.HandleFunc("GET /v1/jobs/{name}/status", auth(s.handleJobStatus))
+	mux.HandleFunc("PATCH /v1/jobs/{name}/priority", auth(s.handlePatchJobPriority))
 
 	s.server = &http.Server{
 		Addr:    addr,
@@ -202,6 +203,7 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 	// Check if job with this name already exists (UPDATE)
 	existingJob := s.leader.FindJobByName(job.Name)
 	if existingJob != nil {
+		job.Priority = existingJob.Priority // preserve position on update
 		log.Printf("Job %s exists (old ID %s), updating to new ID %s (policy=%s)",
 			job.Name, existingJob.ID, job.ID, job.UpdatePolicy)
 
@@ -222,6 +224,10 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if job.Priority == nil {
+		n := s.leader.NextPriority()
+		job.Priority = &n
+	}
 	if err := s.leader.DispatchJob(&job); err != nil {
 		// Job is stored but dispatch failed — report as accepted (will retry on reconciliation)
 		httputil.WriteJSON(w, http.StatusCreated, map[string]string{
@@ -333,6 +339,27 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 		s.leader.EventBus().Notify(topic)
 	} else {
 		s.leader.EventBus().Notify("")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePatchJobPriority updates only the priority of a job (no update policy triggered).
+func (s *Server) handlePatchJobPriority(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job name required")
+		return
+	}
+	var body struct {
+		Priority int `json:"priority"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
+		return
+	}
+	if err := s.leader.PatchJobPriority(name, body.Priority); err != nil {
+		httputil.WriteError(w, http.StatusNotFound, err.Error())
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

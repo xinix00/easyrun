@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"math"
 	"net/http"
 	"sync"
 	"time"
@@ -13,6 +15,21 @@ import (
 	"easyrun/internal/types"
 	"github.com/google/uuid"
 )
+
+// Sentinel errors returned by sendJobToAgent — lets callers distinguish why an agent rejected.
+var (
+	errAffinityMismatch = errors.New("affinity mismatch") // 406: agent can never run this job
+	errNoCapacity       = errors.New("no capacity")       // 503: agent is full but affinity is ok
+)
+
+// effectivePriority returns the sort key: lower = more important.
+// nil (not set) sorts last. 0 = top (most important).
+func effectivePriority(p *int) int {
+	if p == nil {
+		return math.MaxInt
+	}
+	return *p
+}
 
 var (
 	// VerifyInterval can be overridden in tests for faster execution
@@ -43,18 +60,15 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 		return nil
 	}
 
+	var err error
 	if job.Count == -1 {
-		// Daemon: use reconcile-based dispatch (same path as reconciliation)
-		agents := l.GetAgents()
-		if err := l.reconcileJob(job, agents); err != nil {
-			log.Printf("Job %s stored but dispatch failed: %v (will retry on reconciliation)", job.Name, err)
-			return err
-		}
+		err = l.reconcileJob(job, l.GetAgents()) // daemon: same path as reconciliation
 	} else {
-		if err := l.dispatchInstances(job, job.Count); err != nil {
-			log.Printf("Job %s stored but dispatch failed: %v (will retry on reconciliation)", job.Name, err)
-			return err
-		}
+		err = l.dispatchInstances(job, job.Count)
+	}
+	if err != nil {
+		log.Printf("Job %s stored but dispatch failed: %v (will retry on reconciliation)", job.Name, err)
+		return err
 	}
 
 	l.eventBus.Notify("job:" + job.Name)
@@ -91,36 +105,78 @@ func (l *Leader) trackPlacement(agentID, jobID string) {
 }
 
 // dispatchToAvailableAgent tries agents until one accepts the job.
-// Affinity is checked agent-side (agent rejects with 406 if no match).
+// First pass: round-robin over all agents.
+// Second pass: preemption — evict lowest-priority job from capacity-failed agents.
+// Agents that returned 406 (affinity mismatch) are never preemption candidates.
 func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
-	agentCount := query(l, func(s *leaderState) int {
-		return len(s.agents)
-	})
-
+	agentCount := query(l, func(s *leaderState) int { return len(s.agents) })
 	if agentCount == 0 {
 		return fmt.Errorf("no agents available")
 	}
 
-	tried := 0
-	maxTries := agentCount
-
-	for tried < maxTries {
+	// First pass: try every agent once via round-robin.
+	var capacityCandidates []*types.Agent
+	for range agentCount {
 		agent := l.nextAgent()
 		if agent == nil {
-			return fmt.Errorf("no agents available")
+			break
 		}
-
-		if err := l.sendJobToAgent(agent, job); err != nil {
+		err := l.sendJobToAgent(agent, job)
+		if err == nil {
+			l.trackPlacement(agent.ID, job.ID)
+			return nil
+		}
+		if errors.Is(err, errNoCapacity) {
+			capacityCandidates = append(capacityCandidates, agent)
+			log.Printf("Agent %s at capacity for job %s, trying next agent", agent.ID, job.Name)
+		} else if !errors.Is(err, errAffinityMismatch) {
+			// errAffinityMismatch: agent can never run this job — skip silently.
 			log.Printf("Agent %s rejected job %s: %v, trying next agent", agent.ID, job.Name, err)
-			tried++
-			continue
 		}
-
-		l.trackPlacement(agent.ID, job.ID)
-		return nil
 	}
 
-	return fmt.Errorf("no agent has capacity after trying %d agents", tried)
+	// Second pass: preemption on capacity-failed agents only.
+	for _, agent := range capacityCandidates {
+		victim := l.findVictim(agent.ID, job.Priority)
+		if victim == nil {
+			continue
+		}
+		log.Printf("Preempting job %s (prio %d) on %s to make room for %s (prio %d)",
+			victim.Name, effectivePriority(victim.Priority), agent.ID,
+			job.Name, effectivePriority(job.Priority))
+		l.deleteTaskOnAgent(agent, victim.ID)
+		l.do(func(s *leaderState) { delete(s.placed[agent.ID], victim.ID) })
+		if err := l.sendJobToAgent(agent, job); err == nil {
+			l.trackPlacement(agent.ID, job.ID)
+			l.eventBus.Notify("job:" + victim.Name)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("no agent has capacity for %s after trying %d agents", job.Name, agentCount)
+}
+
+// findVictim returns the lowest-priority job placed on agentID that has lower
+// priority than jobPriority. Returns nil if no such job exists.
+func (l *Leader) findVictim(agentID string, jobPriority *int) *types.Job {
+	return query(l, func(s *leaderState) *types.Job {
+		var victim *types.Job
+		worstPrio := effectivePriority(jobPriority) // only evict jobs strictly less important
+		for jobID, count := range s.placed[agentID] {
+			if count <= 0 {
+				continue
+			}
+			j := l.jobStore.GetJob(jobID)
+			if j == nil {
+				continue
+			}
+			if ep := effectivePriority(j.Priority); ep > worstPrio {
+				victim = j
+				worstPrio = ep
+			}
+		}
+		return victim
+	})
 }
 
 // DeleteJobByID sends delete requests to all agents in parallel, waits for
@@ -143,10 +199,10 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 	var wg sync.WaitGroup
 	for _, agent := range agents {
 		wg.Add(1)
-		go func(a *types.Agent) {
+		go func() {
 			defer wg.Done()
-			l.deleteTaskOnAgent(a, job.ID)
-		}(agent)
+			l.deleteTaskOnAgent(agent, job.ID)
+		}()
 	}
 	wg.Wait()
 
@@ -214,7 +270,14 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
+	switch resp.StatusCode {
+	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
+		// success
+	case http.StatusNotAcceptable: // 406: affinity mismatch — agent can never run this job
+		return errAffinityMismatch
+	case http.StatusServiceUnavailable: // 503: capacity full — agent could run it later
+		return errNoCapacity
+	default:
 		return fmt.Errorf("agent %s returned status %d", agent.ID, resp.StatusCode)
 	}
 

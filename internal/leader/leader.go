@@ -2,6 +2,7 @@ package leader
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -254,6 +255,26 @@ func (l *Leader) FindJobByName(name string) *types.Job {
 		return nil
 	}
 	return l.jobStore.GetJob(id)
+}
+
+// NextPriority returns the next available priority index (= number of existing jobs).
+// First job → 0, second → 1, etc. New jobs always go to the end of the priority order.
+func (l *Leader) NextPriority() int {
+	return len(l.jobStore.GetJobs())
+}
+
+// PatchJobPriority updates only the priority field of a job without triggering update policy.
+// Tasks keep running unchanged — priority only affects future scheduling decisions.
+func (l *Leader) PatchJobPriority(name string, priority int) error {
+	job := l.FindJobByName(name)
+	if job == nil {
+		return fmt.Errorf("job %s not found", name)
+	}
+	updated := *job // copy — don't mutate the stored pointer
+	updated.Priority = &priority
+	l.jobStore.StoreJob(&updated)
+	l.eventBus.Notify("job:" + name)
+	return nil
 }
 
 // GetPlacedByJobName returns placed counts aggregated by job name: jobName → total count.
