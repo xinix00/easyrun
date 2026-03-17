@@ -263,8 +263,8 @@ func (l *Leader) NextPriority() int {
 	return len(l.jobStore.GetJobs())
 }
 
-// PatchJobPriority updates only the priority field of a job without triggering update policy.
-// Tasks keep running unchanged — priority only affects future scheduling decisions.
+// PatchJobPriority updates the priority of a job and triggers reconciliation
+// so higher-priority jobs can preempt lower-priority ones immediately.
 func (l *Leader) PatchJobPriority(name string, priority int) error {
 	job := l.FindJobByName(name)
 	if job == nil {
@@ -274,6 +274,7 @@ func (l *Leader) PatchJobPriority(name string, priority int) error {
 	updated.Priority = &priority
 	l.jobStore.StoreJob(&updated)
 	l.eventBus.Notify("job:" + name)
+	go l.reconcileJobs() // re-schedule with new priority order (may preempt lower-prio jobs)
 	return nil
 }
 

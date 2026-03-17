@@ -272,3 +272,57 @@ func TestPreemptionChoosesLowestPriority(t *testing.T) {
 		t.Error("High-priority job 'critical' should be running")
 	}
 }
+
+// TestPatchPriorityTriggersPreemption verifies that patching a job's priority
+// triggers reconciliation and preempts lower-priority jobs to free capacity.
+func TestPatchPriorityTriggersPreemption(t *testing.T) {
+	agent := newMockAgent()
+	defer agent.Close()
+	agent.SetMaxCapacity(1)
+
+	store := NewMockJobStore()
+	l := New("leader", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
+	l.RegisterAgent("agent-1", agent.URL(), "", nil)
+	time.Sleep(20 * time.Millisecond)
+
+	// counter dispatched first, fills the only slot (prio=10, low importance)
+	counter := &types.Job{Name: "counter", Command: "./counter", Count: 1, Priority: prio(10)}
+	if err := l.DispatchJob(counter); err != nil {
+		t.Fatalf("Dispatch counter failed: %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+
+	if agent.TaskCount() != 1 {
+		t.Fatalf("Expected 1 task, got %d", agent.TaskCount())
+	}
+
+	// counter2 dispatched second — no capacity, stays pending (prio=20, even lower)
+	counter2 := &types.Job{Name: "counter2", Command: "./counter2", Count: 1, Priority: prio(20)}
+	_ = l.DispatchJob(counter2) // expected to fail (no capacity)
+	time.Sleep(20 * time.Millisecond)
+
+	// Patch counter2 to priority 0 (most important) — should trigger reconcile+preempt
+	if err := l.PatchJobPriority("counter2", 0); err != nil {
+		t.Fatalf("PatchJobPriority failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// counter2 should now be running, counter should have been evicted
+	found := false
+	for _, j := range agent.GetJobs() {
+		if j.Name == "counter2" {
+			found = true
+		}
+		if j.Name == "counter" {
+			t.Error("'counter' (prio=10) should have been evicted after counter2 was patched to prio=0")
+		}
+	}
+	if !found {
+		t.Error("'counter2' should be running after priority patch triggered preemption")
+	}
+}
