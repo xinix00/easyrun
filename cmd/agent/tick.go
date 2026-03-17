@@ -69,13 +69,13 @@ func (s *agentLoop) tryTakeOver(reason string) {
 func (s *agentLoop) leaderFailed(format string, args ...any) {
 	s.failCount++
 	log.Printf(format, args...)
-	if s.failCount >= 3 {
+	if s.failCount >= 4 {
 		s.tryTakeOver("Leader unreachable")
 	}
-	if s.failCount >= 6 {
+	if s.failCount >= 7 {
 		log.Println("Likely network isolated, stopping all tasks to avoid duplicates")
 		s.ag.StopAllTasks()
-		s.failCount = 3
+		s.failCount = 4
 	}
 }
 

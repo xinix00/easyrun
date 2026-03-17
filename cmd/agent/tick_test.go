@@ -99,12 +99,12 @@ func newTestLoop(disc *mockDiscoverer, ag *mockAgent) *agentLoop {
 
 // ---- tests ----
 
-// No leader from raft → 3 ticks → tryTakeOver triggered
-func TestTick_NoLeader_TriggersAfter3(t *testing.T) {
+// No leader from raft → 4 ticks → tryTakeOver triggered (~30s: T=0,10,20,30)
+func TestTick_NoLeader_TriggersAfter4(t *testing.T) {
 	disc := &mockDiscoverer{leader: ""}
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 
-	for i := range 3 {
+	for i := range 4 {
 		loop.tick()
 		if loop.failCount != i+1 {
 			t.Fatalf("tick %d: failCount = %d, want %d", i+1, loop.failCount, i+1)
@@ -116,13 +116,27 @@ func TestTick_NoLeader_TriggersAfter3(t *testing.T) {
 	}
 }
 
-// Register fails 3 times → tryTakeOver triggered
-func TestTick_RegisterFails_TriggersAfter3(t *testing.T) {
+// 3 ticks must NOT yet trigger tryTakeOver
+func TestTick_NoLeader_NotYetAt3(t *testing.T) {
+	disc := &mockDiscoverer{leader: ""}
+	loop := newTestLoop(disc, &mockAgent{id: "a1"})
+
+	for range 3 {
+		loop.tick()
+	}
+
+	if disc.tryBecomeLeaderCalls != 0 {
+		t.Errorf("TryBecomeLeader should not be called after only 3 failures, got %d", disc.tryBecomeLeaderCalls)
+	}
+}
+
+// Register fails 4 times → tryTakeOver triggered (~30s with immediate first tick)
+func TestTick_RegisterFails_TriggersAfter4(t *testing.T) {
 	disc := &mockDiscoverer{leader: "leader:9080"}
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 	loop.doRegister = errRegister(errors.New("connection refused"))
 
-	for range 3 {
+	for range 4 {
 		loop.tick()
 	}
 
@@ -131,23 +145,23 @@ func TestTick_RegisterFails_TriggersAfter3(t *testing.T) {
 	}
 }
 
-// Register fails 6 times → StopAllTasks called (network isolation)
-func TestTick_RegisterFails6_StopsAllTasks(t *testing.T) {
+// Register fails 7 times → StopAllTasks called (network isolation, ~60s)
+func TestTick_RegisterFails7_StopsAllTasks(t *testing.T) {
 	disc := &mockDiscoverer{leader: "leader:9080", becomeLeaderOK: false}
 	ag := &mockAgent{id: "a1"}
 	loop := newTestLoop(disc, ag)
 	loop.doRegister = errRegister(errors.New("connection refused"))
 
-	for range 6 {
+	for range 7 {
 		loop.tick()
 	}
 
 	if ag.stopAllCalls != 1 {
 		t.Errorf("StopAllTasks calls = %d, want 1", ag.stopAllCalls)
 	}
-	// failCount is clamped to 3 after StopAllTasks
-	if loop.failCount != 3 {
-		t.Errorf("failCount = %d, want 3 (clamped)", loop.failCount)
+	// failCount is clamped to 4 after StopAllTasks
+	if loop.failCount != 4 {
+		t.Errorf("failCount = %d, want 4 (clamped)", loop.failCount)
 	}
 }
 
@@ -170,15 +184,15 @@ func TestTick_RegisterSuccess_ResetsState(t *testing.T) {
 	}
 }
 
-// Heartbeat fails 3 times → tryTakeOver triggered
-func TestTick_HeartbeatFails_TriggersAfter3(t *testing.T) {
+// Heartbeat fails 4 times → tryTakeOver triggered (~30s)
+func TestTick_HeartbeatFails_TriggersAfter4(t *testing.T) {
 	disc := &mockDiscoverer{leader: "leader:9080"}
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 	loop.registered = true
 	loop.lastLeaderAddr = "leader:9080"
 	loop.doHeartbeat = errHeartbeat(errors.New("timeout"))
 
-	for range 3 {
+	for range 4 {
 		loop.tick()
 	}
 
@@ -258,8 +272,8 @@ func TestTick_TakeoverSucceeds_SetsStopLeader(t *testing.T) {
 		return func() { stopCalled = true }, &mockLeader{}
 	}
 
-	// 3 ticks → takeover
-	for range 3 {
+	// 4 ticks → takeover (~30s)
+	for range 4 {
 		loop.tick()
 	}
 
@@ -302,7 +316,7 @@ func TestTick_PartialFailureThenSuccess_Resets(t *testing.T) {
 		t.Errorf("failCount = %d, want 0", loop.failCount)
 	}
 	if disc.tryBecomeLeaderCalls != 0 {
-		t.Errorf("TryBecomeLeader should not be called with <3 failures, got %d", disc.tryBecomeLeaderCalls)
+		t.Errorf("TryBecomeLeader should not be called with <4 failures, got %d", disc.tryBecomeLeaderCalls)
 	}
 }
 
