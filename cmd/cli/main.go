@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,8 +15,6 @@ import (
 	"text/tabwriter"
 
 	"easyrun/internal/types"
-
-	"github.com/urfave/cli/v2"
 )
 
 var (
@@ -24,161 +23,139 @@ var (
 )
 
 func main() {
-	app := &cli.App{
-		Name:  "run",
-		Usage: "EasyRun CLI",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:        "leader",
-				Usage:       "Leader address",
-				Value:       "localhost:9080",
-				Destination: &leaderAddr,
-				EnvVars:     []string{"EASYRUN_LEADER"},
-			},
-			&cli.StringFlag{
-				Name:        "api-key",
-				Usage:       "API key for authentication",
-				Destination: &apiKey,
-				EnvVars:     []string{"EASYRUN_API_KEY"},
-			},
-		},
-		Commands: []*cli.Command{
-			deployCommand(),
-			deleteCommand(),
-			statusCommand(),
-			agentsCommand(),
-			logsCommand(),
-		},
+	flag.StringVar(&leaderAddr, "leader", envOr("EASYRUN_LEADER", "localhost:9080"), "Leader address")
+	flag.StringVar(&apiKey, "api-key", os.Getenv("EASYRUN_API_KEY"), "API key for authentication")
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "Usage: run [flags] <command> [args]\n\nCommands:\n  deploy   Deploy or update a job\n  delete   Delete a job and all its tasks\n  status   Show cluster status\n  agents   List agents or show agent details\n  logs     Stream task logs\n\nFlags:\n")
+		flag.PrintDefaults()
+	}
+	flag.Parse()
+
+	args := flag.Args()
+	if len(args) == 0 {
+		flag.Usage()
+		os.Exit(1)
 	}
 
-	if err := app.Run(os.Args); err != nil {
+	var err error
+	switch args[0] {
+	case "deploy":
+		err = runDeploy(args[1:])
+	case "delete":
+		err = runDelete(args[1:])
+	case "status":
+		err = runStatus()
+	case "agents":
+		err = runAgents(args[1:])
+	case "logs":
+		err = runLogs(args[1:])
+	default:
+		fmt.Fprintf(os.Stderr, "Unknown command: %s\n", args[0])
+		flag.Usage()
+		os.Exit(1)
+	}
+
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func deployCommand() *cli.Command {
-	return &cli.Command{
-		Name:  "deploy",
-		Usage: "Deploy or update a job (upsert based on name)",
-		Flags: []cli.Flag{
-			&cli.StringFlag{Name: "name", Required: true},
-			&cli.StringFlag{Name: "command", Usage: "Command to run (required for process jobs)"},
-			&cli.StringFlag{Name: "image", Usage: "Docker image (uses Docker instead of process)"},
-			&cli.StringSliceFlag{Name: "artifact", Usage: "Artifact URL, or match::URL for platform-specific (e.g. node.arch=arm64::https://example.com/app-arm64.tar.gz)"},
-			&cli.IntFlag{Name: "cpu", Usage: "CPU shares"},
-			&cli.StringFlag{Name: "memory", Usage: "Memory limit (e.g., 512M, 1G)"},
-			&cli.StringSliceFlag{Name: "env", Usage: "Environment variables (KEY=VALUE)"},
-			&cli.StringSliceFlag{Name: "affinity", Usage: "Node affinity constraints (key=value, e.g. node.arch=arm64)"},
-			&cli.StringFlag{Name: "update-policy", Usage: "Update policy: rolling (default), recreate, or blue-green", Value: "rolling"},
-			&cli.StringFlag{Name: "check-type", Usage: "Health check type: http, tcp, or file"},
-			&cli.StringFlag{Name: "check-path", Usage: "Health check path (HTTP endpoint or file path)"},
-			&cli.StringFlag{Name: "check-port", Usage: "Health check port name (for http/tcp, default: http)"},
-			&cli.IntFlag{Name: "check-failures", Usage: "Consecutive failures before unhealthy (default: 3)"},
-		},
-		Action: deployJob,
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
 	}
+	return fallback
 }
 
-func deleteCommand() *cli.Command {
-	return &cli.Command{
-		Name:      "delete",
-		Usage:     "Delete a job and all its tasks",
-		ArgsUsage: "<job-name>",
-		Action:    deleteJob,
-	}
-}
+func runDeploy(args []string) error {
+	fs := flag.NewFlagSet("deploy", flag.ExitOnError)
+	name := fs.String("name", "", "Job name (required)")
+	command := fs.String("command", "", "Command to run")
+	image := fs.String("image", "", "Docker image")
+	cpu := fs.Int("cpu", 0, "CPU shares")
+	memory := fs.String("memory", "", "Memory limit (e.g., 512M, 1G)")
+	updatePolicy := fs.String("update-policy", "rolling", "Update policy: rolling, recreate, or blue-green")
+	checkType := fs.String("check-type", "", "Health check type: http, tcp, or file")
+	checkPath := fs.String("check-path", "", "Health check path")
+	checkPort := fs.String("check-port", "", "Health check port name")
+	checkFailures := fs.Int("check-failures", 0, "Consecutive failures before unhealthy")
 
-func statusCommand() *cli.Command {
-	return &cli.Command{
-		Name:   "status",
-		Usage:  "Show cluster status",
-		Action: showStatus,
-	}
-}
-
-func agentsCommand() *cli.Command {
-	return &cli.Command{
-		Name:      "agents",
-		Usage:     "List agents or show agent details",
-		ArgsUsage: "[agent-id]",
-		Action:    listAgents,
-	}
-}
-
-func deployJob(c *cli.Context) error {
-	job := types.Job{
-		Name:         c.String("name"),
-		Command:      c.String("command"),
-		Image:        c.String("image"),
-		CPUShares:    c.Int("cpu"),
-		UpdatePolicy: types.UpdatePolicy(c.String("update-policy")),
-	}
-
-	if job.Command == "" && job.Image == "" {
-		return fmt.Errorf("either --command or --image is required")
-	}
-
-	if artifacts := c.StringSlice("artifact"); len(artifacts) > 0 {
-		for _, art := range artifacts {
-			a := types.Artifact{}
-			if idx := strings.Index(art, "::"); idx > 0 {
-				// match::URL format (e.g. "node.arch=arm64,node.os=linux::https://example.com/app.tar.gz")
-				a.URL = art[idx+2:]
-				a.Match = make(map[string]string)
-				for _, kv := range strings.Split(art[:idx], ",") {
-					for i, ch := range kv {
-						if ch == '=' {
-							a.Match[kv[:i]] = kv[i+1:]
-							break
-						}
-					}
-				}
-			} else {
-				a.URL = art
+	// Collect repeatable flags manually after parse
+	var envFlags, artifactFlags, affinityFlags []string
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--env" || args[i] == "-env":
+			if i+1 < len(args) {
+				envFlags = append(envFlags, args[i+1])
+				args = append(args[:i], args[i+2:]...)
+				i--
 			}
-			job.Artifacts = append(job.Artifacts, a)
+		case args[i] == "--artifact" || args[i] == "-artifact":
+			if i+1 < len(args) {
+				artifactFlags = append(artifactFlags, args[i+1])
+				args = append(args[:i], args[i+2:]...)
+				i--
+			}
+		case args[i] == "--affinity" || args[i] == "-affinity":
+			if i+1 < len(args) {
+				affinityFlags = append(affinityFlags, args[i+1])
+				args = append(args[:i], args[i+2:]...)
+				i--
+			}
 		}
 	}
 
-	if mem := c.String("memory"); mem != "" {
-		memBytes, err := parseMemory(mem)
+	fs.Parse(args)
+
+	if *name == "" {
+		return fmt.Errorf("--name is required")
+	}
+	if *command == "" && *image == "" {
+		return fmt.Errorf("either --command or --image is required")
+	}
+
+	job := types.Job{
+		Name:         *name,
+		Command:      *command,
+		Image:        *image,
+		CPUShares:    *cpu,
+		UpdatePolicy: types.UpdatePolicy(*updatePolicy),
+	}
+
+	for _, art := range artifactFlags {
+		a := types.Artifact{}
+		if idx := strings.Index(art, "::"); idx > 0 {
+			a.URL = art[idx+2:]
+			a.Match = parseKV(art[:idx])
+		} else {
+			a.URL = art
+		}
+		job.Artifacts = append(job.Artifacts, a)
+	}
+
+	if *memory != "" {
+		memBytes, err := parseMemory(*memory)
 		if err != nil {
 			return err
 		}
 		job.MemoryLimit = memBytes
 	}
 
-	if envs := c.StringSlice("env"); len(envs) > 0 {
-		job.Env = make(map[string]string)
-		for _, env := range envs {
-			for i, ch := range env {
-				if ch == '=' {
-					job.Env[env[:i]] = env[i+1:]
-					break
-				}
-			}
-		}
+	if len(envFlags) > 0 {
+		job.Env = parseKV(strings.Join(envFlags, ","))
 	}
 
-	if c.IsSet("check-type") || c.IsSet("check-path") {
+	if len(affinityFlags) > 0 {
+		job.Affinity = parseKV(strings.Join(affinityFlags, ","))
+	}
+
+	if *checkType != "" || *checkPath != "" {
 		job.HealthCheck = &types.HealthCheck{
-			Type:             c.String("check-type"),
-			Path:             c.String("check-path"),
-			Port:             c.String("check-port"),
-			FailureThreshold: c.Int("check-failures"),
-		}
-	}
-
-	if affinities := c.StringSlice("affinity"); len(affinities) > 0 {
-		job.Affinity = make(map[string]string)
-		for _, a := range affinities {
-			for i, ch := range a {
-				if ch == '=' {
-					job.Affinity[a[:i]] = a[i+1:]
-					break
-				}
-			}
+			Type:             *checkType,
+			Path:             *checkPath,
+			Port:             *checkPort,
+			FailureThreshold: *checkFailures,
 		}
 	}
 
@@ -192,9 +169,7 @@ func deployJob(c *cli.Context) error {
 		return err
 	}
 
-	// Show appropriate message based on operation
-	status := result["status"]
-	switch status {
+	switch result["status"] {
 	case "updated":
 		policy := result["policy"]
 		if policy == "" {
@@ -206,26 +181,22 @@ func deployJob(c *cli.Context) error {
 	default:
 		fmt.Printf("Job '%s' dispatched with ID %s\n", job.Name, result["id"])
 	}
-
 	return nil
 }
 
-func deleteJob(c *cli.Context) error {
-	if c.NArg() < 1 {
+func runDelete(args []string) error {
+	if len(args) < 1 {
 		return fmt.Errorf("job name required")
 	}
-	jobName := c.Args().First()
-
-	_, err := doRequest("DELETE", "/v1/jobs/"+jobName, nil)
+	_, err := doRequest("DELETE", "/v1/jobs/"+args[0], nil)
 	if err != nil {
 		return err
 	}
-
-	fmt.Printf("Job '%s' deleted\n", jobName)
+	fmt.Printf("Job '%s' deleted\n", args[0])
 	return nil
 }
 
-func showStatus(c *cli.Context) error {
+func runStatus() error {
 	resp, err := doRequest("GET", "/v1/status", nil)
 	if err != nil {
 		return err
@@ -241,7 +212,6 @@ func showStatus(c *cli.Context) error {
 		return err
 	}
 
-	// Fetch jobs for expected vs running display
 	jobsResp, err := doRequest("GET", "/v1/jobs", nil)
 	if err != nil {
 		return err
@@ -257,7 +227,6 @@ func showStatus(c *cli.Context) error {
 	fmt.Printf("Tasks:   %d running / %d total\n", status.RunningTasks, status.TotalTasks)
 	fmt.Println()
 
-	// Count running tasks per job
 	runningPerJob := make(map[string]int)
 	for _, tasks := range status.TasksByAgent {
 		for _, task := range tasks {
@@ -267,7 +236,6 @@ func showStatus(c *cli.Context) error {
 		}
 	}
 
-	// Show jobs with expected vs running
 	if len(jobs) > 0 {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tRUNNING\tSTATUS")
@@ -288,8 +256,7 @@ func showStatus(c *cli.Context) error {
 			if job.Count == -1 {
 				expectedStr = fmt.Sprintf("all(%d)", status.Agents)
 			}
-			fmt.Fprintf(w, "%s\t%d / %s\t%s\n",
-				job.Name, running, expectedStr, statusStr)
+			fmt.Fprintf(w, "%s\t%d / %s\t%s\n", job.Name, running, expectedStr, statusStr)
 		}
 		w.Flush()
 		fmt.Println()
@@ -300,16 +267,11 @@ func showStatus(c *cli.Context) error {
 		fmt.Fprintln(w, "AGENT\tTASK\tJOB\tPORTS\tSTATE")
 		for agent, tasks := range status.TasksByAgent {
 			for _, task := range tasks {
-				// Format ports as "http:8080,grpc:9090"
-				portsStr := ""
+				var ports []string
 				for name, port := range task.Ports {
-					if portsStr != "" {
-						portsStr += ","
-					}
-					portsStr += fmt.Sprintf("%s:%d", name, port)
+					ports = append(ports, fmt.Sprintf("%s:%d", name, port))
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-					agent, task.ID, task.JobName, portsStr, task.State)
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", agent, task.ID, task.JobName, strings.Join(ports, ","), task.State)
 			}
 		}
 		w.Flush()
@@ -317,7 +279,7 @@ func showStatus(c *cli.Context) error {
 	return nil
 }
 
-func listAgents(c *cli.Context) error {
+func runAgents(args []string) error {
 	resp, err := doRequest("GET", "/v1/agents", nil)
 	if err != nil {
 		return err
@@ -328,28 +290,20 @@ func listAgents(c *cli.Context) error {
 		return err
 	}
 
-	// If agent ID provided, show details for that agent
-	if c.NArg() > 0 {
-		agentID := c.Args().First()
-		var agent *types.Agent
+	if len(args) > 0 {
+		agentID := args[0]
 		for _, a := range agents {
 			if a.ID == agentID {
-				agent = a
-				break
+				return showAgentDetails(a)
 			}
 		}
-		if agent == nil {
-			return fmt.Errorf("agent %s not found", agentID)
-		}
-		return showAgentDetails(agent)
+		return fmt.Errorf("agent %s not found", agentID)
 	}
 
-	// List all agents
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 	fmt.Fprintln(w, "ID\tENDPOINT\tLAST SEEN")
 	for _, agent := range agents {
-		fmt.Fprintf(w, "%s\t%s\t%s\n",
-			agent.ID, agent.Endpoint, agent.LastSeen.Format("15:04:05"))
+		fmt.Fprintf(w, "%s\t%s\t%s\n", agent.ID, agent.Endpoint, agent.LastSeen.Format("15:04:05"))
 	}
 	w.Flush()
 	return nil
@@ -361,7 +315,6 @@ func showAgentDetails(agent *types.Agent) error {
 	fmt.Printf("LastSeen: %s\n", agent.LastSeen.Format("15:04:05"))
 	fmt.Println()
 
-	// Fetch capacity from agent directly (includes live usage)
 	capResp, err := http.Get(agent.Endpoint + "/capacity")
 	if err != nil {
 		fmt.Printf("Capacity: (unavailable - %v)\n", err)
@@ -408,38 +361,23 @@ func showAgentDetails(agent *types.Agent) error {
 			fmt.Printf("  %s = %s\n", k, cap.Attributes[k])
 		}
 	}
-
 	return nil
 }
 
-func logsCommand() *cli.Command {
-	return &cli.Command{
-		Name:      "logs",
-		Usage:     "Stream task logs",
-		ArgsUsage: "<task-id>",
-		Flags: []cli.Flag{
-			&cli.StringFlag{
-				Name:  "stream",
-				Usage: "Log stream (stdout or stderr)",
-				Value: "stdout",
-			},
-		},
-		Action: streamLogs,
-	}
-}
+func runLogs(args []string) error {
+	fs := flag.NewFlagSet("logs", flag.ExitOnError)
+	stream := fs.String("stream", "stdout", "Log stream (stdout or stderr)")
+	fs.Parse(args)
 
-func streamLogs(c *cli.Context) error {
-	taskID := c.Args().First()
+	taskID := fs.Arg(0)
 	if taskID == "" {
 		return fmt.Errorf("task ID required")
 	}
 
-	stream := c.String("stream")
-	if stream != "stdout" && stream != "stderr" {
+	if *stream != "stdout" && *stream != "stderr" {
 		return fmt.Errorf("stream must be stdout or stderr")
 	}
 
-	// Get cluster status to find which agent has this task
 	resp, err := doRequest("GET", "/v1/status", nil)
 	if err != nil {
 		return err
@@ -452,13 +390,10 @@ func streamLogs(c *cli.Context) error {
 		return err
 	}
 
-	// Find task and its agent
 	var agentEndpoint string
 	for agent, tasks := range status.TasksByAgent {
 		for _, task := range tasks {
 			if task.ID == taskID {
-				// Extract agent endpoint from agent ID or use direct connection
-				// For now, assume agent is hostname:port format
 				agentEndpoint = agent
 				break
 			}
@@ -472,8 +407,7 @@ func streamLogs(c *cli.Context) error {
 		return fmt.Errorf("task %s not found", taskID)
 	}
 
-	// Stream logs from agent
-	url := fmt.Sprintf("http://%s/logs/%s/%s", agentEndpoint, taskID, stream)
+	url := fmt.Sprintf("http://%s/logs/%s/%s", agentEndpoint, taskID, *stream)
 	resp2, err := http.Get(url)
 	if err != nil {
 		return fmt.Errorf("failed to connect to agent: %w", err)
@@ -484,20 +418,26 @@ func streamLogs(c *cli.Context) error {
 		return fmt.Errorf("agent returned status %d", resp2.StatusCode)
 	}
 
-	// Stream SSE events to stdout
 	scanner := bufio.NewScanner(resp2.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		// SSE format: "data: <content>"
 		if strings.HasPrefix(line, "data: ") {
 			fmt.Print(strings.TrimPrefix(line, "data: "))
 		}
 	}
-
 	return scanner.Err()
 }
 
-// HTTP helpers
+// parseKV parses "k=v,k2=v2" into a map
+func parseKV(s string) map[string]string {
+	m := make(map[string]string)
+	for _, pair := range strings.Split(s, ",") {
+		if k, v, ok := strings.Cut(pair, "="); ok {
+			m[k] = v
+		}
+	}
+	return m
+}
 
 func doRequest(method, path string, body any) ([]byte, error) {
 	url := fmt.Sprintf("http://%s%s", leaderAddr, path)
@@ -543,13 +483,10 @@ func doRequest(method, path string, body any) ([]byte, error) {
 	return respBody, nil
 }
 
-// Memory parsing helpers
-
 func parseMemory(s string) (uint64, error) {
 	if len(s) == 0 {
 		return 0, nil
 	}
-
 	unit := s[len(s)-1]
 	numStr := s[:len(s)-1]
 
