@@ -62,6 +62,28 @@ func (l *Leader) checkDeadAgents() {
 	}
 }
 
+// normalizePriorities ensures all jobs have unique sequential priorities 0..N-1.
+// Called at the start of every reconcileJobs to fix any duplicates or gaps that
+// may exist in loaded state (e.g. after leader restart or version migration).
+func (l *Leader) normalizePriorities(jobs []*types.Job) {
+	sort.Slice(jobs, func(i, j int) bool {
+		pi, pj := effectivePriority(jobs[i].Priority), effectivePriority(jobs[j].Priority)
+		if pi != pj {
+			return pi < pj
+		}
+		return jobs[i].Name < jobs[j].Name
+	})
+	for i, job := range jobs {
+		if job.Priority == nil || *job.Priority != i {
+			p := i
+			updated := *job
+			updated.Priority = &p
+			l.jobStore.StoreJob(&updated)
+			jobs[i] = &updated
+		}
+	}
+}
+
 // reconcileJobs ensures all jobs have the correct number of running instances.
 // Uses placed counts (maintained by heartbeats + dispatch tracking) — no HTTP calls.
 func (l *Leader) reconcileJobs() {
@@ -75,10 +97,8 @@ func (l *Leader) reconcileJobs() {
 		return
 	}
 
-	// Sort by priority so high-priority jobs get capacity first.
-	sort.Slice(jobs, func(i, j int) bool {
-		return effectivePriority(jobs[i].Priority) < effectivePriority(jobs[j].Priority)
-	})
+	// Normalize priorities first so preemption logic always sees unique 0..N-1 values.
+	l.normalizePriorities(jobs)
 
 	// Reset round-robin so high-priority jobs start from a consistent position.
 	l.do(func(s *leaderState) { s.roundRobin = 0 })
