@@ -136,6 +136,7 @@ func (l *Leader) stateLoop(ctx context.Context) {
 			state.settled = true
 			settleTimer = nil
 			log.Printf("Leader settled after %v, reconciling jobs", l.settleDelay)
+			l.eventBus.Notify("status")
 			go l.reconcileJobs()
 		}
 	}
