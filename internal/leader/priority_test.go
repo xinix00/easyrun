@@ -386,8 +386,8 @@ func TestMultiAgentPreemptionFillsAllAgents(t *testing.T) {
 	}
 }
 
-// TestMultiAgentPatchPreemption verifies that a priority patch causes ALL agents
-// to preempt the now-lower-priority job, not just the first agent in round-robin.
+// TestMultiAgentPatchPreemption verifies that dragging a job to position 0
+// (one PATCH) causes ALL agents to evict the now-lower-priority job.
 func TestMultiAgentPatchPreemption(t *testing.T) {
 	const numAgents = 4
 	const cap = 4
@@ -422,15 +422,12 @@ func TestMultiAgentPatchPreemption(t *testing.T) {
 	counter := &types.Job{Name: "counter", Command: "./c", Count: numAgents * cap, Priority: prio(1)}
 	_ = l.DispatchJob(counter) // expected to fail
 
-	// Now patch: counter → prio=0 (top), counter2 → prio=1
-	// Simulates GUI drag-and-drop moving counter above counter2
+	// GUI: drag counter above counter2 → ONE PATCH (insert counter at position 0)
+	// Server renumbers: counter(0), counter2(1) atomically, then ONE reconcileJobs.
 	if err := l.PatchJobPriority("counter", 0); err != nil {
 		t.Fatalf("PatchJobPriority counter failed: %v", err)
 	}
-	if err := l.PatchJobPriority("counter2", 1); err != nil {
-		t.Fatalf("PatchJobPriority counter2 failed: %v", err)
-	}
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(300 * time.Millisecond)
 
 	// All agents should have counter, none should have counter2
 	for i, a := range agents {
@@ -440,6 +437,70 @@ func TestMultiAgentPatchPreemption(t *testing.T) {
 		for _, j := range a.GetJobs() {
 			if j.Name == "counter2" {
 				t.Errorf("agent-%d still has 'counter2' (should have been evicted by counter)", i)
+			}
+		}
+	}
+}
+
+// TestDragAboveOversizedCount simulates the real-world scenario:
+// 4 agents × 14 capacity = 56 total slots. Both jobs want 100 instances.
+// job_b fills all 56. Dragging job_a above job_b (one PATCH) should give
+// ALL 56 slots to job_a — even though neither job can run all 100 instances.
+func TestDragAboveOversizedCount(t *testing.T) {
+	const numAgents = 4
+	const coresPerAgent = 14
+	total := numAgents * coresPerAgent // 56
+
+	agents := make([]*mockAgent, numAgents)
+	for i := range agents {
+		agents[i] = newMockAgent()
+		defer agents[i].Close()
+		agents[i].SetMaxCapacity(coresPerAgent)
+	}
+
+	store := NewMockJobStore()
+	l := New("leader", store, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
+	for i, a := range agents {
+		l.RegisterAgent(fmt.Sprintf("agent-%d", i), a.URL(), "", nil)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// jobB fills all 56 slots (count=100, capacity=56), priority=0
+	jobB := &types.Job{Name: "jobB", Command: "./b", Count: 100, Priority: prio(0)}
+	_ = l.DispatchJob(jobB) // partially succeeds: 56/100
+	time.Sleep(100 * time.Millisecond)
+
+	placed := 0
+	for _, a := range agents {
+		placed += a.TaskCount()
+	}
+	if placed != total {
+		t.Fatalf("setup: expected %d jobB instances, got %d", total, placed)
+	}
+
+	// jobA wants 100, gets 0 initially (no capacity), priority=1
+	jobA := &types.Job{Name: "jobA", Command: "./a", Count: 100, Priority: prio(1)}
+	_ = l.DispatchJob(jobA) // expected to fail
+	time.Sleep(30 * time.Millisecond)
+
+	// GUI: drag jobA to position 0 (above jobB) — one PATCH
+	if err := l.PatchJobPriority("jobA", 0); err != nil {
+		t.Fatalf("PatchJobPriority: %v", err)
+	}
+	time.Sleep(500 * time.Millisecond)
+
+	// jobA should have all 56 slots across all agents, jobB should have 0
+	for i, a := range agents {
+		if a.TaskCount() != coresPerAgent {
+			t.Errorf("agent-%d: expected %d tasks, got %d", i, coresPerAgent, a.TaskCount())
+		}
+		for _, j := range a.GetJobs() {
+			if j.Name == "jobB" {
+				t.Errorf("agent-%d still has jobB (should have been evicted)", i)
 			}
 		}
 	}
