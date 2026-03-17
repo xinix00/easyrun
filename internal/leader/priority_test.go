@@ -2,6 +2,7 @@ package leader
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"testing"
 	"time"
@@ -324,5 +325,122 @@ func TestPatchPriorityTriggersPreemption(t *testing.T) {
 	}
 	if !found {
 		t.Error("'counter2' should be running after priority patch triggered preemption")
+	}
+}
+
+// TestMultiAgentPreemptionFillsAllAgents verifies that when a high-priority job
+// preempts a low-priority job, it fills ALL agents — not just the first one.
+func TestMultiAgentPreemptionFillsAllAgents(t *testing.T) {
+	const numAgents = 4
+	const cap = 4 // capacity per agent = 16 total slots
+
+	agents := make([]*mockAgent, numAgents)
+	for i := range agents {
+		agents[i] = newMockAgent()
+		defer agents[i].Close()
+		agents[i].SetMaxCapacity(cap)
+	}
+
+	store := NewMockJobStore()
+	l := New("leader", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
+	for i, a := range agents {
+		l.RegisterAgent(fmt.Sprintf("agent-%d", i), a.URL(), "", nil)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// Low-priority job fills all 16 slots
+	low := &types.Job{Name: "low", Command: "./low", Count: numAgents * cap, Priority: prio(10)}
+	if err := l.DispatchJob(low); err != nil {
+		t.Fatalf("dispatch low failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	total := 0
+	for _, a := range agents {
+		total += a.TaskCount()
+	}
+	if total != numAgents*cap {
+		t.Fatalf("expected %d low tasks before preemption, got %d", numAgents*cap, total)
+	}
+
+	// High-priority job dispatched — should preempt low across ALL agents
+	high := &types.Job{Name: "high", Command: "./high", Count: numAgents * cap, Priority: prio(1)}
+	_ = l.DispatchJob(high) // may fail initially; preemption fills capacity
+	time.Sleep(200 * time.Millisecond)
+
+	// Every agent should have exactly cap high-priority tasks, none low
+	for i, a := range agents {
+		if a.TaskCount() != cap {
+			t.Errorf("agent-%d: expected %d tasks, got %d", i, cap, a.TaskCount())
+		}
+		for _, j := range a.GetJobs() {
+			if j.Name == "low" {
+				t.Errorf("agent-%d still has 'low' job (should have been evicted)", i)
+			}
+		}
+	}
+}
+
+// TestMultiAgentPatchPreemption verifies that a priority patch causes ALL agents
+// to preempt the now-lower-priority job, not just the first agent in round-robin.
+func TestMultiAgentPatchPreemption(t *testing.T) {
+	const numAgents = 4
+	const cap = 4
+
+	agents := make([]*mockAgent, numAgents)
+	for i := range agents {
+		agents[i] = newMockAgent()
+		defer agents[i].Close()
+		agents[i].SetMaxCapacity(cap)
+	}
+
+	store := NewMockJobStore()
+	l := New("leader", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
+	for i, a := range agents {
+		l.RegisterAgent(fmt.Sprintf("agent-%d", i), a.URL(), "", nil)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	// counter2 fills all slots at prio=0 (top)
+	counter2 := &types.Job{Name: "counter2", Command: "./c2", Count: numAgents * cap, Priority: prio(0)}
+	if err := l.DispatchJob(counter2); err != nil {
+		t.Fatalf("dispatch counter2 failed: %v", err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// counter has prio=1 (lower), stays pending (no capacity)
+	counter := &types.Job{Name: "counter", Command: "./c", Count: numAgents * cap, Priority: prio(1)}
+	_ = l.DispatchJob(counter) // expected to fail
+
+	// Now patch: counter → prio=0 (top), counter2 → prio=1
+	// Simulates GUI drag-and-drop moving counter above counter2
+	if err := l.PatchJobPriority("counter", 0); err != nil {
+		t.Fatalf("PatchJobPriority counter failed: %v", err)
+	}
+	if err := l.PatchJobPriority("counter2", 1); err != nil {
+		t.Fatalf("PatchJobPriority counter2 failed: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+
+	// All agents should have counter, none should have counter2
+	for i, a := range agents {
+		if a.TaskCount() != cap {
+			t.Errorf("agent-%d: expected %d tasks, got %d", i, cap, a.TaskCount())
+		}
+		for _, j := range a.GetJobs() {
+			if j.Name == "counter2" {
+				t.Errorf("agent-%d still has 'counter2' (should have been evicted by counter)", i)
+			}
+		}
 	}
 }

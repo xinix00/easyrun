@@ -82,8 +82,18 @@ func (l *Leader) dispatchInstances(job *types.Job, count int) error {
 		count = 1
 	}
 
-	// Mark as actively dispatching so reconcileJob skips this job
-	l.do(func(s *leaderState) { s.dispatching[job.ID] = true })
+	// Atomically check-and-set dispatching flag to prevent concurrent dispatch
+	// of the same job from two simultaneous reconcileJobs goroutines.
+	alreadyDispatching := query(l, func(s *leaderState) bool {
+		if s.dispatching[job.ID] {
+			return true
+		}
+		s.dispatching[job.ID] = true
+		return false
+	})
+	if alreadyDispatching {
+		return nil
+	}
 	defer l.do(func(s *leaderState) { delete(s.dispatching, job.ID) })
 
 	for i := 0; i < count; i++ {
