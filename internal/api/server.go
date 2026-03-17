@@ -224,6 +224,7 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	explicitPriority := job.Priority
 	if job.Priority == nil {
 		n := s.leader.NextPriority()
 		job.Priority = &n
@@ -237,6 +238,12 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 			"error":  err.Error(),
 		})
 		return
+	}
+
+	// If an explicit priority was given, renumber all jobs so priorities are unique.
+	// DispatchJob stored the raw value which may conflict with existing jobs.
+	if explicitPriority != nil {
+		_ = s.leader.PatchJobPriority(job.Name, *explicitPriority)
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{

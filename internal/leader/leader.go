@@ -263,18 +263,50 @@ func (l *Leader) NextPriority() int {
 	return len(l.jobStore.GetJobs())
 }
 
-// PatchJobPriority updates the priority of a job and triggers reconciliation
-// so higher-priority jobs can preempt lower-priority ones immediately.
-func (l *Leader) PatchJobPriority(name string, priority int) error {
+// PatchJobPriority moves a job to the given index position, renumbering all other
+// jobs to keep a dense 0..N-1 sequence. This ensures priorities are always unique
+// so preemption (ep > worstPrio, strictly greater) works correctly.
+func (l *Leader) PatchJobPriority(name string, targetIdx int) error {
 	job := l.FindJobByName(name)
 	if job == nil {
 		return fmt.Errorf("job %s not found", name)
 	}
-	updated := *job // copy — don't mutate the stored pointer
-	updated.Priority = &priority
-	l.jobStore.StoreJob(&updated)
+
+	// Sort all jobs by current priority, remove the moved job, insert at new position,
+	// then assign sequential 0..N-1. All done before reconcileJobs fires.
+	jobs := l.jobStore.GetJobs()
+	sort.Slice(jobs, func(i, j int) bool {
+		pi, pj := effectivePriority(jobs[i].Priority), effectivePriority(jobs[j].Priority)
+		if pi != pj {
+			return pi < pj
+		}
+		return jobs[i].Name < jobs[j].Name
+	})
+
+	for i := 0; i < len(jobs); i++ {
+		if jobs[i].ID == job.ID {
+			jobs = append(jobs[:i], jobs[i+1:]...)
+			break
+		}
+	}
+
+	if targetIdx < 0 {
+		targetIdx = 0
+	}
+	if targetIdx > len(jobs) {
+		targetIdx = len(jobs)
+	}
+	jobs = append(jobs[:targetIdx], append([]*types.Job{job}, jobs[targetIdx:]...)...)
+
+	for i, j := range jobs {
+		p := i
+		updated := *j
+		updated.Priority = &p
+		l.jobStore.StoreJob(&updated)
+	}
+
 	l.eventBus.Notify("job:" + name)
-	go l.reconcileJobs() // re-schedule with new priority order (may preempt lower-prio jobs)
+	go l.reconcileJobs()
 	return nil
 }
 
