@@ -309,6 +309,9 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 				} else {
 					sse.WriteEvent("job", fmt.Sprintf(`{"name":%q}`, rest))
 				}
+			default:
+				// Generic status change (e.g. settle period ended)
+				sse.WriteEvent("status", "{}")
 			}
 		}
 	}
