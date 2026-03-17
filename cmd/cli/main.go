@@ -191,13 +191,13 @@ func runDeploy(args []string) error {
 
 func runDelete(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("job name required")
+		return fmt.Errorf("job id required")
 	}
 	_, err := doRequest("DELETE", "/v1/jobs/"+args[0], nil)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Job '%s' deleted\n", args[0])
+	fmt.Printf("Job deleted (ID %s)\n", args[0])
 	return nil
 }
 

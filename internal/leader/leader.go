@@ -266,10 +266,10 @@ func (l *Leader) NextPriority() int {
 // PatchJobPriority moves a job to the given index position, renumbering all other
 // jobs to keep a dense 0..N-1 sequence. This ensures priorities are always unique
 // so preemption (ep > worstPrio, strictly greater) works correctly.
-func (l *Leader) PatchJobPriority(name string, targetIdx int) error {
-	job := l.FindJobByName(name)
+func (l *Leader) PatchJobPriority(id string, targetIdx int) error {
+	job := l.jobStore.GetJob(id)
 	if job == nil {
-		return fmt.Errorf("job %s not found", name)
+		return fmt.Errorf("job %s not found", id)
 	}
 
 	// Sort all jobs by current priority, remove the moved job, insert at new position,
@@ -305,7 +305,7 @@ func (l *Leader) PatchJobPriority(name string, targetIdx int) error {
 		l.jobStore.StoreJob(&updated)
 	}
 
-	l.eventBus.Notify("job:" + name)
+	l.eventBus.Notify("job:" + id)
 	go l.reconcileJobs()
 	return nil
 }

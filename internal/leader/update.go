@@ -114,8 +114,29 @@ func (l *Leader) stopOneInstance(job *types.Job) {
 	})
 
 	if agent != nil {
-		l.deleteTaskOnAgent(agent, job.ID)
+		l.stopTasksOnAgent(agent, job.ID)
 	}
+}
+
+// stopTasksOnAgent stops tasks for a job on a specific agent WITHOUT removing the job definition.
+// Used for preemption and rolling updates — the job remains for rescheduling.
+func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobID string) {
+	url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobID)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		log.Printf("Failed to create stop request for %s on %s: %v", jobID, agent.ID, err)
+		return
+	}
+	if l.apiKey != "" {
+		req.Header.Set("X-API-Key", l.apiKey)
+	}
+	client := &http.Client{Timeout: DeleteClientTimeout}
+	resp, err := client.Do(req)
+	if err != nil {
+		log.Printf("Failed to stop %s on %s: %v", jobID, agent.ID, err)
+		return
+	}
+	resp.Body.Close()
 }
 
 // deleteTaskOnAgent deletes a job on specific agent (by job ID).

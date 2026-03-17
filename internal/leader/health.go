@@ -232,8 +232,8 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 
 // GetJobStatus fetches tasks for a specific job by only querying agents
 // that have the job placed. Returns tasks_by_agent and the relevant agents.
-func (l *Leader) GetJobStatus(jobName string) (map[string][]*types.Task, []*types.Agent) {
-	job := l.FindJobByName(jobName)
+func (l *Leader) GetJobStatus(jobID string) (map[string][]*types.Task, []*types.Agent) {
+	job := l.jobStore.GetJob(jobID)
 	if job == nil {
 		return nil, nil
 	}
@@ -275,7 +275,7 @@ func (l *Leader) GetJobStatus(jobName string) (map[string][]*types.Task, []*type
 			// Filter to only this job's tasks
 			var filtered []*types.Task
 			for _, t := range tasks {
-				if t.JobName == jobName {
+				if t.JobID == jobID {
 					filtered = append(filtered, t)
 				}
 			}

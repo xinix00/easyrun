@@ -275,6 +275,43 @@ func (a *Agent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
 }
 
+// handleStop stops all tasks for a job WITHOUT removing the job definition (by job ID).
+// Used by the leader for preemption — the job definition must remain for rescheduling.
+func (a *Agent) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	jobID := strings.TrimPrefix(r.URL.Path, "/stop/")
+	if jobID == "" {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job id required"})
+		return
+	}
+
+	stopped := a.stopJobTasksByID(jobID)
+	httputil.WriteJSON(w, http.StatusOK, map[string]int{"stopped": stopped})
+}
+
+// stopJobTasksByID stops all tasks for a job WITHOUT removing the job definition.
+// Used for preemption so the job remains in the store for future rescheduling.
+func (a *Agent) stopJobTasksByID(jobID string) int {
+	tasks := query(a, func(s *agentState) []*types.Task {
+		var tasks []*types.Task
+		for _, task := range s.tasks {
+			if task.JobID == jobID {
+				task.State = types.TaskStopping
+				tasks = append(tasks, task)
+			}
+		}
+		return tasks
+	})
+
+	a.stopTasks(tasks)
+	log.Printf("Stopped tasks for job %s: %d tasks (job definition preserved)", jobID, len(tasks))
+	return len(tasks)
+}
+
 // initJob sets defaults on a job (ID, driver) if not already set.
 func initJob(job *types.Job) {
 	if job.ID == "" {

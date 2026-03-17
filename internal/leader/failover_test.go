@@ -38,6 +38,7 @@ func newMockAgent() *mockAgent {
 	mux.HandleFunc("/run", ma.handleRun)
 	mux.HandleFunc("/tasks", ma.handleTasks)
 	mux.HandleFunc("/delete/", ma.handleDelete)
+	mux.HandleFunc("/stop/", ma.handleStop)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -161,6 +162,19 @@ func (ma *mockAgent) TaskCount() int {
 	return len(ma.tasks)
 }
 
+// TasksForJob returns the number of running tasks for a specific job name.
+func (ma *mockAgent) TasksForJob(jobName string) int {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	count := 0
+	for _, t := range ma.tasks {
+		if t.JobName == jobName {
+			count++
+		}
+	}
+	return count
+}
+
 // ClearTasks simulates agent restart (all tasks lost)
 func (ma *mockAgent) ClearTasks() {
 	ma.mu.Lock()
@@ -199,6 +213,30 @@ func (ma *mockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Unlock()
 
 	_ = json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+}
+
+func (ma *mockAgent) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	jobID := r.URL.Path[len("/stop/"):]
+
+	ma.mu.Lock()
+	stopped := 0
+	filtered := make([]*types.Task, 0, len(ma.tasks))
+	for _, task := range ma.tasks {
+		if task.JobID == jobID {
+			stopped++ // remove task but keep ma.jobs entry (job definition preserved)
+		} else {
+			filtered = append(filtered, task)
+		}
+	}
+	ma.tasks = filtered
+	ma.mu.Unlock()
+
+	_ = json.NewEncoder(w).Encode(map[string]int{"stopped": stopped})
 }
 
 // taskCounts creates a map of jobID -> 1 for each job (1 task per job)

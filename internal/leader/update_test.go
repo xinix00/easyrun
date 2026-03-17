@@ -423,6 +423,7 @@ func newRealisticMockAgent() *realisticMockAgent {
 	mux.HandleFunc("/run", ma.handleRun)
 	mux.HandleFunc("/tasks", ma.handleTasks)
 	mux.HandleFunc("/delete/", ma.handleDelete)
+	mux.HandleFunc("/stop/", ma.handleStop)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
@@ -472,6 +473,25 @@ func (ma *realisticMockAgent) handleDelete(w http.ResponseWriter, r *http.Reques
 	ma.mu.Unlock()
 
 	_ = json.NewEncoder(w).Encode(map[string]int{"deleted": deleted})
+}
+
+func (ma *realisticMockAgent) handleStop(w http.ResponseWriter, r *http.Request) {
+	jobID := strings.TrimPrefix(r.URL.Path, "/stop/")
+
+	ma.mu.Lock()
+	stopped := 0
+	filtered := make([]*types.Task, 0, len(ma.tasks))
+	for _, task := range ma.tasks {
+		if task.JobID == jobID {
+			stopped++
+		} else {
+			filtered = append(filtered, task)
+		}
+	}
+	ma.tasks = filtered
+	ma.mu.Unlock()
+
+	_ = json.NewEncoder(w).Encode(map[string]int{"stopped": stopped})
 }
 
 func (ma *realisticMockAgent) URL() string  { return ma.server.URL }

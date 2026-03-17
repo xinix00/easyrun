@@ -258,18 +258,10 @@ func TestPreemptionChoosesLowestPriority(t *testing.T) {
 	}
 	time.Sleep(50 * time.Millisecond)
 
-	for _, j := range agent.GetJobs() {
-		if j.Name == "batch" {
-			t.Error("'batch' (prio=20) should have been evicted, not 'medium' (prio=5)")
-		}
+	if agent.TasksForJob("batch") > 0 {
+		t.Error("'batch' (prio=20) should have been evicted, not 'medium' (prio=5)")
 	}
-	found := false
-	for _, j := range agent.GetJobs() {
-		if j.Name == "critical" {
-			found = true
-		}
-	}
-	if !found {
+	if agent.TasksForJob("critical") == 0 {
 		t.Error("High-priority job 'critical' should be running")
 	}
 }
@@ -308,23 +300,17 @@ func TestPatchPriorityTriggersPreemption(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Patch counter2 to priority 0 (most important) — should trigger reconcile+preempt
-	if err := l.PatchJobPriority("counter2", 0); err != nil {
+	if err := l.PatchJobPriority(counter2.ID, 0); err != nil {
 		t.Fatalf("PatchJobPriority failed: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)
 
-	// counter2 should now be running, counter should have been evicted
-	found := false
-	for _, j := range agent.GetJobs() {
-		if j.Name == "counter2" {
-			found = true
-		}
-		if j.Name == "counter" {
-			t.Error("'counter' (prio=10) should have been evicted after counter2 was patched to prio=0")
-		}
-	}
-	if !found {
+	// counter2 should now be running, counter tasks should have been evicted
+	if agent.TasksForJob("counter2") == 0 {
 		t.Error("'counter2' should be running after priority patch triggered preemption")
+	}
+	if agent.TasksForJob("counter") > 0 {
+		t.Error("'counter' (prio=10) should have been evicted after counter2 was patched to prio=0")
 	}
 }
 
@@ -378,10 +364,8 @@ func TestMultiAgentPreemptionFillsAllAgents(t *testing.T) {
 		if a.TaskCount() != cap {
 			t.Errorf("agent-%d: expected %d tasks, got %d", i, cap, a.TaskCount())
 		}
-		for _, j := range a.GetJobs() {
-			if j.Name == "low" {
-				t.Errorf("agent-%d still has 'low' job (should have been evicted)", i)
-			}
+		if n := a.TasksForJob("low"); n > 0 {
+			t.Errorf("agent-%d still has %d 'low' tasks (should have been evicted)", i, n)
 		}
 	}
 }
@@ -424,20 +408,18 @@ func TestMultiAgentPatchPreemption(t *testing.T) {
 
 	// GUI: drag counter above counter2 → ONE PATCH (insert counter at position 0)
 	// Server renumbers: counter(0), counter2(1) atomically, then ONE reconcileJobs.
-	if err := l.PatchJobPriority("counter", 0); err != nil {
+	if err := l.PatchJobPriority(counter.ID, 0); err != nil {
 		t.Fatalf("PatchJobPriority counter failed: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
 
-	// All agents should have counter, none should have counter2
+	// All agents should have counter tasks, none should have counter2 tasks
 	for i, a := range agents {
 		if a.TaskCount() != cap {
 			t.Errorf("agent-%d: expected %d tasks, got %d", i, cap, a.TaskCount())
 		}
-		for _, j := range a.GetJobs() {
-			if j.Name == "counter2" {
-				t.Errorf("agent-%d still has 'counter2' (should have been evicted by counter)", i)
-			}
+		if n := a.TasksForJob("counter2"); n > 0 {
+			t.Errorf("agent-%d still has %d 'counter2' tasks (should have been evicted by counter)", i, n)
 		}
 	}
 }
@@ -488,20 +470,18 @@ func TestDragAboveOversizedCount(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// GUI: drag jobA to position 0 (above jobB) — one PATCH
-	if err := l.PatchJobPriority("jobA", 0); err != nil {
+	if err := l.PatchJobPriority(jobA.ID, 0); err != nil {
 		t.Fatalf("PatchJobPriority: %v", err)
 	}
 	time.Sleep(500 * time.Millisecond)
 
-	// jobA should have all 56 slots across all agents, jobB should have 0
+	// jobA should have all 56 slots across all agents, jobB tasks should be gone
 	for i, a := range agents {
 		if a.TaskCount() != coresPerAgent {
 			t.Errorf("agent-%d: expected %d tasks, got %d", i, coresPerAgent, a.TaskCount())
 		}
-		for _, j := range a.GetJobs() {
-			if j.Name == "jobB" {
-				t.Errorf("agent-%d still has jobB (should have been evicted)", i)
-			}
+		if jobBTasks := a.TasksForJob("jobB"); jobBTasks > 0 {
+			t.Errorf("agent-%d still has %d jobB tasks (should have been evicted)", i, jobBTasks)
 		}
 	}
 }

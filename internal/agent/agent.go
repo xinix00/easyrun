@@ -219,6 +219,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/tasks", auth(a.handleTasks))
 	mux.HandleFunc("/run", auth(a.handleRun))
 	mux.HandleFunc("/delete/", auth(a.handleDelete))
+	mux.HandleFunc("/stop/", auth(a.handleStop))
 	mux.HandleFunc("/logs/", auth(a.handleLogs))
 	mux.HandleFunc("/leader", a.handleLeader)
 

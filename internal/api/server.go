@@ -58,8 +58,8 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 	mux.HandleFunc("POST /v1/notify", auth(s.handleNotify))
 
 	// Per-job endpoints (authenticated)
-	mux.HandleFunc("GET /v1/jobs/{name}/status", auth(s.handleJobStatus))
-	mux.HandleFunc("PATCH /v1/jobs/{name}/priority", auth(s.handlePatchJobPriority))
+	mux.HandleFunc("GET /v1/jobs/{id}/status", auth(s.handleJobStatus))
+	mux.HandleFunc("PATCH /v1/jobs/{id}/priority", auth(s.handlePatchJobPriority))
 
 	s.server = &http.Server{
 		Addr:    addr,
@@ -243,7 +243,7 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 	// If an explicit priority was given, renumber all jobs so priorities are unique.
 	// DispatchJob stored the raw value which may conflict with existing jobs.
 	if explicitPriority != nil {
-		_ = s.leader.PatchJobPriority(job.Name, *explicitPriority)
+		_ = s.leader.PatchJobPriority(job.ID, *explicitPriority)
 	}
 
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
@@ -255,13 +255,13 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteJob deletes a job and cleans up all its tasks
 func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
-	if name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job name required")
+	id := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job id required")
 		return
 	}
 
-	s.leader.DeleteJob(name)
+	s.leader.DeleteJob(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -352,9 +352,9 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 
 // handlePatchJobPriority updates only the priority of a job (no update policy triggered).
 func (s *Server) handlePatchJobPriority(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job name required")
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job id required")
 		return
 	}
 	var body struct {
@@ -364,7 +364,7 @@ func (s *Server) handlePatchJobPriority(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if err := s.leader.PatchJobPriority(name, body.Priority); err != nil {
+	if err := s.leader.PatchJobPriority(id, body.Priority); err != nil {
 		httputil.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -374,13 +374,13 @@ func (s *Server) handlePatchJobPriority(w http.ResponseWriter, r *http.Request) 
 // handleJobStatus returns tasks and agents for a specific job.
 // Only queries agents that have this job placed (via placed map).
 func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	if name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job name required")
+	id := r.PathValue("id")
+	if id == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job id required")
 		return
 	}
 
-	tasks, agents := s.leader.GetJobStatus(name)
+	tasks, agents := s.leader.GetJobStatus(id)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"agents":         agents,
 		"tasks_by_agent": tasks,

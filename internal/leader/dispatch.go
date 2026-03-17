@@ -154,7 +154,7 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 		log.Printf("Preempting job %s (prio %d) on %s to make room for %s (prio %d)",
 			victim.Name, effectivePriority(victim.Priority), agent.ID,
 			job.Name, effectivePriority(job.Priority))
-		l.deleteTaskOnAgent(agent, victim.ID)
+		l.stopTasksOnAgent(agent, victim.ID)
 		l.do(func(s *leaderState) { delete(s.placed[agent.ID], victim.ID) })
 		if err := l.sendJobToAgent(agent, job); err == nil {
 			l.trackPlacement(agent.ID, job.ID)
@@ -233,11 +233,14 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 	}
 }
 
-// DeleteJob finds a job by name and deletes it (for API compatibility)
-func (l *Leader) DeleteJob(jobName string) {
-	job := l.FindJobByName(jobName)
+// DeleteJob deletes a job by ID (or name as fallback for API/CLI compatibility).
+func (l *Leader) DeleteJob(idOrName string) {
+	job := l.jobStore.GetJob(idOrName)
 	if job == nil {
-		log.Printf("Job %s not found for deletion", jobName)
+		job = l.FindJobByName(idOrName)
+	}
+	if job == nil {
+		log.Printf("Job %s not found for deletion", idOrName)
 		return
 	}
 	l.DeleteJobByID(job)
