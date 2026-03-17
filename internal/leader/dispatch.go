@@ -102,7 +102,7 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 	}
 
 	tried := 0
-	maxTries := agentCount + 1
+	maxTries := agentCount
 
 	for tried < maxTries {
 		agent := l.nextAgent()
