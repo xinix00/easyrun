@@ -29,6 +29,7 @@ type State struct {
 
 const (
 	defaultMaxRestarts     = 5
+	defaultRestartWindow   = 5 * time.Minute
 	shutdownTimeout        = 5 * time.Second
 	proxyTimeout           = 10 * time.Second
 	stateChannelBufferSize = 256

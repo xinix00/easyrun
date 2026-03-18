@@ -461,9 +461,18 @@ func (a *Agent) restartTask(task *types.Task) {
 	if maxRestarts == 0 {
 		maxRestarts = defaultMaxRestarts
 	}
+	restartWindow := job.RestartWindow
+	if restartWindow == 0 {
+		restartWindow = defaultRestartWindow
+	}
 
 	restartCount := query(a, func(s *agentState) int {
 		if t := s.tasks[task.ID]; t != nil {
+			// Grace period: reset count if last crash was longer ago than restart window
+			if !t.LastFailedAt.IsZero() && time.Since(t.LastFailedAt) > restartWindow {
+				t.RestartCount = 0
+			}
+			t.LastFailedAt = time.Now()
 			return t.RestartCount
 		}
 		return 0
@@ -471,7 +480,7 @@ func (a *Agent) restartTask(task *types.Task) {
 
 	// -1 means unlimited restarts
 	if maxRestarts > 0 && restartCount >= maxRestarts {
-		log.Printf("Task %s exceeded max restarts (%d), giving up", task.ID, maxRestarts)
+		log.Printf("Task %s exceeded max restarts (%d within %s), giving up", task.ID, maxRestarts, restartWindow)
 		a.do(func(s *agentState) {
 			if t := s.tasks[task.ID]; t != nil {
 				t.State = types.TaskFailed

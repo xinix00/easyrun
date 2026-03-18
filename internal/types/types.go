@@ -84,8 +84,9 @@ type Job struct {
 	Tags         map[string]string `json:"tags,omitempty"`           // labels for discovery/grouping
 	Volumes      map[string]string `json:"volumes,omitempty"`        // host_path -> task_path (symlinked)
 	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
-	MaxRestarts  int               `json:"max_restarts,omitempty"`   // 0 = default (5), -1 = unlimited
-	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"`  // rolling (default) | recreate | blue-green
+	MaxRestarts    int               `json:"max_restarts,omitempty"`    // 0 = default (5), -1 = unlimited
+	RestartWindow  time.Duration     `json:"restart_window,omitempty"`  // 0 = default (5m), reset restart count if last crash was longer ago
+	UpdatePolicy   UpdatePolicy      `json:"update_policy,omitempty"`   // rolling (default) | recreate | blue-green
 	Priority     *int              `json:"priority,omitempty"`       // nil=auto(end), 0=top, N=Nth position
 }
 
@@ -100,6 +101,7 @@ type Task struct {
 	State        TaskState      `json:"state"`
 	StartedAt    time.Time      `json:"started_at"`
 	RestartCount int            `json:"restart_count"`
+	LastFailedAt time.Time      `json:"last_failed_at,omitempty"`
 	CPUShares    int            `json:"cpu_shares,omitempty"`
 	MemoryLimit  uint64         `json:"memory_limit,omitempty"`
 	CPUPercent   float64        `json:"cpu_percent"`

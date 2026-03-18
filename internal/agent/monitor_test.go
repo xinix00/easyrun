@@ -660,7 +660,8 @@ func TestRestartTaskMaxRestartsExceeded(t *testing.T) {
 			ID:           "task-max",
 			JobName:      "max-restart",
 			State:        types.TaskFailed,
-			RestartCount: 3, // Already at max
+			RestartCount: 3,                      // Already at max
+			LastFailedAt: time.Now(),              // Recent crash — no grace period reset
 		}
 	})
 	time.Sleep(10 * time.Millisecond)
@@ -736,6 +737,64 @@ func TestRestartTaskUnlimitedRestarts(t *testing.T) {
 	})
 	if state != types.TaskRunning {
 		t.Errorf("State = %q, want %q (unlimited restarts should always restart)", state, types.TaskRunning)
+	}
+}
+
+func TestRestartTaskGracePeriodResetsCount(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{
+		Name:          "grace-test",
+		Command:       "echo hello",
+		MaxRestarts:   3,
+		RestartWindow: 100 * time.Millisecond, // Short window for testing
+	}
+
+	agent.do(func(s *agentState) {
+		s.jobs[job.Name] = job
+
+		s.tasks["task-grace"] = &types.Task{
+			ID:           "task-grace",
+			JobName:      "grace-test",
+			State:        types.TaskFailed,
+			RestartCount: 3,                                          // At max
+			LastFailedAt: time.Now().Add(-200 * time.Millisecond),    // But last crash was outside window
+		}
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	task := &types.Task{ID: "task-grace", JobName: "grace-test"}
+	agent.restartTask(task)
+	time.Sleep(50 * time.Millisecond)
+
+	// Should have restarted because grace period reset the counter
+	info := query(agent, func(s *agentState) *types.Task {
+		for _, t := range s.tasks {
+			if t.JobName == "grace-test" {
+				return t
+			}
+		}
+		return nil
+	})
+
+	if info == nil {
+		t.Fatal("Task not found after grace period restart")
+	}
+	if info.ID == "task-grace" {
+		t.Error("Task ID should change after restart")
+	}
+	if info.State != types.TaskRunning {
+		t.Errorf("State = %q, want %q", info.State, types.TaskRunning)
+	}
+	if info.RestartCount != 1 {
+		t.Errorf("RestartCount = %d, want 1 (should reset then increment)", info.RestartCount)
 	}
 }
 
