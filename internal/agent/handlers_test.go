@@ -867,3 +867,64 @@ func TestHandleLogsStdoutStream(t *testing.T) {
 		t.Errorf("Body = %q, want SSE format with 'data: test log line'", body)
 	}
 }
+
+// TestStopDuringStartDoesNotResurrectTask verifies that when /stop is called
+// while startJob is still running (goroutine), the task does not come back
+// as a zombie in "stopping" state.
+func TestStopDuringStartDoesNotResurrectTask(t *testing.T) {
+	cfg := testConfig()
+	cfg.Capacity.CPUShares = 4096 // 4 cores
+
+	// Mock runner with a delay on Run() to simulate slow process start
+	startCh := make(chan struct{})
+	mockRunner := NewMockRunner()
+	mockRunner.onRun = func(job *types.Job) error {
+		<-startCh // block until test releases
+		return nil
+	}
+
+	agent := New(cfg, "test-agent", mockRunner)
+	agent.SetSysInfo(SystemInfo{CPUCores: 4, MemoryBytes: 4 * 1024 * 1024 * 1024})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	// Dispatch a job via handleRun — task is added to state, startJob blocks
+	job := types.Job{Name: "myapp", Command: "./app", Count: 1, CPUShares: 1024}
+	body, _ := json.Marshal(job)
+	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	agent.handleRun(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("handleRun: status %d, want %d", w.Code, http.StatusAccepted)
+	}
+
+	// Task should be in state (capacity reserved)
+	count := query(agent, func(s *agentState) int { return len(s.tasks) })
+	if count != 1 {
+		t.Fatalf("Expected 1 task in state after dispatch, got %d", count)
+	}
+
+	// Stop the job while startJob is still blocked
+	stopReq := httptest.NewRequest(http.MethodPost, "/stop/myapp", nil)
+	stopW := httptest.NewRecorder()
+	agent.handleStop(stopW, stopReq)
+
+	// Task should be removed from state
+	count = query(agent, func(s *agentState) int { return len(s.tasks) })
+	if count != 0 {
+		t.Fatalf("Expected 0 tasks after stop, got %d", count)
+	}
+
+	// Now let startJob complete — it should NOT resurrect the task
+	close(startCh)
+	time.Sleep(100 * time.Millisecond) // let goroutine finish
+
+	// Verify task did NOT come back
+	count = query(agent, func(s *agentState) int { return len(s.tasks) })
+	if count != 0 {
+		t.Errorf("Ghost task! Expected 0 tasks after startJob completed, got %d", count)
+	}
+}

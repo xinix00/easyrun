@@ -245,17 +245,12 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		"message": "job accepted, starting in background",
 	})
 
-	// Start process in background (task already in state)
+	// Start process in background (task already in state for capacity reservation)
 	go func() {
 		if err := a.startJob(&job, task); err != nil {
 			log.Printf("Failed to start job %s: %v", job.Name, err)
-			// Remove task from state (process never started)
-			a.do(func(s *agentState) {
-				delete(s.tasks, task.ID)
-			})
-			return
+			a.do(func(s *agentState) { delete(s.tasks, task.ID) })
 		}
-		log.Printf("Job %s started successfully (task %s)", job.Name, task.ID)
 	}()
 }
 
@@ -407,11 +402,20 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 		return fmt.Errorf("failed to start: %w", err)
 	}
 
-	// Store in state
-	a.do(func(s *agentState) {
+	// Store in state. If /stop marked the task as Stopping while we were starting,
+	// don't re-add it (prevents ghost tasks after preemption race).
+	alive := query(a, func(s *agentState) bool {
 		s.jobs[job.Name] = job
-		s.tasks[task.ID] = task
+		if task.State == types.TaskRunning {
+			s.tasks[task.ID] = task
+			return true
+		}
+		return false
 	})
+	if !alive {
+		_ = a.runnerFor(job.Driver).Stop(task)
+		return nil
+	}
 	a.scheduleSave()
 
 	log.Printf("Started task %s (job %s) with ports %v, pid %d", task.ID, job.Name, ports, task.Pid)
