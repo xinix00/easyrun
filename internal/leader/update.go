@@ -167,9 +167,7 @@ func (l *Leader) snapshotJobTasks(jobName string) []taskRef {
 	var refs []taskRef
 	for _, agent := range agents {
 		for _, task := range tasksByAgent[agent.ID] {
-			if task.State == types.TaskRunning {
-				refs = append(refs, taskRef{agentID: agent.ID, taskID: task.ID})
-			}
+			refs = append(refs, taskRef{agentID: agent.ID, taskID: task.ID})
 		}
 	}
 	return refs
