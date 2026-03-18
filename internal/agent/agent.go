@@ -64,16 +64,6 @@ type Agent struct {
 
 // New creates a new agent with optional runner (nil uses default ExecRunner)
 func New(cfg *config.Config, id string, r runner.Runner) *Agent {
-	if r == nil {
-		runnerCfg := &runner.Config{
-			RootfsBase:   cfg.Paths.RootfsBase,
-			ArtifactsDir: cfg.Paths.Artifacts,
-			MaxCPUShares: cfg.Capacity.CPUShares,
-			Isolate:      cfg.Runner.Isolate,
-		}
-		r = runner.NewExecRunner(runnerCfg)
-	}
-
 	endpoint := fmt.Sprintf("http://%s:%d", cfg.Node.IP, cfg.Node.Port)
 
 	// Build node attributes: auto-detected + user-configured (config overrides)
@@ -92,12 +82,22 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		attrs[k] = v
 	}
 
+	if r == nil {
+		r = runner.NewExecRunner(&runner.Config{
+			RootfsBase:   cfg.Paths.RootfsBase,
+			ArtifactsDir: cfg.Paths.Artifacts,
+			MaxCPUShares: cfg.Capacity.CPUShares,
+			Isolate:      cfg.Runner.Isolate,
+			NodeAttrs:    attrs,
+		})
+	}
+
 	return &Agent{
 		id:           id,
 		endpoint:     endpoint,
 		config:       cfg,
 		execRunner:   r,
-		dockerRunner: runner.NewDockerRunner(),
+		dockerRunner: runner.NewDockerRunner(attrs),
 		sysInfo:      GetSystemInfo(), // detect once at startup
 		attributes:   attrs,
 		ops:          make(chan func(*agentState), stateChannelBufferSize),

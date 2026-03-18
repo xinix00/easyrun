@@ -20,6 +20,7 @@ const (
 
 // DockerRunner runs jobs as Docker containers
 type DockerRunner struct {
+	nodeAttrs map[string]string
 	stdoutLog map[string]*LogBroadcaster
 	stderrLog map[string]*LogBroadcaster
 	logCmds   map[string]*exec.Cmd // taskID -> docker logs process
@@ -27,8 +28,9 @@ type DockerRunner struct {
 }
 
 // NewDockerRunner creates a new Docker runner
-func NewDockerRunner() *DockerRunner {
+func NewDockerRunner(nodeAttrs map[string]string) *DockerRunner {
 	return &DockerRunner{
+		nodeAttrs: nodeAttrs,
 		stdoutLog: make(map[string]*LogBroadcaster),
 		stderrLog: make(map[string]*LogBroadcaster),
 		logCmds:   make(map[string]*exec.Cmd),
@@ -62,6 +64,9 @@ func (r *DockerRunner) Run(job *types.Job, task *types.Task) error {
 
 	// Port env vars (same convention as ExecRunner)
 	for _, env := range PortEnvVars(task.Ports) {
+		args = append(args, "-e", env)
+	}
+	for _, env := range AttrEnvVars(r.nodeAttrs) {
 		args = append(args, "-e", env)
 	}
 

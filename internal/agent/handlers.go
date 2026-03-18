@@ -369,36 +369,27 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 		job.Driver = types.DriverFor(job.Image)
 	}
 
-	// Resolve platform-specific artifact (pick first matching this node's attributes)
+	// Resolve platform-specific artifact (runtime only — don't modify stored job)
+	runJob := job
 	if len(job.Artifacts) > 0 {
 		resolved := a.resolveArtifact(job.Artifacts)
 		if resolved == nil {
 			return fmt.Errorf("no matching artifact for this node's attributes")
 		}
-		job.Artifacts = []types.Artifact{*resolved}
+		copy := *job
+		copy.Artifacts = []types.Artifact{*resolved}
+		runJob = &copy
 	}
 
-	// Inject node attributes as ER_ATTR_* environment variables
-	if len(a.attributes) > 0 {
-		if job.Env == nil {
-			job.Env = make(map[string]string)
-		}
-		for _, env := range runner.AttrEnvVars(a.attributes) {
-			k, v, _ := strings.Cut(env, "=")
-			if _, exists := job.Env[k]; !exists {
-				job.Env[k] = v
-			}
-		}
-	}
-
-	ports, err := a.allocatePortsForJob(job)
+	ports, err := a.allocatePortsForJob(runJob)
 	if err != nil {
 		return fmt.Errorf("failed to allocate ports: %w", err)
 	}
 	task.Ports = ports
 
 	// Runner fills in Pid and registers internal state
-	if err := a.runnerFor(job.Driver).Run(job, task); err != nil {
+	// ER_ATTR_* env vars are injected by the runner itself (via Config.NodeAttrs)
+	if err := a.runnerFor(runJob.Driver).Run(runJob, task); err != nil {
 		return fmt.Errorf("failed to start: %w", err)
 	}
 

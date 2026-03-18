@@ -73,6 +73,7 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 	for k, v := range job.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))
 	}
+	cmd.Env = append(cmd.Env, AttrEnvVars(r.config.NodeAttrs)...)
 
 	return cmd
 }

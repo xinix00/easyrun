@@ -77,4 +77,7 @@ type Config struct {
 	// Isolate enables process isolation (chroot on Linux, sandbox on macOS)
 	// Default: true for security
 	Isolate bool
+
+	// NodeAttrs are injected as ER_ATTR_* env vars in every process (node-specific, not persisted)
+	NodeAttrs map[string]string
 }
