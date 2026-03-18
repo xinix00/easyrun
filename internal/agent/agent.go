@@ -29,8 +29,6 @@ type State struct {
 
 const (
 	defaultMaxRestarts     = 5
-	taskMonitorInterval    = 5 * time.Second
-	defaultHealthTimeout   = 5 * time.Second
 	shutdownTimeout        = 5 * time.Second
 	proxyTimeout           = 10 * time.Second
 	stateChannelBufferSize = 256
@@ -117,6 +115,22 @@ func (a *Agent) SetLeaderFunc(fn func() string) {
 // SetSysInfo overrides detected system info (for testing)
 func (a *Agent) SetSysInfo(info SystemInfo) {
 	a.sysInfo = info
+}
+
+// monitorInterval returns the task monitor interval from config (default 5s).
+func (a *Agent) monitorInterval() time.Duration {
+	if d := a.config.Timeouts.HealthCheckInterval; d > 0 {
+		return d
+	}
+	return 5 * time.Second
+}
+
+// healthTimeout returns the health check timeout from config (default 5s).
+func (a *Agent) healthTimeout() time.Duration {
+	if d := a.config.Timeouts.HealthCheckTimeout; d > 0 {
+		return d
+	}
+	return 5 * time.Second
 }
 
 // ID returns the agent ID

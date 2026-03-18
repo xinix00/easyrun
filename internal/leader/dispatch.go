@@ -141,7 +141,9 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 		log.Printf("Preempting job %s (prio %d) on %s to make room for %s (prio %d)",
 			victim.Name, effectivePriority(victim.Priority), agent.ID,
 			job.Name, effectivePriority(job.Priority))
-		l.stopTasksOnAgent(agent, victim.Name)
+		if !l.stopTasksOnAgent(agent, victim.Name) {
+			continue // stop failed, tasks still running — try next agent
+		}
 		l.do(func(s *leaderState) { delete(s.placed[agent.ID], victim.Name) })
 		if err := l.sendJobToAgent(agent, job); err == nil {
 			l.trackPlacement(agent.ID, job.Name)
@@ -270,13 +272,13 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 }
 
 // stopTasksOnAgent stops tasks for a job on a specific agent WITHOUT removing the job definition.
-// Used for preemption and rolling updates.
-func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobName string) {
+// Used for preemption and rolling updates. Returns true if the stop was confirmed successful.
+func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobName string) bool {
 	url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobName)
 	req, err := http.NewRequest(http.MethodPost, url, nil)
 	if err != nil {
 		log.Printf("Failed to create stop request for %s on %s: %v", jobName, agent.ID, err)
-		return
+		return false
 	}
 	if l.apiKey != "" {
 		req.Header.Set("X-API-Key", l.apiKey)
@@ -284,9 +286,10 @@ func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobName string) {
 	resp, err := l.deleteClient.Do(req)
 	if err != nil {
 		log.Printf("Failed to stop %s on %s: %v", jobName, agent.ID, err)
-		return
+		return false
 	}
 	resp.Body.Close()
+	return resp.StatusCode == http.StatusOK
 }
 
 // stopTaskByID stops a single specific task on an agent by task ID.

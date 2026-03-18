@@ -107,7 +107,7 @@ func (l *Leader) updateRecreate(job *types.Job) error {
 	})
 
 	for _, agent := range agents {
-		l.stopTasksOnAgent(agent, job.Name)
+		_ = l.stopTasksOnAgent(agent, job.Name)
 	}
 
 	return l.DispatchJob(job)

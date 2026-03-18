@@ -25,6 +25,7 @@ type mockAgent struct {
 	taskSeq  int
 	failRuns        bool          // if true, all /run requests will fail with 503
 	rejectAffinity  bool          // if true, all /run requests will fail with 406
+	failStops       bool          // if true, all /stop requests will fail with 500
 	runDelay        time.Duration // delay before processing /run requests (simulates slow dispatch)
 	maxCapacity     int           // if > 0, reject with 503 when len(tasks) >= maxCapacity
 }
@@ -108,6 +109,13 @@ func (ma *mockAgent) SetFailRuns(fail bool) {
 func (ma *mockAgent) SetRejectAffinity(reject bool) {
 	ma.mu.Lock()
 	ma.rejectAffinity = reject
+	ma.mu.Unlock()
+}
+
+// SetFailStops makes all /stop requests fail with 500 when set to true
+func (ma *mockAgent) SetFailStops(fail bool) {
+	ma.mu.Lock()
+	ma.failStops = fail
 	ma.mu.Unlock()
 }
 
@@ -220,6 +228,14 @@ func (ma *mockAgent) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ma.mu.Lock()
+	if ma.failStops {
+		ma.mu.Unlock()
+		http.Error(w, "simulated stop failure", http.StatusInternalServerError)
+		return
+	}
+	ma.mu.Unlock()
+
 	jobName := r.URL.Path[len("/stop/"):]
 
 	ma.mu.Lock()
@@ -236,6 +252,31 @@ func (ma *mockAgent) handleStop(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Unlock()
 
 	_ = json.NewEncoder(w).Encode(map[string]int{"stopped": stopped})
+}
+
+// AddTasks pre-populates the mock agent with tasks (simulates pre-existing tasks from old leader)
+func (ma *mockAgent) AddTasks(jobName string, count int) {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	for i := 0; i < count; i++ {
+		ma.taskSeq++
+		ma.tasks = append(ma.tasks, &types.Task{
+			ID:      fmt.Sprintf("task-%s-%d", jobName, ma.taskSeq),
+			JobName: jobName,
+			State:   types.TaskRunning,
+		})
+	}
+}
+
+// PlacedCounts returns a map of jobName -> count for registration
+func (ma *mockAgent) PlacedCounts() map[string]int {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	counts := make(map[string]int)
+	for _, t := range ma.tasks {
+		counts[t.JobName]++
+	}
+	return counts
 }
 
 // taskCounts creates a map of jobName -> 1 for each job (1 task per job)
@@ -1573,5 +1614,134 @@ func TestFailoverFailedTasksNotRedispatched(t *testing.T) {
 	totalRuns := agentA.RunCallCount() + agentB.RunCallCount()
 	if totalRuns != 0 {
 		t.Errorf("Leader should NOT re-dispatch for failed tasks (restart counter exhausted), but dispatched %d", totalRuns)
+	}
+}
+
+// TestFailoverPreemptionStopFailureNoGhosts verifies that when a stop fails during
+// preemption, the placed data is NOT deleted. This prevents ghost tasks (tasks running
+// on agents but invisible to the leader's placed map).
+func TestFailoverPreemptionStopFailureNoGhosts(t *testing.T) {
+	// 2 agents, capacity 3 each = 6 slots
+	agentA := newMockAgent()
+	agentB := newMockAgent()
+	defer agentA.Close()
+	defer agentB.Close()
+	agentA.SetMaxCapacity(3)
+	agentB.SetMaxCapacity(3)
+
+	// Pre-populate: each agent has 3 "low" tasks (from old leader)
+	agentA.AddTasks("low", 3)
+	agentB.AddTasks("low", 3)
+
+	store := NewMockJobStore()
+	l := New("leader", store, &http.Client{Timeout: 200 * time.Millisecond})
+	l.SetSettleDelay(50 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
+
+	// Store both jobs: high prio should preempt low
+	store.StoreJob(&types.Job{Name: "high", Command: "./high", Count: 6, Priority: prio(0)})
+	store.StoreJob(&types.Job{Name: "low", Command: "./low", Count: 6, Priority: prio(1)})
+
+	// Agent A's stops will fail (simulates network issue during failover)
+	agentA.SetFailStops(true)
+
+	// Register agents with their actual placed counts
+	l.RegisterAgent("agent-a", agentA.URL(), "", agentA.PlacedCounts())
+	l.RegisterAgent("agent-b", agentB.URL(), "", agentB.PlacedCounts())
+
+	// Wait for settle + reconciliation
+	time.Sleep(400 * time.Millisecond)
+
+	// Agent A: stop failed → low tasks should still be tracked in placed
+	// Agent B: stop succeeded → low tasks replaced by high tasks
+	placed := l.GetPlacedCounts()
+
+	// Key assertion: placed counts must match actual running tasks (no ghost tasks)
+	actualA := agentA.TaskCount()
+	actualB := agentB.TaskCount()
+	totalPlaced := 0
+	for _, c := range placed {
+		totalPlaced += c
+	}
+
+	t.Logf("Agent A: %d tasks, Agent B: %d tasks, placed: %v", actualA, actualB, placed)
+
+	if totalPlaced != actualA+actualB {
+		t.Errorf("Ghost tasks detected: placed=%d but actual=%d (agent-a=%d, agent-b=%d)",
+			totalPlaced, actualA+actualB, actualA, actualB)
+	}
+
+	// Low should still be in placed (agent A's stop failed, tasks still running)
+	if placed["low"] == 0 {
+		t.Errorf("Low job should still be tracked in placed (stop failed on agent-a), but placed[low]=%d", placed["low"])
+	}
+
+	// Agent A should still have 3 low tasks (stop failed, nothing changed)
+	if agentA.TasksForJob("low") != 3 {
+		t.Errorf("Agent A should still have 3 low tasks (stop failed), got %d", agentA.TasksForJob("low"))
+	}
+}
+
+// TestFailoverPreemptionStopSuccessReplacesGhosts verifies the happy path:
+// when stops succeed during preemption, low-priority tasks are correctly replaced.
+func TestFailoverPreemptionStopSuccessReplacesGhosts(t *testing.T) {
+	// 2 agents, capacity 3 each = 6 slots
+	agentA := newMockAgent()
+	agentB := newMockAgent()
+	defer agentA.Close()
+	defer agentB.Close()
+	agentA.SetMaxCapacity(3)
+	agentB.SetMaxCapacity(3)
+
+	// Pre-populate: each agent has 3 "low" tasks (from old leader)
+	agentA.AddTasks("low", 3)
+	agentB.AddTasks("low", 3)
+
+	store := NewMockJobStore()
+	l := New("leader", store, &http.Client{Timeout: 200 * time.Millisecond})
+	l.SetSettleDelay(50 * time.Millisecond)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.Run(ctx)
+
+	// Store both jobs: high prio should preempt low
+	store.StoreJob(&types.Job{Name: "high", Command: "./high", Count: 6, Priority: prio(0)})
+	store.StoreJob(&types.Job{Name: "low", Command: "./low", Count: 6, Priority: prio(1)})
+
+	// Register agents with actual placed counts (all stops will succeed)
+	l.RegisterAgent("agent-a", agentA.URL(), "", agentA.PlacedCounts())
+	l.RegisterAgent("agent-b", agentB.URL(), "", agentB.PlacedCounts())
+
+	// Wait for settle + reconciliation
+	time.Sleep(400 * time.Millisecond)
+
+	placed := l.GetPlacedCounts()
+	t.Logf("Agent A: %d tasks (high=%d, low=%d), Agent B: %d tasks (high=%d, low=%d), placed: %v",
+		agentA.TaskCount(), agentA.TasksForJob("high"), agentA.TasksForJob("low"),
+		agentB.TaskCount(), agentB.TasksForJob("high"), agentB.TasksForJob("low"), placed)
+
+	// All 6 slots should be high-priority (low fully preempted)
+	if placed["high"] != 6 {
+		t.Errorf("Expected 6 high-priority tasks placed, got %d", placed["high"])
+	}
+
+	// No low tasks should remain (all preempted)
+	totalLow := agentA.TasksForJob("low") + agentB.TasksForJob("low")
+	if totalLow > 0 {
+		t.Errorf("Expected 0 low tasks after preemption, got %d", totalLow)
+	}
+
+	// Total placed = total actual
+	actualTotal := agentA.TaskCount() + agentB.TaskCount()
+	totalPlaced := 0
+	for _, c := range placed {
+		totalPlaced += c
+	}
+	if totalPlaced != actualTotal {
+		t.Errorf("placed=%d != actual=%d", totalPlaced, actualTotal)
 	}
 }

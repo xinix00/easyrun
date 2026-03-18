@@ -85,7 +85,7 @@ func DefaultConfig() *Config {
 			Isolate: true, // Security by default
 		},
 		Timeouts: TimeoutsConfig{
-			HealthCheckInterval: 10 * time.Second,
+			HealthCheckInterval: 5 * time.Second,
 			HealthCheckTimeout:  5 * time.Second,
 			NodeDeadThreshold:   30 * time.Second,
 			LeaderLease:         30 * time.Second,

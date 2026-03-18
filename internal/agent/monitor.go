@@ -27,7 +27,7 @@ type checkState struct {
 
 // monitorTasks periodically checks task states and health
 func (a *Agent) monitorTasks(ctx context.Context) {
-	ticker := time.NewTicker(taskMonitorInterval)
+	ticker := time.NewTicker(a.monitorInterval())
 	defer ticker.Stop()
 
 	for {
@@ -230,10 +230,10 @@ func (a *Agent) checkHealth(task *types.Task, hc *types.HealthCheck) bool {
 }
 
 // resolveHealthPort returns the port number and timeout for a health check.
-func resolveHealthPort(task *types.Task, hc *types.HealthCheck) (int, time.Duration, bool) {
+func (a *Agent) resolveHealthPort(task *types.Task, hc *types.HealthCheck) (int, time.Duration, bool) {
 	timeout := hc.Timeout
 	if timeout == 0 {
-		timeout = defaultHealthTimeout
+		timeout = a.healthTimeout()
 	}
 	portName := hc.Port
 	if portName == "" {
@@ -248,7 +248,7 @@ func resolveHealthPort(task *types.Task, hc *types.HealthCheck) (int, time.Durat
 
 // checkHealthHTTP performs an HTTP health check
 func (a *Agent) checkHealthHTTP(task *types.Task, hc *types.HealthCheck) bool {
-	port, timeout, ok := resolveHealthPort(task, hc)
+	port, timeout, ok := a.resolveHealthPort(task, hc)
 	if !ok {
 		return false
 	}
@@ -264,7 +264,7 @@ func (a *Agent) checkHealthHTTP(task *types.Task, hc *types.HealthCheck) bool {
 
 // checkHealthTCP performs a TCP connect health check
 func (a *Agent) checkHealthTCP(task *types.Task, hc *types.HealthCheck) bool {
-	port, timeout, ok := resolveHealthPort(task, hc)
+	port, timeout, ok := a.resolveHealthPort(task, hc)
 	if !ok {
 		return false
 	}

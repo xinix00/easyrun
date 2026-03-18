@@ -12,10 +12,9 @@ import (
 )
 
 const (
-	defaultAgentTimeout       = 30 * time.Second
-	defaultHealthCheckTimeout = 30 * time.Second
-	deadAgentCheckInterval    = 10 * time.Second
-	stateChannelBufferSize    = 256
+	defaultAgentTimeout    = 30 * time.Second
+	deadAgentCheckInterval = 10 * time.Second
+	stateChannelBufferSize = 256
 )
 
 var (
@@ -93,6 +92,11 @@ func New(localAgentID string, jobStore JobStore, client *http.Client) *Leader {
 // SetAPIKey sets the API key used for leader→agent HTTP requests
 func (l *Leader) SetAPIKey(key string) {
 	l.apiKey = key
+}
+
+// SetAgentTimeout overrides the default agent timeout (for config wiring)
+func (l *Leader) SetAgentTimeout(d time.Duration) {
+	l.agentTimeout = d
 }
 
 // EnableSettle enables settle period (waits agentTimeout before first reconciliation)
