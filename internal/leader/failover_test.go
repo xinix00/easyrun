@@ -1745,3 +1745,73 @@ func TestFailoverPreemptionStopSuccessReplacesGhosts(t *testing.T) {
 		t.Errorf("placed=%d != actual=%d", totalPlaced, actualTotal)
 	}
 }
+
+// TestRegisterAgentDuplicateIDRejected verifies that registering an agent
+// with the same ID but different endpoint is rejected (409 Conflict).
+func TestRegisterAgentDuplicateIDRejected(t *testing.T) {
+	store := NewMockJobStore()
+	l := New("leader", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
+	// First registration succeeds
+	ok := l.RegisterAgent("node-1", "http://10.0.0.1:8080", "v1", nil)
+	if !ok {
+		t.Fatal("first registration should succeed")
+	}
+
+	// Same ID, same endpoint = re-registration (restart), should succeed
+	ok = l.RegisterAgent("node-1", "http://10.0.0.1:8080", "v2", nil)
+	if !ok {
+		t.Fatal("re-registration with same endpoint should succeed")
+	}
+
+	// Same ID, different endpoint = duplicate, should be rejected
+	ok = l.RegisterAgent("node-1", "http://10.0.0.2:8080", "v1", nil)
+	if ok {
+		t.Error("duplicate agent ID with different endpoint should be rejected")
+	}
+
+	// Original agent should still be registered with its endpoint
+	agents := l.GetAgents()
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if agents[0].Endpoint != "http://10.0.0.1:8080" {
+		t.Errorf("agent endpoint = %q, want original", agents[0].Endpoint)
+	}
+}
+
+// TestRegisterAgentDuplicateIDAllowedAfterTimeout verifies that a duplicate
+// agent ID is accepted when the original agent has timed out (dead).
+func TestRegisterAgentDuplicateIDAllowedAfterTimeout(t *testing.T) {
+	store := NewMockJobStore()
+	l := New("leader", store, nil)
+	l.agentTimeout = 50 * time.Millisecond // short timeout for test
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go l.stateLoop(ctx)
+
+	// Register original
+	l.RegisterAgent("node-1", "http://10.0.0.1:8080", "v1", nil)
+
+	// Wait for timeout
+	time.Sleep(100 * time.Millisecond)
+
+	// Same ID, different endpoint — original timed out, should succeed
+	ok := l.RegisterAgent("node-1", "http://10.0.0.2:8080", "v1", nil)
+	if !ok {
+		t.Error("should allow re-registration after original agent timed out")
+	}
+
+	agents := l.GetAgents()
+	if len(agents) != 1 {
+		t.Fatalf("expected 1 agent, got %d", len(agents))
+	}
+	if agents[0].Endpoint != "http://10.0.0.2:8080" {
+		t.Errorf("agent endpoint = %q, want new endpoint", agents[0].Endpoint)
+	}
+}

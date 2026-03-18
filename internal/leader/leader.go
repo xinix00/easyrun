@@ -181,8 +181,21 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime tim
 }
 
 // RegisterAgent registers a (re)starting agent. Clears old state and triggers reconciliation.
-func (l *Leader) RegisterAgent(id, endpoint, version string, placed map[string]int) {
-	shouldReconcile := query(l, func(s *leaderState) bool {
+// Returns false if the ID is already registered with a different endpoint (duplicate).
+func (l *Leader) RegisterAgent(id, endpoint, version string, placed map[string]int) bool {
+	type result struct {
+		reconcile bool
+		rejected  bool
+	}
+	res := query(l, func(s *leaderState) result {
+		// Reject if another live agent has the same ID but different endpoint
+		if existing, ok := s.agents[id]; ok && existing.Endpoint != endpoint {
+			if time.Since(existing.LastSeen) < l.agentTimeout {
+				log.Printf("Rejecting agent %s: already registered at %s (new: %s)", id, existing.Endpoint, endpoint)
+				return result{rejected: true}
+			}
+		}
+
 		// Clear stale state from previous incarnation
 		delete(s.agents, id)
 		delete(s.placed, id)
@@ -197,14 +210,18 @@ func (l *Leader) RegisterAgent(id, endpoint, version string, placed map[string]i
 			s.placed[id] = placed
 		}
 		s.rebuildSortedAgents()
-		return s.settled
+		return result{reconcile: s.settled}
 	})
 
-	if shouldReconcile {
+	if res.rejected {
+		return false
+	}
+	if res.reconcile {
 		log.Printf("Agent %s registered, reconciling jobs", id)
 		l.reconcileJobs()
 	}
 	l.eventBus.Notify("agent:" + id)
+	return true
 }
 
 // UnregisterAgent removes an agent and reconciles jobs

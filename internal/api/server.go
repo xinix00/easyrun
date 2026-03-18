@@ -142,7 +142,10 @@ func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.leader.RegisterAgent(req.ID, req.Endpoint, req.Version, req.Placed)
+	if !s.leader.RegisterAgent(req.ID, req.Endpoint, req.Version, req.Placed) {
+		httputil.WriteError(w, http.StatusConflict, fmt.Sprintf("agent %s already registered with different endpoint", req.ID))
+		return
+	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"status":     "registered",
 		"jobs":       s.leader.GetJobs(),
