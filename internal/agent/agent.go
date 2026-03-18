@@ -245,7 +245,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/v1/status", auth(a.proxyToLeader))
 	mux.HandleFunc("/v1/events", auth(a.proxySSEToLeader))
 
-	addr := fmt.Sprintf("%s:%d", a.config.Node.IP, a.config.Node.Port)
+	addr := fmt.Sprintf(":%d", a.config.Node.Port)
 	a.server = &http.Server{
 		Addr:    addr,
 		Handler: corsMiddleware(mux),

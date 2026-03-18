@@ -193,7 +193,7 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 	go (*l).Run(leaderCtx)
 
 	// Start API server so other agents can register/heartbeat
-	leaderAddr := fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
+	leaderAddr := fmt.Sprintf(":%d", cfg.Node.Port+1000)
 	srv := api.NewServer(*l, leaderAddr, apiKey, cfg.Cluster.Name)
 	go func() {
 		if err := srv.Run(leaderCtx); err != nil {
