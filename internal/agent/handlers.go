@@ -210,8 +210,10 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ensure job has ID and driver, then create the task.
-	initJob(&job)
+	// Ensure driver is set, then create the task.
+	if job.Driver == "" {
+		job.Driver = types.DriverFor(job.Image)
+	}
 	task := newTask(&job)
 
 	// Check capacity AND add task to state atomically.
@@ -224,7 +226,7 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.sysInfo.MemoryBytes {
 			return false
 		}
-		s.jobs[job.ID] = &job
+		s.jobs[job.Name] = &job
 		s.tasks[task.ID] = task
 		return true
 	})
@@ -237,7 +239,6 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Accept job immediately (fire-and-forget)
-	// Artifact download and job start happen async
 	httputil.WriteJSON(w, http.StatusAccepted, map[string]string{
 		"status":  "accepted",
 		"job":     job.Name,
@@ -258,24 +259,24 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	}()
 }
 
-// handleDelete deletes a job and cleans up all its tasks (by job ID)
+// handleDelete deletes a job and cleans up all its tasks (by job name)
 func (a *Agent) handleDelete(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	jobID := strings.TrimPrefix(r.URL.Path, "/delete/")
-	if jobID == "" {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job id required"})
+	jobName := strings.TrimPrefix(r.URL.Path, "/delete/")
+	if jobName == "" {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job name required"})
 		return
 	}
 
-	deleted := a.deleteJobByID(jobID)
+	deleted := a.deleteJob(jobName)
 	httputil.WriteJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
 }
 
-// handleStop stops all tasks for a job WITHOUT removing the job definition (by job ID).
+// handleStop stops all tasks for a job WITHOUT removing the job definition (by job name).
 // Used by the leader for preemption — the job definition must remain for rescheduling.
 func (a *Agent) handleStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -283,23 +284,63 @@ func (a *Agent) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID := strings.TrimPrefix(r.URL.Path, "/stop/")
-	if jobID == "" {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job id required"})
+	jobName := strings.TrimPrefix(r.URL.Path, "/stop/")
+	if jobName == "" {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job name required"})
 		return
 	}
 
-	stopped := a.stopJobTasksByID(jobID)
+	stopped := a.stopJobTasks(jobName)
 	httputil.WriteJSON(w, http.StatusOK, map[string]int{"stopped": stopped})
 }
 
-// stopJobTasksByID stops all tasks for a job WITHOUT removing the job definition.
+// handleStopTask stops a single specific task by task ID.
+// Used by rolling and blue-green updates to stop precise old instances.
+func (a *Agent) handleStopTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	taskID := strings.TrimPrefix(r.URL.Path, "/stop-task/")
+	if taskID == "" {
+		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "task id required"})
+		return
+	}
+
+	task := query(a, func(s *agentState) *types.Task {
+		if t := s.tasks[taskID]; t != nil {
+			t.State = types.TaskStopping
+			return t
+		}
+		return nil
+	})
+
+	if task == nil {
+		httputil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		return
+	}
+
+	go func() {
+		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
+			log.Printf("Failed to stop task %s: %v", taskID, err)
+		}
+		a.do(func(s *agentState) {
+			delete(s.tasks, taskID)
+		})
+		a.scheduleSave()
+	}()
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"stopped": taskID})
+}
+
+// stopJobTasks stops all tasks for a job WITHOUT removing the job definition.
 // Used for preemption so the job remains in the store for future rescheduling.
-func (a *Agent) stopJobTasksByID(jobID string) int {
+func (a *Agent) stopJobTasks(jobName string) int {
 	tasks := query(a, func(s *agentState) []*types.Task {
 		var tasks []*types.Task
 		for _, task := range s.tasks {
-			if task.JobID == jobID {
+			if task.JobName == jobName {
 				task.State = types.TaskStopping
 				tasks = append(tasks, task)
 			}
@@ -308,25 +349,14 @@ func (a *Agent) stopJobTasksByID(jobID string) int {
 	})
 
 	a.stopTasks(tasks)
-	log.Printf("Stopped tasks for job %s: %d tasks (job definition preserved)", jobID, len(tasks))
+	log.Printf("Stopped tasks for job %s: %d tasks (job definition preserved)", jobName, len(tasks))
 	return len(tasks)
 }
 
-// initJob sets defaults on a job (ID, driver) if not already set.
-func initJob(job *types.Job) {
-	if job.ID == "" {
-		job.ID = uuid.New().String()
-	}
-	if job.Driver == "" {
-		job.Driver = types.DriverFor(job.Image)
-	}
-}
-
-// newTask creates a Task from a Job. Call initJob(job) first.
+// newTask creates a Task from a Job.
 func newTask(job *types.Job) *types.Task {
 	return &types.Task{
 		ID:          uuid.New().String(),
-		JobID:       job.ID,
 		JobName:     job.Name,
 		Driver:      job.Driver,
 		Image:       job.Image,
@@ -340,7 +370,9 @@ func newTask(job *types.Job) *types.Task {
 // startJob prepares and starts a job process. The task must be pre-created
 // (via newTask). startJob allocates ports, runs the process, and stores in state.
 func (a *Agent) startJob(job *types.Job, task *types.Task) error {
-	initJob(job)
+	if job.Driver == "" {
+		job.Driver = types.DriverFor(job.Image)
+	}
 
 	// Resolve platform-specific artifact (pick first matching this node's attributes)
 	if len(job.Artifacts) > 0 {
@@ -377,7 +409,7 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 
 	// Store in state
 	a.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 		s.tasks[task.ID] = task
 	})
 	a.scheduleSave()
@@ -392,19 +424,15 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 }
 
 // allocatePorts allocates ports based on job port config
-// If value is 0, allocates a dynamic free port
-// If value > 0, uses that fixed port (after checking availability)
 func allocatePorts(portConfig map[string]int) (map[string]int, error) {
 	ports := make(map[string]int)
 	for name, fixed := range portConfig {
 		if fixed > 0 {
-			// Check if fixed port is available
 			if !isPortAvailable(fixed) {
 				return nil, fmt.Errorf("port %d for %s is already in use", fixed, name)
 			}
 			ports[name] = fixed
 		} else {
-			// Allocate dynamic port
 			port, err := getFreePort()
 			if err != nil {
 				return nil, fmt.Errorf("failed to get port for %s: %w", name, err)
@@ -428,7 +456,7 @@ func isPortAvailable(port int) bool {
 
 // restartTask restarts a failed task
 func (a *Agent) restartTask(task *types.Task) {
-	job := a.GetJobByName(task.JobName)
+	job := a.GetJob(task.JobName)
 	if job == nil {
 		log.Printf("Cannot restart task %s: job %s not found", task.ID, task.JobName)
 		return
@@ -439,7 +467,6 @@ func (a *Agent) restartTask(task *types.Task) {
 		maxRestarts = defaultMaxRestarts
 	}
 
-	// Check restart count (read current value)
 	restartCount := query(a, func(s *agentState) int {
 		if t := s.tasks[task.ID]; t != nil {
 			return t.RestartCount
@@ -458,7 +485,7 @@ func (a *Agent) restartTask(task *types.Task) {
 		return
 	}
 
-	// Clean up old runner entries (process already dead, this just removes maps + task dir)
+	// Clean up old runner entries (process already dead)
 	_ = a.runnerFor(task.Driver).Stop(task)
 
 	ports, err := a.allocatePortsForJob(job)
@@ -498,38 +525,27 @@ func (a *Agent) restartTask(task *types.Task) {
 	log.Printf("Restarted task %s -> %s (job %s), restart #%d", task.ID, replacement.ID, job.Name, replacement.RestartCount)
 }
 
-// deleteJobByID removes job definition AND cleans up all tasks by job ID
-func (a *Agent) deleteJobByID(jobID string) int {
-	// Remove job, mark tasks as stopping (prevents monitor from restarting)
-	type deleteResult struct {
-		tasks   []*types.Task
-		jobName string
-	}
-	result := query(a, func(s *agentState) deleteResult {
-		var jobName string
-		if j := s.jobs[jobID]; j != nil {
-			jobName = j.Name
-		}
-		delete(s.jobs, jobID)
+// deleteJob removes job definition AND cleans up all tasks by job name
+func (a *Agent) deleteJob(jobName string) int {
+	tasks := query(a, func(s *agentState) []*types.Task {
+		delete(s.jobs, jobName)
 		var tasks []*types.Task
 		for _, task := range s.tasks {
-			if task.JobID == jobID {
+			if task.JobName == jobName {
 				task.State = types.TaskStopping
 				tasks = append(tasks, task)
 			}
 		}
-		return deleteResult{tasks, jobName}
+		return tasks
 	})
 	a.scheduleSave()
 
-	a.stopTasks(result.tasks)
-	log.Printf("Deleted job %s: %d tasks stopped", jobID, len(result.tasks))
+	a.stopTasks(tasks)
+	log.Printf("Deleted job %s: %d tasks stopped", jobName, len(tasks))
 
-	if result.jobName != "" {
-		go a.notifyLeader(result.jobName, "stop")
-	}
+	go a.notifyLeader(jobName, "stop")
 
-	return len(result.tasks)
+	return len(tasks)
 }
 
 // handleLogs streams task logs (stdout or stderr)

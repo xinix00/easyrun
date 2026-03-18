@@ -52,7 +52,6 @@ func TestMassiveScale(t *testing.T) {
 			start = time.Now()
 			for i := 0; i < tt.totalJobs; i++ {
 				job := &types.Job{
-					ID:      fmt.Sprintf("job-%d", i),
 					Name:    fmt.Sprintf("job-%d", i),
 					Command: "echo test",
 					Count:   tt.jobsPerJob,
@@ -138,7 +137,6 @@ func BenchmarkMassiveJobs(b *testing.B) {
 			// Create jobs
 			for i := 0; i < size; i++ {
 				job := &types.Job{
-					ID:      fmt.Sprintf("job-%d", i),
 					Name:    fmt.Sprintf("job-%d", i),
 					Command: "echo test",
 					Count:   1,
@@ -166,18 +164,16 @@ func BenchmarkJobLookupScale(b *testing.B) {
 	for _, size := range sizes {
 		b.Run(fmt.Sprintf("%d_jobs", size), func(b *testing.B) {
 			store := NewMockJobStore()
-			leader, cancel := startStressLeader(store)
+			_, cancel := startStressLeader(store)
 			defer cancel()
 
 			// Create jobs
 			for i := 0; i < size; i++ {
 				job := &types.Job{
-					ID:      fmt.Sprintf("job-%d", i),
 					Name:    fmt.Sprintf("job-%d", i),
 					Command: "echo test",
 				}
 				store.StoreJob(job)
-				leader.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 			}
 			time.Sleep(10 * time.Millisecond)
 
@@ -186,7 +182,7 @@ func BenchmarkJobLookupScale(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				name := fmt.Sprintf("job-%d", i%size)
-				job := leader.FindJobByName(name)
+				job := store.GetJob(name)
 				if job == nil {
 					b.Fatal("Job not found")
 				}
@@ -301,9 +297,9 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 	}
 
 	for i := 0; i < 10000; i++ {
+		jobName := fmt.Sprintf("job-%d", i)
 		job := &types.Job{
-			ID:          fmt.Sprintf("job-%d", i),
-			Name:        fmt.Sprintf("job-%d", i),
+			Name:        jobName,
 			Command:     "echo test",
 			Count:       3,
 			CPUShares:   1024,
@@ -311,7 +307,6 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 			Tags:        map[string]string{"service": "api", "env": "prod"},
 		}
 		store.StoreJob(job)
-		leader.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 
 		// Simulate placement
 		for j := 0; j < 3; j++ {
@@ -320,7 +315,7 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 				if s.placed[agentID] == nil {
 					s.placed[agentID] = make(map[string]int)
 				}
-				s.placed[agentID][job.ID]++
+				s.placed[agentID][jobName]++
 			})
 		}
 	}
@@ -333,7 +328,7 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 		_ = leader.GetAgents()
 		_ = leader.GetJobs()
 		name := fmt.Sprintf("job-%d", i%10000)
-		_ = leader.FindJobByName(name)
+		_ = store.GetJob(name)
 	}
 
 	b.Logf("State size: 1000 agents, 10k jobs, 30k placed")

@@ -40,7 +40,6 @@ func TestThreeNodeClusterOneDies(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "app-id",
 		Name:    "app",
 		Command: "./app",
 		Count:   30,
@@ -115,7 +114,6 @@ func TestDaemonStableDuringBlipNewNodeJoins(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	daemon := &types.Job{
-		ID:      "daemon-id",
 		Name:    "daemon",
 		Command: "./daemon",
 		Count:   -1,
@@ -158,7 +156,7 @@ func TestDaemonStableDuringBlipNewNodeJoins(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Still exactly 1 daemon per agent, 3 total
-	placed := l.GetPlaced(daemon.ID)
+	placed := l.GetPlaced(daemon.Name)
 	if len(placed) != 3 {
 		t.Errorf("Daemon should be on 3 agents, got %d: %v", len(placed), placed)
 	}
@@ -187,7 +185,6 @@ func TestHeartbeatReducedPlacedTriggersReconcile(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "app-id",
 		Name:    "app",
 		Command: "./app",
 		Count:   20,
@@ -206,10 +203,8 @@ func TestHeartbeatReducedPlacedTriggersReconcile(t *testing.T) {
 	agentB.tasks = agentB.tasks[:bTasks-3]
 	agentB.mu.Unlock()
 
-	reducedCount := bTasks - 3
-
 	// B registers with reduced placed count → triggers reconcile → dispatches 3 missing
-	l.RegisterAgent("agent-b", agentB.URL(), "", map[string]int{job.ID: reducedCount})
+	l.RegisterAgent("agent-b", agentB.URL(), "", map[string]int{job.Name: bTasks - 3})
 	time.Sleep(100 * time.Millisecond)
 
 	// RegisterAgent triggers reconcile: placed=10+7=17, desired=20, dispatches 3
@@ -243,8 +238,8 @@ func TestMixedJobsAgentDies(t *testing.T) {
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
-	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
-	regular := &types.Job{ID: "web-id", Name: "web", Command: "./web", Count: 4}
+	daemon := &types.Job{Name: "daemon", Command: "./daemon", Count: -1}
+	regular := &types.Job{Name: "web", Command: "./web", Count: 4}
 
 	if err := l.DispatchJob(daemon); err != nil {
 		t.Fatalf("Daemon dispatch failed: %v", err)
@@ -279,13 +274,13 @@ func TestMixedJobsAgentDies(t *testing.T) {
 	}
 
 	// Daemon placed: only B (A was removed)
-	daemonPlaced := l.GetPlaced(daemon.ID)
+	daemonPlaced := l.GetPlaced(daemon.Name)
 	if len(daemonPlaced) != 1 {
 		t.Errorf("Daemon should be on 1 agent, got %d: %v", len(daemonPlaced), daemonPlaced)
 	}
 
 	// Regular placed: all 4 on B
-	regularPlaced := l.GetPlaced(regular.ID)
+	regularPlaced := l.GetPlaced(regular.Name)
 	totalRegular := 0
 	for _, count := range regularPlaced {
 		totalRegular += count
@@ -322,7 +317,6 @@ func TestGracefulLeaveThreeNodes(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "app-id",
 		Name:    "app",
 		Command: "./app",
 		Count:   30,
@@ -358,7 +352,7 @@ func TestGracefulLeaveThreeNodes(t *testing.T) {
 			t.Error("Agent B should not be in agents after unregister")
 		}
 	}
-	placed := l.GetPlaced(job.ID)
+	placed := l.GetPlaced(job.Name)
 	if _, ok := placed["agent-b"]; ok {
 		t.Error("Agent B should have no placed entries after unregister")
 	}
@@ -387,7 +381,7 @@ func TestAgentDiesAndRejoinsGetsDaemon(t *testing.T) {
 	l.Heartbeat("agent-b", agentB.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
-	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
+	daemon := &types.Job{Name: "daemon", Command: "./daemon", Count: -1}
 	if err := l.DispatchJob(daemon); err != nil {
 		t.Fatalf("Dispatch failed: %v", err)
 	}
@@ -411,7 +405,7 @@ func TestAgentDiesAndRejoinsGetsDaemon(t *testing.T) {
 	if agentA.TaskCount() != 1 {
 		t.Errorf("A should still have 1 daemon, got %d", agentA.TaskCount())
 	}
-	if len(l.GetPlaced(daemon.ID)) != 1 {
+	if len(l.GetPlaced(daemon.Name)) != 1 {
 		t.Errorf("Daemon should only be placed on A after B dies")
 	}
 
@@ -427,7 +421,7 @@ func TestAgentDiesAndRejoinsGetsDaemon(t *testing.T) {
 		t.Errorf("Rejoined B should get daemon, got %d tasks", agentBNew.TaskCount())
 	}
 
-	placed := l.GetPlaced(daemon.ID)
+	placed := l.GetPlaced(daemon.Name)
 	if len(placed) != 2 {
 		t.Errorf("Daemon should be on 2 agents after rejoin, got %d: %v", len(placed), placed)
 	}
@@ -462,7 +456,6 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "app-id",
 		Name:    "app",
 		Command: "./app",
 		Count:   20,
@@ -500,7 +493,6 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 	for i := 0; i < aTasks; i++ {
 		zombieA.tasks = append(zombieA.tasks, &types.Task{
 			ID:      fmt.Sprintf("zombie-task-%d", i),
-			JobID:   job.ID,
 			JobName: job.Name,
 			State:   types.TaskRunning,
 		})
@@ -508,7 +500,7 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 	zombieA.mu.Unlock()
 
 	// Zombie registers with its placed data and heartbeats for keepalive
-	l.RegisterAgent("agent-a", zombieA.URL(), "", map[string]int{job.ID: aTasks})
+	l.RegisterAgent("agent-a", zombieA.URL(), "", map[string]int{job.Name: aTasks})
 	l.Heartbeat("agent-a", zombieA.URL(), []*types.Job{job}, time.Now(), "")
 	time.Sleep(100 * time.Millisecond)
 
@@ -526,7 +518,7 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 
 	// Document: 30 tasks running (20 on B + 10 on zombie A) but desired is 20.
 	// Placed-based system doesn't scale down — this is intentional.
-	totalPlaced := l.GetPlaced(job.ID)
+	totalPlaced := l.GetPlaced(job.Name)
 	total := 0
 	for _, count := range totalPlaced {
 		total += count

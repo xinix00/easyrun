@@ -183,7 +183,7 @@ func TestCheckTasksDetectsCrashedProcess(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Start a job so we have a task
-	job := &types.Job{ID: "job-1", Name: "test-job", Command: "echo hello"}
+	job := &types.Job{Name: "test-job", Command: "echo hello"}
 	task := newTask(job)
 	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
@@ -241,7 +241,6 @@ func TestCheckTasksHealthCheckFails(t *testing.T) {
 	port := getPort(t, srv)
 
 	job := &types.Job{
-		ID:      "job-1",
 		Name:    "health-job",
 		Command: "echo hello",
 		Ports:   map[string]int{"http": 0},
@@ -255,11 +254,10 @@ func TestCheckTasksHealthCheckFails(t *testing.T) {
 
 	// Store job and create task manually with correct port
 	agent.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 
 		s.tasks["task-health"] = &types.Task{
 			ID:      "task-health",
-			JobID:   job.ID,
 			JobName: "health-job",
 			Ports:   map[string]int{"http": port},
 			Pid:     1234,
@@ -306,7 +304,6 @@ func TestCheckTasksHealthCheckSucceeds(t *testing.T) {
 	port := getPort(t, srv)
 
 	job := &types.Job{
-		ID:      "job-1",
 		Name:    "healthy-job",
 		Command: "echo hello",
 		HealthCheck: &types.HealthCheck{
@@ -317,11 +314,10 @@ func TestCheckTasksHealthCheckSucceeds(t *testing.T) {
 	}
 
 	agent.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 
 		s.tasks["task-ok"] = &types.Task{
 			ID:      "task-ok",
-			JobID:   job.ID,
 			JobName: "healthy-job",
 			Ports:   map[string]int{"http": port},
 			Pid:     1234,
@@ -597,11 +593,11 @@ func TestRestartTaskSuccess(t *testing.T) {
 	go agent.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	job := &types.Job{ID: "job-1", Name: "restart-me", Command: "echo hello"}
+	job := &types.Job{Name: "restart-me", Command: "echo hello"}
 
 	// Store job and create a failed task
 	agent.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 
 		s.tasks["task-restart"] = &types.Task{
 			ID:           "task-restart",
@@ -652,14 +648,13 @@ func TestRestartTaskMaxRestartsExceeded(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
-		ID:          "job-1",
 		Name:        "max-restart",
 		Command:     "echo hello",
 		MaxRestarts: 3,
 	}
 
 	agent.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 
 		s.tasks["task-max"] = &types.Task{
 			ID:           "task-max",
@@ -709,14 +704,13 @@ func TestRestartTaskUnlimitedRestarts(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
-		ID:          "job-1",
 		Name:        "unlimited",
 		Command:     "echo hello",
 		MaxRestarts: -1, // Unlimited
 	}
 
 	agent.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 
 		s.tasks["task-unlimited"] = &types.Task{
 			ID:           "task-unlimited",

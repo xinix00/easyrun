@@ -74,7 +74,7 @@ func TestStartJobNotify_WithoutHealthCheck(t *testing.T) {
 	go agent.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	job := &types.Job{ID: "job-1", Name: "my-api", Command: "echo hello"}
+	job := &types.Job{Name: "my-api", Command: "echo hello"}
 	if err := agent.startJob(job, newTask(job)); err != nil {
 		t.Fatalf("startJob failed: %v", err)
 	}
@@ -111,7 +111,6 @@ func TestStartJobNotify_WithHealthCheck(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "job-1",
 		Name:    "my-api",
 		Command: "echo hello",
 		HealthCheck: &types.HealthCheck{
@@ -152,18 +151,17 @@ func TestDeleteJobNotify(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Store a job and task
-	agent.StoreJob(&types.Job{ID: "job-1", Name: "my-api", Command: "echo"})
+	agent.StoreJob(&types.Job{Name: "my-api", Command: "echo"})
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
 			ID:      "task-1",
-			JobID:   "job-1",
 			JobName: "my-api",
 			State:   types.TaskRunning,
 		}
 	})
 	time.Sleep(10 * time.Millisecond)
 
-	agent.deleteJobByID("job-1")
+	agent.deleteJob("my-api")
 
 	// Wait for async notifyLeader goroutine
 	time.Sleep(100 * time.Millisecond)
@@ -211,7 +209,6 @@ func TestFirstHealthCheckPassFiresStarted(t *testing.T) {
 	port := getPort(t, srv)
 
 	job := &types.Job{
-		ID:      "job-1",
 		Name:    "my-api",
 		Command: "echo hello",
 		HealthCheck: &types.HealthCheck{
@@ -222,10 +219,9 @@ func TestFirstHealthCheckPassFiresStarted(t *testing.T) {
 	}
 
 	agent.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 		s.tasks["task-hc"] = &types.Task{
 			ID:        "task-hc",
-			JobID:     job.ID,
 			JobName:   "my-api",
 			Ports:     map[string]int{"http": port},
 			Pid:       1234,
@@ -286,7 +282,6 @@ func TestHealthCheckPassOnlyNotifiesOnce(t *testing.T) {
 	port := getPort(t, srv)
 
 	job := &types.Job{
-		ID:      "job-1",
 		Name:    "my-api",
 		Command: "echo hello",
 		HealthCheck: &types.HealthCheck{
@@ -297,10 +292,9 @@ func TestHealthCheckPassOnlyNotifiesOnce(t *testing.T) {
 	}
 
 	agent.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 		s.tasks["task-once"] = &types.Task{
 			ID:        "task-once",
-			JobID:     job.ID,
 			JobName:   "my-api",
 			Ports:     map[string]int{"http": port},
 			Pid:       1234,
@@ -352,7 +346,7 @@ func TestCrashEventFired(t *testing.T) {
 	go agent.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	job := &types.Job{ID: "job-1", Name: "crasher", Command: "echo hello"}
+	job := &types.Job{Name: "crasher", Command: "echo hello"}
 	task := newTask(job)
 	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)

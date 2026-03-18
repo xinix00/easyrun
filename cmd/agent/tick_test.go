@@ -234,7 +234,7 @@ func TestTick_HeartbeatSuccess_SyncsJobs(t *testing.T) {
 	loop.lastLeaderAddr = "leader:9080"
 	loop.failCount = 2 // simulated prior failures
 
-	jobs := []*types.Job{{ID: "j1", Name: "my-api"}}
+	jobs := []*types.Job{{Name: "my-api"}}
 	loop.doHeartbeat = okHeartbeat(jobs)
 
 	loop.tick()

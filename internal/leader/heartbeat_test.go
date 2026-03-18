@@ -75,8 +75,8 @@ func TestLeaderHeartbeatLearnsJobsFromRemoteAgents(t *testing.T) {
 
 	// Remote agent has jobs (with IDs for placement tracking)
 	remoteJobs := []*types.Job{
-		{ID: "job-1-id", Name: "remote-job-1", Command: "echo 1"},
-		{ID: "job-2-id", Name: "remote-job-2", Command: "echo 2"},
+		{Name: "remote-job-1", Command: "echo 1"},
+		{Name: "remote-job-2", Command: "echo 2"},
 	}
 
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)

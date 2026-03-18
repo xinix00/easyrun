@@ -26,7 +26,7 @@ func main() {
 	flag.StringVar(&leaderAddr, "leader", envOr("EASYRUN_LEADER", "localhost:9080"), "Leader address")
 	flag.StringVar(&apiKey, "api-key", os.Getenv("EASYRUN_API_KEY"), "API key for authentication")
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Usage: run [flags] <command> [args]\n\nCommands:\n  deploy   Deploy or update a job\n  delete   Delete a job and all its tasks\n  status   Show cluster status\n  agents   List agents or show agent details\n  logs     Stream task logs\n\nFlags:\n")
+		fmt.Fprintf(os.Stderr, "Usage: run [flags] <command> [args]\n\nCommands:\n  apply    Create or update a job (upsert by name)\n  delete   Delete a job and all its tasks\n  status   Show cluster status\n  agents   List agents or show agent details\n  logs     Stream task logs\n\nFlags:\n")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
@@ -39,8 +39,8 @@ func main() {
 
 	var err error
 	switch args[0] {
-	case "deploy":
-		err = runDeploy(args[1:])
+	case "apply":
+		err = runApply(args[1:])
 	case "delete":
 		err = runDelete(args[1:])
 	case "status":
@@ -68,21 +68,20 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
-func runDeploy(args []string) error {
-	fs := flag.NewFlagSet("deploy", flag.ExitOnError)
+func runApply(args []string) error {
+	fs := flag.NewFlagSet("apply", flag.ExitOnError)
 	name := fs.String("name", "", "Job name (required)")
 	command := fs.String("command", "", "Command to run")
 	image := fs.String("image", "", "Docker image")
 	cpu := fs.Int("cpu", 0, "CPU shares")
 	memory := fs.String("memory", "", "Memory limit (e.g., 512M, 1G)")
 	priorityFlag := fs.Int("priority", -1, "Scheduling priority (0=highest, omit to append at end)")
-	updatePolicy := fs.String("update-policy", "rolling", "Update policy: rolling, recreate, or blue-green")
+	updatePolicy := fs.String("update-policy", "rolling", "Update policy if job exists: rolling, recreate, or blue-green")
 	checkType := fs.String("check-type", "", "Health check type: http, tcp, or file")
 	checkPath := fs.String("check-path", "", "Health check path")
 	checkPort := fs.String("check-port", "", "Health check port name")
 	checkFailures := fs.Int("check-failures", 0, "Consecutive failures before unhealthy")
 
-	// Collect repeatable flags manually after parse
 	var envFlags, artifactFlags, affinityFlags []string
 	for i := 0; i < len(args); i++ {
 		switch {
@@ -116,15 +115,47 @@ func runDeploy(args []string) error {
 		return fmt.Errorf("either --command or --image is required")
 	}
 
-	job := types.Job{
-		Name:         *name,
-		Command:      *command,
-		Image:        *image,
-		CPUShares:    *cpu,
-		UpdatePolicy: types.UpdatePolicy(*updatePolicy),
+	job := buildJob(*name, *command, *image, *cpu, *memory, *priorityFlag,
+		envFlags, artifactFlags, affinityFlags,
+		*checkType, *checkPath, *checkPort, *checkFailures, *updatePolicy)
+
+	resp, err := doRequest("POST", "/v1/jobs", job)
+	if err != nil {
+		return err
 	}
-	if *priorityFlag >= 0 {
-		p := *priorityFlag
+
+	var result map[string]string
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return err
+	}
+
+	switch result["status"] {
+	case "updating":
+		fmt.Printf("Job '%s' updating (policy=%s)\n", job.Name, result["policy"])
+	case "pending":
+		fmt.Printf("Job '%s' stored — pending dispatch: %s\n", job.Name, result["error"])
+	default:
+		fmt.Printf("Job '%s' dispatched\n", job.Name)
+	}
+	return nil
+}
+
+// buildJob constructs a Job from CLI flags
+func buildJob(name, command, image string, cpu int, memory string, priorityFlag int,
+	envFlags, artifactFlags, affinityFlags []string,
+	checkType, checkPath, checkPort string, checkFailures int,
+	updatePolicy string) types.Job {
+
+	job := types.Job{
+		Name:         name,
+		Command:      command,
+		Image:        image,
+		CPUShares:    cpu,
+		UpdatePolicy: types.UpdatePolicy(updatePolicy),
+	}
+
+	if priorityFlag >= 0 {
+		p := priorityFlag
 		job.Priority = &p
 	}
 
@@ -139,12 +170,11 @@ func runDeploy(args []string) error {
 		job.Artifacts = append(job.Artifacts, a)
 	}
 
-	if *memory != "" {
-		memBytes, err := parseMemory(*memory)
-		if err != nil {
-			return err
+	if memory != "" {
+		memBytes, err := parseMemory(memory)
+		if err == nil {
+			job.MemoryLimit = memBytes
 		}
-		job.MemoryLimit = memBytes
 	}
 
 	if len(envFlags) > 0 {
@@ -155,49 +185,27 @@ func runDeploy(args []string) error {
 		job.Affinity = parseKV(strings.Join(affinityFlags, ","))
 	}
 
-	if *checkType != "" || *checkPath != "" {
+	if checkType != "" || checkPath != "" {
 		job.HealthCheck = &types.HealthCheck{
-			Type:             *checkType,
-			Path:             *checkPath,
-			Port:             *checkPort,
-			FailureThreshold: *checkFailures,
+			Type:             checkType,
+			Path:             checkPath,
+			Port:             checkPort,
+			FailureThreshold: checkFailures,
 		}
 	}
 
-	resp, err := doRequest("POST", "/v1/jobs", job)
-	if err != nil {
-		return err
-	}
-
-	var result map[string]string
-	if err := json.Unmarshal(resp, &result); err != nil {
-		return err
-	}
-
-	switch result["status"] {
-	case "updated":
-		policy := result["policy"]
-		if policy == "" {
-			policy = "rolling"
-		}
-		fmt.Printf("Job '%s' updated (ID %s, policy=%s)\n", job.Name, result["id"], policy)
-	case "pending":
-		fmt.Printf("Job '%s' stored (ID %s) — pending dispatch: %s\n", job.Name, result["id"], result["error"])
-	default:
-		fmt.Printf("Job '%s' dispatched with ID %s\n", job.Name, result["id"])
-	}
-	return nil
+	return job
 }
 
 func runDelete(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("job id required")
+		return fmt.Errorf("job name required")
 	}
 	_, err := doRequest("DELETE", "/v1/jobs/"+args[0], nil)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("Job deleted (ID %s)\n", args[0])
+	fmt.Printf("Job deleted (%s)\n", args[0])
 	return nil
 }
 
@@ -208,10 +216,10 @@ func runStatus() error {
 	}
 
 	var status struct {
-		Agents       int                      `json:"agents"`
-		TotalTasks   int                      `json:"total_tasks"`
-		RunningTasks int                      `json:"running_tasks"`
-		TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
+		Agents       int            `json:"agents"`
+		Settling     bool           `json:"settling"`
+		TotalPlaced  int            `json:"total_placed"`
+		Placed       map[string]int `json:"placed"`
 	}
 	if err := json.Unmarshal(resp, &status); err != nil {
 		return err
@@ -229,21 +237,15 @@ func runStatus() error {
 
 	fmt.Printf("Leader:  %s\n", leaderAddr)
 	fmt.Printf("Agents:  %d\n", status.Agents)
-	fmt.Printf("Tasks:   %d running / %d total\n", status.RunningTasks, status.TotalTasks)
-	fmt.Println()
-
-	runningPerJob := make(map[string]int)
-	for _, tasks := range status.TasksByAgent {
-		for _, task := range tasks {
-			if task.State == "running" {
-				runningPerJob[task.JobName]++
-			}
-		}
+	fmt.Printf("Placed:  %d total\n", status.TotalPlaced)
+	if status.Settling {
+		fmt.Println("Status:  settling...")
 	}
+	fmt.Println()
 
 	if len(jobs) > 0 {
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tRUNNING\tSTATUS")
+		fmt.Fprintln(w, "NAME\tPLACED\tEXPECTED\tSTATUS")
 		for _, job := range jobs {
 			expected := job.Count
 			if expected == -1 {
@@ -252,35 +254,21 @@ func runStatus() error {
 			if expected == 0 {
 				expected = 1
 			}
-			running := runningPerJob[job.Name]
+			placed := status.Placed[job.Name]
 			statusStr := "OK"
-			if running < expected {
+			if placed < expected {
 				statusStr = "DEGRADED"
 			}
 			expectedStr := fmt.Sprintf("%d", expected)
 			if job.Count == -1 {
 				expectedStr = fmt.Sprintf("all(%d)", status.Agents)
 			}
-			fmt.Fprintf(w, "%s\t%d / %s\t%s\n", job.Name, running, expectedStr, statusStr)
+			fmt.Fprintf(w, "%s\t%d\t%s\t%s\n", job.Name, placed, expectedStr, statusStr)
 		}
 		w.Flush()
 		fmt.Println()
 	}
 
-	if len(status.TasksByAgent) > 0 {
-		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "AGENT\tTASK\tJOB\tPORTS\tSTATE")
-		for agent, tasks := range status.TasksByAgent {
-			for _, task := range tasks {
-				var ports []string
-				for name, port := range task.Ports {
-					ports = append(ports, fmt.Sprintf("%s:%d", name, port))
-				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", agent, task.ID, task.JobName, strings.Join(ports, ","), task.State)
-			}
-		}
-		w.Flush()
-	}
 	return nil
 }
 
@@ -383,6 +371,7 @@ func runLogs(args []string) error {
 		return fmt.Errorf("stream must be stdout or stderr")
 	}
 
+	// Find which agent has this task via cluster status
 	resp, err := doRequest("GET", "/v1/status", nil)
 	if err != nil {
 		return err

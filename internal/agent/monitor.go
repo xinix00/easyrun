@@ -63,7 +63,7 @@ func (a *Agent) checkTasks() {
 			if task.State == types.TaskRunning {
 				result = append(result, taskInfo{
 					task: task,
-					job:  s.jobs[task.JobID],
+					job:  s.jobs[task.JobName],
 				})
 			}
 		}

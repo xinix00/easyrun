@@ -28,9 +28,6 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 	store := NewMockJobStore()
 	ldr := New("leader", store, &http.Client{Timeout: 200 * time.Millisecond})
 
-	oldVerify := VerifyInterval
-	VerifyInterval = 10 * time.Millisecond
-	defer func() { VerifyInterval = oldVerify }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -41,7 +38,7 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
 	time.Sleep(20 * time.Millisecond)
 
-	job := &types.Job{ID: "app-id", Name: "app", Command: "./app", Count: 20}
+	job := &types.Job{Name: "app", Command: "./app", Count: 20}
 	// Pre-store job so reconcileJobs can find it during dispatch
 	store.StoreJob(job)
 
@@ -92,7 +89,6 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		agent1.tasks = append(agent1.tasks, &types.Task{
 			ID:      fmt.Sprintf("old-task-a%d", i),
-			JobID:   "app-id",
 			JobName: "app",
 			State:   types.TaskRunning,
 		})
@@ -103,7 +99,6 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	for i := 0; i < 10; i++ {
 		agent2.tasks = append(agent2.tasks, &types.Task{
 			ID:      fmt.Sprintf("old-task-b%d", i),
-			JobID:   "app-id",
 			JobName: "app",
 			State:   types.TaskRunning,
 		})
@@ -112,24 +107,21 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 
 	// New leader with persisted job from before crash
 	store := NewMockJobStore()
-	job := &types.Job{ID: "app-id", Name: "app", Command: "./app", Count: 20}
+	job := &types.Job{Name: "app", Command: "./app", Count: 20}
 	store.StoreJob(job)
 	store.stateTime = time.Now().Add(-1 * time.Minute)
 
 	ldr := New("leader", store, nil)
 	ldr.settleDelay = 300 * time.Millisecond // Wait for agents before reconciling
 
-	oldVerify := VerifyInterval
-	VerifyInterval = 10 * time.Millisecond
-	defer func() { VerifyInterval = oldVerify }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ldr.stateLoop(ctx)
 
 	// Both agents register with placed counts during settle period (placed learned, no dispatch)
-	ldr.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"app-id": 10})
-	ldr.RegisterAgent("agent-2", agent2.URL(), "", map[string]int{"app-id": 10})
+	ldr.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"app": 10})
+	ldr.RegisterAgent("agent-2", agent2.URL(), "", map[string]int{"app": 10})
 	// Heartbeat for keepalive
 	ldr.Heartbeat("agent-1", agent1.URL(), []*types.Job{job}, time.Now(), "")
 	ldr.Heartbeat("agent-2", agent2.URL(), []*types.Job{job}, time.Now(), "")
@@ -186,7 +178,7 @@ func TestAgentRestartHeartbeatRaceOverScheduling(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Dispatch job count=10 → round-robin: a1=4, a2=3, a3=3
-	job := &types.Job{ID: "app-id", Name: "app", Command: "./app", Count: 10}
+	job := &types.Job{Name: "app", Command: "./app", Count: 10}
 	if err := ldr.DispatchJob(job); err != nil {
 		t.Fatalf("DispatchJob failed: %v", err)
 	}
@@ -255,9 +247,6 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	store := NewMockJobStore()
 	ldr := New("leader", store, nil)
 
-	oldVerify := VerifyInterval
-	VerifyInterval = 10 * time.Millisecond
-	defer func() { VerifyInterval = oldVerify }()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -273,7 +262,7 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Dispatch 20 tasks (round-robin across 3 agents → 7+7+6)
-	job := &types.Job{ID: "app-id", Name: "app", Command: "./app", Count: 20}
+	job := &types.Job{Name: "app", Command: "./app", Count: 20}
 	if err := ldr.DispatchJob(job); err != nil {
 		t.Fatalf("DispatchJob failed: %v", err)
 	}

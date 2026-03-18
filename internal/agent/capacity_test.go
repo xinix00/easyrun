@@ -16,6 +16,21 @@ import (
 
 // ============== CAPACITY CHECK TESTS ==============
 
+// checkCapacity replicates the capacity check from handleRun for use in tests.
+// Returns true if the agent has enough resources to run job.
+func checkCapacity(a *Agent, job *types.Job) bool {
+	return query(a, func(s *agentState) bool {
+		usedCPU, usedMem := s.resourceUsage()
+		if job.CPUShares > 0 && usedCPU+job.CPUShares > a.sysInfo.CPUCores*1024 {
+			return false
+		}
+		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.sysInfo.MemoryBytes {
+			return false
+		}
+		return true
+	})
+}
+
 func TestAgentHasCapacity(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
@@ -35,7 +50,7 @@ func TestAgentHasCapacity(t *testing.T) {
 		CPUShares:   500,
 		MemoryLimit: 512,
 	}
-	if !agent.hasCapacity(smallJob) {
+	if !checkCapacity(agent,smallJob) {
 		t.Error("hasCapacity should return true for small job")
 	}
 
@@ -45,7 +60,7 @@ func TestAgentHasCapacity(t *testing.T) {
 		CPUShares:   2000,
 		MemoryLimit: 2048,
 	}
-	if agent.hasCapacity(largeJob) {
+	if checkCapacity(agent,largeJob) {
 		t.Error("hasCapacity should return false for job exceeding capacity")
 	}
 }
@@ -90,7 +105,7 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 	}
 
 	// Should not have capacity (600 + 500 > 1024)
-	if agent.hasCapacity(newJob) {
+	if checkCapacity(agent,newJob) {
 		t.Error("hasCapacity should return false when existing tasks consume capacity")
 	}
 }
@@ -128,7 +143,7 @@ func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 		CPUShares: 500,
 	}
 
-	if !agent.hasCapacity(newJob) {
+	if !checkCapacity(agent,newJob) {
 		t.Error("hasCapacity should ignore failed tasks")
 	}
 }
@@ -164,7 +179,7 @@ func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
 		CPUShares: 500,
 	}
 
-	if !agent.hasCapacity(newJob) {
+	if !checkCapacity(agent,newJob) {
 		t.Error("hasCapacity should ignore stopped tasks")
 	}
 }
@@ -191,7 +206,7 @@ func TestAgentCapacityUsesSystemDefaults(t *testing.T) {
 		MemoryLimit: 1024 * 1024, // 1MB - should fit on any system
 	}
 
-	if !agent.hasCapacity(smallJob) {
+	if !checkCapacity(agent,smallJob) {
 		t.Error("hasCapacity should return true for small job within system capacity")
 	}
 
@@ -202,7 +217,7 @@ func TestAgentCapacityUsesSystemDefaults(t *testing.T) {
 		MemoryLimit: 1000000000000000, // 1PB - more than any system
 	}
 
-	if agent.hasCapacity(hugeJob) {
+	if checkCapacity(agent,hugeJob) {
 		t.Error("hasCapacity should return false for job exceeding system capacity")
 	}
 }
@@ -227,7 +242,7 @@ func TestAgentCapacityJobWithNoLimits(t *testing.T) {
 	}
 
 	// Should always fit (no limits to check)
-	if !agent.hasCapacity(noLimitJob) {
+	if !checkCapacity(agent,noLimitJob) {
 		t.Error("hasCapacity should return true for job with no limits")
 	}
 }
@@ -251,7 +266,7 @@ func TestAgentCapacityExceedsMemory(t *testing.T) {
 		MemoryLimit: 2048, // Exceeds 1024 bytes
 	}
 
-	if agent.hasCapacity(bigMemJob) {
+	if checkCapacity(agent,bigMemJob) {
 		t.Error("hasCapacity should fail when memory exceeds system limit")
 	}
 }
@@ -275,7 +290,7 @@ func TestAgentCapacityExceedsCPU(t *testing.T) {
 		MemoryLimit: 1024 * 1024, // Fits in 1GB
 	}
 
-	if agent.hasCapacity(bigCPUJob) {
+	if checkCapacity(agent,bigCPUJob) {
 		t.Error("hasCapacity should fail when CPU exceeds system limit")
 	}
 }
@@ -304,7 +319,7 @@ func TestAgentConcurrentCapacityCheck(t *testing.T) {
 				Name:      "job-" + string(rune('0'+n%10)),
 				CPUShares: 100, // Fits in 10 cores * 1024 = 10240 shares
 			}
-			results <- agent.hasCapacity(job)
+			results <- checkCapacity(agent,job)
 		}(i)
 	}
 
@@ -338,7 +353,7 @@ func TestAgentCapacityExactLimit(t *testing.T) {
 		MemoryLimit: 1024,
 	}
 
-	if !agent.hasCapacity(exactJob) {
+	if !checkCapacity(agent,exactJob) {
 		t.Error("hasCapacity should return true for job at exact limit")
 	}
 }
@@ -380,7 +395,7 @@ func TestAgentCapacityWithoutJobDefinition(t *testing.T) {
 
 	// BUG: without fix, hasCapacity looks up Job by name, finds nil (no job in store),
 	// and counts the running task's resource usage as 0. This allows over-provisioning.
-	if agent.hasCapacity(newJob) {
+	if checkCapacity(agent,newJob) {
 		t.Error("hasCapacity should return false: running task uses 600 CPU + 600 mem, " +
 			"new job needs 500 CPU + 500 mem, but total capacity is only 1024 each. " +
 			"Task resource usage must be tracked on the Task itself, not looked up from Job definition")
@@ -487,7 +502,6 @@ func TestTaskInStateImmediatelyAfterAccept(t *testing.T) {
 
 	// Send /run request (1024 CPU shares = 1 core)
 	job := types.Job{
-		ID:        "job-1",
 		Name:      "test-job",
 		Command:   "echo hello",
 		CPUShares: 1024,
@@ -543,10 +557,8 @@ func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 
 	// Add 3 jobs using 300 CPU each (total 900)
 	for i := 0; i < 3; i++ {
-		jobID := "job-id-" + string(rune('a'+i))
 		jobName := "job-" + string(rune('a'+i))
 		agent.StoreJob(&types.Job{
-			ID:        jobID,
 			Name:      jobName,
 			CPUShares: 300,
 		})
@@ -564,13 +576,13 @@ func TestAgentCapacityMultipleRunningTasks(t *testing.T) {
 
 	// Used: 900, remaining: 124
 	smallJob := &types.Job{Name: "small", CPUShares: 100}
-	if !agent.hasCapacity(smallJob) {
+	if !checkCapacity(agent,smallJob) {
 		t.Error("hasCapacity should fit 100 CPU (900 used, 124 remaining)")
 	}
 
 	// This should not fit
 	mediumJob := &types.Job{Name: "medium", CPUShares: 150}
-	if agent.hasCapacity(mediumJob) {
+	if checkCapacity(agent,mediumJob) {
 		t.Error("hasCapacity should not fit 150 CPU (900 used, 124 remaining)")
 	}
 }
@@ -596,7 +608,6 @@ func TestCrashedTaskStillReservesCapacity(t *testing.T) {
 
 	// Fill capacity: 1 task using all 1024 CPU shares
 	job := &types.Job{
-		ID:        "job-id",
 		Name:      "my-job",
 		CPUShares: 1024,
 	}
@@ -604,7 +615,6 @@ func TestCrashedTaskStillReservesCapacity(t *testing.T) {
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
 			ID:          "task-1",
-			JobID:       "job-id",
 			JobName:     "my-job",
 			State:       types.TaskRunning,
 			CPUShares:   1024,
@@ -635,7 +645,7 @@ func TestCrashedTaskStillReservesCapacity(t *testing.T) {
 	// BUG: During restart (Stop still running), capacity should still be reserved.
 	// A new task with 1024 CPU should NOT fit.
 	newJob := &types.Job{Name: "new-job", CPUShares: 1024}
-	if agent.hasCapacity(newJob) {
+	if checkCapacity(agent,newJob) {
 		t.Error("BUG: capacity freed after crash before restart completed — " +
 			"crashed task should still reserve capacity until restart decision is made")
 	}

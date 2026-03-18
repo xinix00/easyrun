@@ -30,9 +30,9 @@ var (
 // JobStore is the interface for accessing jobs (implemented by Agent)
 type JobStore interface {
 	GetJobs() []*types.Job
-	GetJob(id string) *types.Job
+	GetJob(name string) *types.Job
 	StoreJob(job *types.Job)
-	DeleteJob(id string) // Remove job from store by ID
+	DeleteJob(name string) // Remove job from store by name
 	GetStateTime() time.Time
 	SyncJobs(jobs []*types.Job, updated time.Time)
 }
@@ -40,11 +40,10 @@ type JobStore interface {
 // leaderState holds all mutable state (owned by single goroutine)
 type leaderState struct {
 	agents       map[string]*types.Agent
-	agentsSorted []*types.Agent            // cached sorted agent list, rebuilt on mutation
-	placed       map[string]map[string]int // agentID -> jobID -> count
-	dispatching  map[string]bool           // jobID -> true if actively being dispatched
-	nameToID     map[string]string         // job name -> job ID index for O(1) lookup
-	settled      bool                      // false during settle period after leader election
+	agentsSorted []*types.Agent         // cached sorted agent list, rebuilt on mutation
+	placed       map[string]map[string]int // agentID -> jobName -> count
+	dispatching  map[string]bool          // jobName -> true if actively being dispatched
+	settled      bool                     // false during settle period after leader election
 	roundRobin   int
 }
 
@@ -68,6 +67,7 @@ type Leader struct {
 	ops chan func(*leaderState) // all state access goes through here
 
 	httpClient   *http.Client
+	deleteClient *http.Client
 	agentTimeout time.Duration
 	settleDelay  time.Duration // wait before first reconciliation (0 = settled immediately)
 	eventBus     *EventBus
@@ -85,6 +85,7 @@ func New(localAgentID string, jobStore JobStore, client *http.Client) *Leader {
 		ops:          make(chan func(*leaderState), stateChannelBufferSize),
 		agentTimeout: defaultAgentTimeout,
 		httpClient:   client,
+		deleteClient: &http.Client{Timeout: DeleteClientTimeout},
 		eventBus:     NewEventBus(),
 	}
 }
@@ -106,19 +107,10 @@ func (l *Leader) SetSettleDelay(d time.Duration) {
 
 // stateLoop is the single goroutine that owns all mutable state
 func (l *Leader) stateLoop(ctx context.Context) {
-	// Build nameToID index from existing jobs in store.
-	// Without this, GetPlacedByJobName can't map jobIDs to names
-	// and placed counts would show as 0 after leader restart.
-	nameToID := make(map[string]string)
-	for _, job := range l.jobStore.GetJobs() {
-		nameToID[job.Name] = job.ID
-	}
-
 	state := &leaderState{
 		agents:      make(map[string]*types.Agent),
 		placed:      make(map[string]map[string]int),
 		dispatching: make(map[string]bool),
-		nameToID:    nameToID,
 		settled:     l.settleDelay == 0,
 	}
 
@@ -158,8 +150,6 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 }
 
 // Heartbeat updates agent's LastSeen and syncs jobs.
-// Does NOT update placed counts — leader tracks those from dispatch only.
-// Does NOT trigger reconciliation — that's RegisterAgent's job.
 // Returns (nil, false) if agent is unknown — caller should return 404 to force re-register.
 func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime time.Time, version string) ([]*types.Job, bool) {
 	known := query(l, func(s *leaderState) bool {
@@ -181,19 +171,12 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime tim
 	if stateTime.After(myStateTime) && len(jobs) > 0 {
 		log.Printf("Agent %s has newer state, syncing", id)
 		l.jobStore.SyncJobs(jobs, stateTime)
-		l.do(func(s *leaderState) {
-			for _, j := range jobs {
-				s.nameToID[j.Name] = j.ID
-			}
-		})
 	}
 
 	return l.jobStore.GetJobs(), true
 }
 
 // RegisterAgent registers a (re)starting agent. Clears old state and triggers reconciliation.
-// Called on agent startup and on leader change via POST /v1/agents.
-// Placed counts tell the leader what this agent is already running.
 func (l *Leader) RegisterAgent(id, endpoint, version string, placed map[string]int) {
 	shouldReconcile := query(l, func(s *leaderState) bool {
 		// Clear stale state from previous incarnation
@@ -246,34 +229,24 @@ func (l *Leader) GetJobs() []*types.Job {
 	return l.jobStore.GetJobs()
 }
 
-// FindJobByName finds a job by name using the leader's name→ID index (O(1))
-func (l *Leader) FindJobByName(name string) *types.Job {
-	id := query(l, func(s *leaderState) string {
-		return s.nameToID[name]
-	})
-	if id == "" {
-		return nil
-	}
-	return l.jobStore.GetJob(id)
+// GetJob returns a single job by name (nil if not found)
+func (l *Leader) GetJob(name string) *types.Job {
+	return l.jobStore.GetJob(name)
 }
 
 // NextPriority returns the next available priority index (= number of existing jobs).
-// First job → 0, second → 1, etc. New jobs always go to the end of the priority order.
 func (l *Leader) NextPriority() int {
 	return len(l.jobStore.GetJobs())
 }
 
 // PatchJobPriority moves a job to the given index position, renumbering all other
-// jobs to keep a dense 0..N-1 sequence. This ensures priorities are always unique
-// so preemption (ep > worstPrio, strictly greater) works correctly.
-func (l *Leader) PatchJobPriority(id string, targetIdx int) error {
-	job := l.jobStore.GetJob(id)
+// jobs to keep a dense 0..N-1 sequence.
+func (l *Leader) PatchJobPriority(name string, targetIdx int) error {
+	job := l.jobStore.GetJob(name)
 	if job == nil {
-		return fmt.Errorf("job %s not found", id)
+		return fmt.Errorf("job %s not found", name)
 	}
 
-	// Sort all jobs by current priority, remove the moved job, insert at new position,
-	// then assign sequential 0..N-1. All done before reconcileJobs fires.
 	jobs := l.jobStore.GetJobs()
 	sort.Slice(jobs, func(i, j int) bool {
 		pi, pj := effectivePriority(jobs[i].Priority), effectivePriority(jobs[j].Priority)
@@ -284,7 +257,7 @@ func (l *Leader) PatchJobPriority(id string, targetIdx int) error {
 	})
 
 	for i := 0; i < len(jobs); i++ {
-		if jobs[i].ID == job.ID {
+		if jobs[i].Name == name {
 			jobs = append(jobs[:i], jobs[i+1:]...)
 			break
 		}
@@ -305,25 +278,18 @@ func (l *Leader) PatchJobPriority(id string, targetIdx int) error {
 		l.jobStore.StoreJob(&updated)
 	}
 
-	l.eventBus.Notify("job:" + id)
+	l.eventBus.Notify("job:" + name)
 	go l.reconcileJobs()
 	return nil
 }
 
-// GetPlacedByJobName returns placed counts aggregated by job name: jobName → total count.
-// Uses the nameToID index to map job IDs back to names.
-func (l *Leader) GetPlacedByJobName() map[string]int {
+// GetPlacedCounts returns placed counts aggregated by job name: jobName → total count.
+func (l *Leader) GetPlacedCounts() map[string]int {
 	return query(l, func(s *leaderState) map[string]int {
-		idToName := make(map[string]string, len(s.nameToID))
-		for name, id := range s.nameToID {
-			idToName[id] = name
-		}
 		result := make(map[string]int)
 		for _, jobs := range s.placed {
-			for jobID, count := range jobs {
-				if name := idToName[jobID]; name != "" {
-					result[name] += count
-				}
+			for jobName, count := range jobs {
+				result[jobName] += count
 			}
 		}
 		return result
@@ -331,11 +297,11 @@ func (l *Leader) GetPlacedByJobName() map[string]int {
 }
 
 // GetPlaced returns which agents have a job placed and how many (for testing/debugging)
-func (l *Leader) GetPlaced(jobID string) map[string]int {
+func (l *Leader) GetPlaced(jobName string) map[string]int {
 	return query(l, func(s *leaderState) map[string]int {
 		result := make(map[string]int)
 		for agentID, jobs := range s.placed {
-			if count := jobs[jobID]; count > 0 {
+			if count := jobs[jobName]; count > 0 {
 				result[agentID] = count
 			}
 		}
@@ -357,4 +323,3 @@ func (l *Leader) IsSettled() bool {
 func (l *Leader) EventBus() *EventBus {
 	return l.eventBus
 }
-

@@ -38,7 +38,6 @@ func BenchmarkDispatchJob(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		job := &types.Job{
-			ID:      fmt.Sprintf("job-%d", i),
 			Name:    fmt.Sprintf("bench-job-%d", i),
 			Command: "echo hello",
 			Count:   1,
@@ -56,7 +55,6 @@ func BenchmarkHeartbeat(b *testing.B) {
 
 	// Pre-create a job
 	job := &types.Job{
-		ID:      "test-job",
 		Name:    "bench-job",
 		Command: "echo test",
 		Count:   1,
@@ -107,18 +105,16 @@ func BenchmarkGetAgents(b *testing.B) {
 // BenchmarkFindJobByName measures job lookup performance
 func BenchmarkFindJobByName(b *testing.B) {
 	store := NewMockJobStore()
-	leader, cancel := startLeader(store)
+	_, cancel := startLeader(store)
 	defer cancel()
 
 	// Create 10000 jobs
 	for i := 0; i < 10000; i++ {
 		job := &types.Job{
-			ID:      fmt.Sprintf("job-%d", i),
 			Name:    fmt.Sprintf("job-%d", i),
 			Command: "echo test",
 		}
 		store.StoreJob(job)
-		leader.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -127,7 +123,7 @@ func BenchmarkFindJobByName(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		name := fmt.Sprintf("job-%d", i%10000)
-		job := leader.FindJobByName(name)
+		job := store.GetJob(name)
 		if job == nil {
 			b.Fatal("Job not found")
 		}

@@ -88,7 +88,6 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	ma.taskSeq++
 	task := &types.Task{
 		ID:      fmt.Sprintf("task-%s-%d", job.Name, ma.taskSeq),
-		JobID:   job.ID,
 		JobName: job.Name,
 		State:   types.TaskRunning,
 	}
@@ -196,14 +195,14 @@ func (ma *mockAgent) handleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID := r.URL.Path[len("/delete/"):]
+	jobName := r.URL.Path[len("/delete/"):]
 
 	ma.mu.Lock()
 	deleted := 0
 	filtered := make([]*types.Task, 0, len(ma.tasks))
 	for _, task := range ma.tasks {
-		if task.JobID == jobID {
-			delete(ma.jobs, task.JobName) // ma.jobs is keyed by name
+		if task.JobName == jobName {
+			delete(ma.jobs, task.JobName)
 			deleted++
 		} else {
 			filtered = append(filtered, task)
@@ -221,13 +220,13 @@ func (ma *mockAgent) handleStop(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobID := r.URL.Path[len("/stop/"):]
+	jobName := r.URL.Path[len("/stop/"):]
 
 	ma.mu.Lock()
 	stopped := 0
 	filtered := make([]*types.Task, 0, len(ma.tasks))
 	for _, task := range ma.tasks {
-		if task.JobID == jobID {
+		if task.JobName == jobName {
 			stopped++ // remove task but keep ma.jobs entry (job definition preserved)
 		} else {
 			filtered = append(filtered, task)
@@ -239,11 +238,11 @@ func (ma *mockAgent) handleStop(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]int{"stopped": stopped})
 }
 
-// taskCounts creates a map of jobID -> 1 for each job (1 task per job)
+// taskCounts creates a map of jobName -> 1 for each job (1 task per job)
 func taskCounts(jobs []*types.Job) map[string]int {
 	counts := make(map[string]int)
 	for _, j := range jobs {
-		counts[j.ID] = 1
+		counts[j.Name] = 1
 	}
 	return counts
 }
@@ -266,16 +265,16 @@ func TestFailoverNewLeaderLearnsJobsFromAgents(t *testing.T) {
 
 	// Agent 1 heartbeats with its jobs (from old leader era)
 	agent1Jobs := []*types.Job{
-		{ID: "webapp-id", Name: "webapp", Command: "./webapp", Count: 2},
-		{ID: "api-id", Name: "api", Command: "./api", Count: 1},
+		{Name: "webapp", Command: "./webapp", Count: 2},
+		{Name: "api", Command: "./api", Count: 1},
 	}
 	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
 	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agent1Jobs, time.Now(), "")
 
 	// Agent 2 heartbeats with its jobs
 	agent2Jobs := []*types.Job{
-		{ID: "webapp-id", Name: "webapp", Command: "./webapp", Count: 2}, // Same job, running on both
-		{ID: "worker-id", Name: "worker", Command: "./worker", Count: 1},
+		{Name: "webapp", Command: "./webapp", Count: 2}, // Same job, running on both
+		{Name: "worker", Command: "./worker", Count: 1},
 	}
 	newLeader.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", nil)
 	newLeader.Heartbeat("agent-2", "http://10.0.0.2:8080", agent2Jobs, time.Now(), "")
@@ -313,7 +312,7 @@ func TestFailoverStateTimeBasedSync(t *testing.T) {
 	// Agent has newer state (was synced with old leader just before crash)
 	newerStateTime := time.Now()
 	agentJobs := []*types.Job{
-		{ID: "critical-id", Name: "critical", Command: "./critical"},
+		{Name: "critical", Command: "./critical"},
 	}
 
 	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
@@ -350,7 +349,6 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 
 	// Agent 1 heartbeats with a count=-1 job (daemon that runs everywhere)
 	daemonJob := &types.Job{
-		ID:      "daemon-id",
 		Name:    "daemon",
 		Command: "./daemon",
 		Count:   -1,
@@ -361,13 +359,12 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 	agent1.jobs[daemonJob.Name] = daemonJob
 	agent1.tasks = append(agent1.tasks, &types.Task{
 		ID:      "daemon-task",
-		JobID:   daemonJob.ID,
 		JobName: daemonJob.Name,
 		State:   types.TaskRunning,
 	})
 	agent1.mu.Unlock()
 
-	newLeader.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"daemon-id": 1})
+	newLeader.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"daemon": 1})
 	newLeader.Heartbeat("agent-1", agent1.URL(), []*types.Job{daemonJob}, time.Now(), "")
 	time.Sleep(50 * time.Millisecond)
 
@@ -391,7 +388,7 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 	}
 
 	// Verify placement now includes both agents
-	placed := newLeader.GetPlaced("daemon-id")
+	placed := newLeader.GetPlaced("daemon")
 	if len(placed) != 2 {
 		t.Errorf("daemon-job should be on 2 agents, got %d: %v", len(placed), placed)
 	}
@@ -416,7 +413,6 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	daemonJob := &types.Job{
-		ID:      "monitoring-id",
 		Name:    "monitoring",
 		Command: "./monitor",
 		Count:   -1,
@@ -428,7 +424,6 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 		agent.jobs[daemonJob.Name] = daemonJob
 		agent.tasks = append(agent.tasks, &types.Task{
 			ID:      "monitoring-task",
-			JobID:   daemonJob.ID,
 			JobName: daemonJob.Name,
 			State:   types.TaskRunning,
 		})
@@ -438,13 +433,13 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 	// All agents register with placed counts and heartbeat saying they ALREADY have the daemon job
 	for i, agent := range agents {
 		agentID := string(rune('a' + i))
-		newLeader.RegisterAgent("agent-"+agentID, agent.URL(), "", map[string]int{"monitoring-id": 1})
+		newLeader.RegisterAgent("agent-"+agentID, agent.URL(), "", map[string]int{"monitoring": 1})
 		newLeader.Heartbeat("agent-"+agentID, agent.URL(), []*types.Job{daemonJob}, time.Now(), "")
 	}
 	time.Sleep(50 * time.Millisecond)
 
 	// Verify all 3 agents are in placement
-	placed := newLeader.GetPlaced("monitoring-id")
+	placed := newLeader.GetPlaced("monitoring")
 	if len(placed) != 3 {
 		t.Errorf("monitoring should be on 3 agents, got %d: %v", len(placed), placed)
 	}
@@ -474,11 +469,11 @@ func TestFailoverNewAgentGetsAllDaemonJobs(t *testing.T) {
 
 	// Existing agent has 3 daemon jobs
 	daemonJobs := []*types.Job{
-		{ID: "easydns-id", Name: "easydns", Command: "./easydns", Count: -1},
-		{ID: "easylb-id", Name: "easylb", Command: "./easylb", Count: -1},
-		{ID: "monitoring-id", Name: "monitoring", Command: "./monitor", Count: -1},
+		{Name: "easydns", Command: "./easydns", Count: -1},
+		{Name: "easylb", Command: "./easylb", Count: -1},
+		{Name: "monitoring", Command: "./monitor", Count: -1},
 	}
-	newLeader.RegisterAgent("existing", existingAgent.URL(), "", map[string]int{"easydns-id": 1, "easylb-id": 1, "monitoring-id": 1})
+	newLeader.RegisterAgent("existing", existingAgent.URL(), "", map[string]int{"easydns": 1, "easylb": 1, "monitoring": 1})
 	newLeader.Heartbeat("existing", existingAgent.URL(), daemonJobs, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
@@ -508,7 +503,6 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 	go newLeader.stateLoop(ctx)
 
 	originalJob := &types.Job{
-		ID:          "complex-id",
 		Name:        "complex",
 		Command:     "./complex",
 		Count:       3,
@@ -524,7 +518,7 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Retrieve and verify
-	recoveredJob := newLeader.FindJobByName("complex")
+	recoveredJob := newLeaderStore.GetJob("complex")
 	if recoveredJob == nil {
 		t.Fatal("Job not recovered")
 	}
@@ -575,7 +569,7 @@ func TestFailoverOlderAgentStateIgnored(t *testing.T) {
 
 	newLeaderStore := NewMockJobStore()
 	newLeaderStore.stateTime = time.Now() // New leader has current state
-	newLeaderStore.StoreJob(&types.Job{ID: "leader-job-id", Name: "from-leader", Command: "echo"})
+	newLeaderStore.StoreJob(&types.Job{Name: "from-leader", Command: "echo"})
 
 	newLeader := New("new-leader", newLeaderStore, nil)
 
@@ -585,7 +579,7 @@ func TestFailoverOlderAgentStateIgnored(t *testing.T) {
 
 	// Agent has OLDER state
 	agentJobs := []*types.Job{
-		{ID: "old-job-id", Name: "old-job", Command: "old"},
+		{Name: "old-job", Command: "old"},
 	}
 
 	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
@@ -639,8 +633,8 @@ func TestFailoverDispatchFailureDoesNotBreakHeartbeat(t *testing.T) {
 	// First agent has daemon job
 	goodAgent := newMockAgent()
 	defer goodAgent.Close()
-	daemonJob := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./d", Count: -1}
-	newLeader.RegisterAgent("good-agent", goodAgent.URL(), "", map[string]int{"daemon-id": 1})
+	daemonJob := &types.Job{Name: "daemon", Command: "./d", Count: -1}
+	newLeader.RegisterAgent("good-agent", goodAgent.URL(), "", map[string]int{"daemon": 1})
 	newLeader.Heartbeat("good-agent", goodAgent.URL(), []*types.Job{daemonJob}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 
@@ -655,7 +649,7 @@ func TestFailoverDispatchFailureDoesNotBreakHeartbeat(t *testing.T) {
 	}
 
 	// Placement should only have good-agent (rejecting agent failed to receive job)
-	placed := newLeader.GetPlaced("daemon-id")
+	placed := newLeader.GetPlaced("daemon")
 	if len(placed) != 1 {
 		t.Errorf("daemon should only be on 1 agent (good-agent), got %d: %v", len(placed), placed)
 	}
@@ -682,7 +676,6 @@ func TestFailoverNewLeaderDoesNotDuplicateOwnTasks(t *testing.T) {
 
 	// The job that was already running BEFORE this node became leader
 	existingJob := &types.Job{
-		ID:      "my-api-id",
 		Name:    "my-api",
 		Command: "./api",
 		Count:   2, // Desired: 2 instances total
@@ -706,7 +699,6 @@ func TestFailoverNewLeaderDoesNotDuplicateOwnTasks(t *testing.T) {
 	localAgent.jobs[existingJob.Name] = existingJob
 	localAgent.tasks = append(localAgent.tasks, &types.Task{
 		ID:      "existing-task-1",
-		JobID:   existingJob.ID,
 		JobName: "my-api",
 		State:   types.TaskRunning,
 	})
@@ -714,7 +706,7 @@ func TestFailoverNewLeaderDoesNotDuplicateOwnTasks(t *testing.T) {
 
 	// LOCAL agent registers with placed counts and heartbeats to the new leader (itself)
 	// Note: stateTime is SAME as leader's (not newer), so sync path is NOT triggered
-	newLeader.RegisterAgent("local-agent-id", localAgent.URL(), "", map[string]int{"my-api-id": 1})
+	newLeader.RegisterAgent("local-agent-id", localAgent.URL(), "", map[string]int{"my-api": 1})
 	newLeader.Heartbeat("local-agent-id", localAgent.URL(), []*types.Job{existingJob}, time.Now(), "")
 	time.Sleep(50 * time.Millisecond)
 
@@ -734,7 +726,7 @@ func TestFailoverNewLeaderDoesNotDuplicateOwnTasks(t *testing.T) {
 	}
 
 	// Verify placement includes the local agent (critical for correct scheduling)
-	placed := newLeader.GetPlaced("my-api-id")
+	placed := newLeader.GetPlaced("my-api")
 	hasLocalAgent := false
 	for p := range placed {
 		if p == "local-agent-id" {
@@ -757,8 +749,8 @@ func TestFailoverNewLeaderLearnsFromLocalAgent(t *testing.T) {
 
 	// Local agent reports jobs it's running
 	localJobs := []*types.Job{
-		{ID: "job-a-id", Name: "job-a", Command: "./a", Count: 1},
-		{ID: "job-b-id", Name: "job-b", Command: "./b", Count: 1},
+		{Name: "job-a", Command: "./a", Count: 1},
+		{Name: "job-b", Command: "./b", Count: 1},
 	}
 
 	// New leader has persisted state (jobs already known)
@@ -780,7 +772,6 @@ func TestFailoverNewLeaderLearnsFromLocalAgent(t *testing.T) {
 		localAgent.jobs[job.Name] = job
 		localAgent.tasks = append(localAgent.tasks, &types.Task{
 			ID:      "task-" + job.Name,
-			JobID:   job.ID,
 			JobName: job.Name,
 			State:   types.TaskRunning,
 		})
@@ -815,14 +806,14 @@ func TestFailoverNewLeaderReschedulesOrphanedJobs(t *testing.T) {
 	defer localAgent.Close()
 
 	// Jobs that were running on the OLD leader (now persisted in state)
-	daemonJob := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
+	daemonJob := &types.Job{Name: "daemon", Command: "./daemon", Count: -1}
 	regularJobs := []*types.Job{
-		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1},
-		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1},
-		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1},
-		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
-		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
-		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
+		{Name: "job-1", Command: "./job1", Count: 1},
+		{Name: "job-2", Command: "./job2", Count: 1},
+		{Name: "job-3", Command: "./job3", Count: 1},
+		{Name: "job-4", Command: "./job4", Count: 1},
+		{Name: "job-5", Command: "./job5", Count: 1},
+		{Name: "job-6", Command: "./job6", Count: 1},
 	}
 
 	// New leader loads jobs from persisted state (old leader's state)
@@ -851,7 +842,7 @@ func TestFailoverNewLeaderReschedulesOrphanedJobs(t *testing.T) {
 	}
 
 	// Daemon should be in placement
-	daemonPlaced := newLeader.GetPlaced(daemonJob.ID)
+	daemonPlaced := newLeader.GetPlaced(daemonJob.Name)
 	if len(daemonPlaced) != 1 {
 		t.Errorf("Daemon should be in placement, got %d entries", len(daemonPlaced))
 	}
@@ -864,14 +855,14 @@ func TestFailoverNewLeaderWithExistingDaemon(t *testing.T) {
 	localAgent := newMockAgent()
 	defer localAgent.Close()
 
-	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
+	daemon := &types.Job{Name: "daemon", Command: "./daemon", Count: -1}
 	regularJobs := []*types.Job{
-		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1},
-		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1},
-		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1},
-		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
-		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
-		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
+		{Name: "job-1", Command: "./job1", Count: 1},
+		{Name: "job-2", Command: "./job2", Count: 1},
+		{Name: "job-3", Command: "./job3", Count: 1},
+		{Name: "job-4", Command: "./job4", Count: 1},
+		{Name: "job-5", Command: "./job5", Count: 1},
+		{Name: "job-6", Command: "./job6", Count: 1},
 	}
 
 	// New leader loads ALL jobs from persisted state
@@ -894,14 +885,13 @@ func TestFailoverNewLeaderWithExistingDaemon(t *testing.T) {
 	localAgent.jobs[daemon.Name] = daemon
 	localAgent.tasks = append(localAgent.tasks, &types.Task{
 		ID:      "daemon-task",
-		JobID:   daemon.ID,
 		JobName: daemon.Name,
 		State:   types.TaskRunning,
 	})
 	localAgent.mu.Unlock()
 
 	// During settle: register with placed counts + heartbeat for keepalive (no dispatch yet)
-	newLeader.RegisterAgent("new-leader-id", localAgent.URL(), "", map[string]int{"daemon-id": 1})
+	newLeader.RegisterAgent("new-leader-id", localAgent.URL(), "", map[string]int{"daemon": 1})
 	newLeader.Heartbeat("new-leader-id", localAgent.URL(), []*types.Job{daemon}, time.Now(), "")
 
 	// Wait for settle timer → reconcile sees daemon placed → dispatches only regular jobs
@@ -914,7 +904,7 @@ func TestFailoverNewLeaderWithExistingDaemon(t *testing.T) {
 	}
 
 	// Daemon placement should be learned from heartbeat
-	daemonPlaced := newLeader.GetPlaced(daemon.ID)
+	daemonPlaced := newLeader.GetPlaced(daemon.Name)
 	if len(daemonPlaced) != 1 {
 		t.Errorf("Daemon should have 1 placement, got %d", len(daemonPlaced))
 	}
@@ -930,17 +920,17 @@ func TestFailoverJobsWithAffinity(t *testing.T) {
 
 	// Jobs with affinity (agent-side check, mock agent accepts all)
 	affinityJobs := []*types.Job{
-		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
-		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
-		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
+		{Name: "job-1", Command: "./job1", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
+		{Name: "job-2", Command: "./job2", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
+		{Name: "job-3", Command: "./job3", Count: 1, Affinity: map[string]string{"node.id": "old-leader-id"}},
 	}
 	// Jobs without affinity
 	normalJobs := []*types.Job{
-		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
-		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
-		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
+		{Name: "job-4", Command: "./job4", Count: 1},
+		{Name: "job-5", Command: "./job5", Count: 1},
+		{Name: "job-6", Command: "./job6", Count: 1},
 	}
-	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
+	daemon := &types.Job{Name: "daemon", Command: "./daemon", Count: -1}
 
 	newLeaderStore := NewMockJobStore()
 	newLeaderStore.StoreJob(daemon)
@@ -976,8 +966,8 @@ func TestFailoverSecondHeartbeatDoesNotReschedule(t *testing.T) {
 	defer localAgent.Close()
 
 	jobs := []*types.Job{
-		{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1},
-		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1},
+		{Name: "daemon", Command: "./daemon", Count: -1},
+		{Name: "job-1", Command: "./job1", Count: 1},
 	}
 
 	newLeaderStore := NewMockJobStore()
@@ -1015,14 +1005,14 @@ func TestFailoverAgentReportsOnlyRunningJobs(t *testing.T) {
 	localAgent := newMockAgent()
 	defer localAgent.Close()
 
-	daemon := &types.Job{ID: "daemon-id", Name: "daemon", Command: "./daemon", Count: -1}
+	daemon := &types.Job{Name: "daemon", Command: "./daemon", Count: -1}
 	regularJobs := []*types.Job{
-		{ID: "job-1-id", Name: "job-1", Command: "./job1", Count: 1},
-		{ID: "job-2-id", Name: "job-2", Command: "./job2", Count: 1},
-		{ID: "job-3-id", Name: "job-3", Command: "./job3", Count: 1},
-		{ID: "job-4-id", Name: "job-4", Command: "./job4", Count: 1},
-		{ID: "job-5-id", Name: "job-5", Command: "./job5", Count: 1},
-		{ID: "job-6-id", Name: "job-6", Command: "./job6", Count: 1},
+		{Name: "job-1", Command: "./job1", Count: 1},
+		{Name: "job-2", Command: "./job2", Count: 1},
+		{Name: "job-3", Command: "./job3", Count: 1},
+		{Name: "job-4", Command: "./job4", Count: 1},
+		{Name: "job-5", Command: "./job5", Count: 1},
+		{Name: "job-6", Command: "./job6", Count: 1},
 	}
 
 	// All jobs known to the agent (from SyncJobs with old leader)
@@ -1046,7 +1036,6 @@ func TestFailoverAgentReportsOnlyRunningJobs(t *testing.T) {
 	localAgent.jobs[daemon.Name] = daemon
 	localAgent.tasks = append(localAgent.tasks, &types.Task{
 		ID:      "daemon-task",
-		JobID:   daemon.ID,
 		JobName: daemon.Name,
 		State:   types.TaskRunning,
 	})
@@ -1054,7 +1043,7 @@ func TestFailoverAgentReportsOnlyRunningJobs(t *testing.T) {
 
 	// During settle: register with placed counts + heartbeat for keepalive
 	runningJobs := []*types.Job{daemon}
-	newLeader.RegisterAgent("new-leader-id", localAgent.URL(), "", map[string]int{"daemon-id": 1})
+	newLeader.RegisterAgent("new-leader-id", localAgent.URL(), "", map[string]int{"daemon": 1})
 	newLeader.Heartbeat("new-leader-id", localAgent.URL(), runningJobs, time.Now(), "")
 
 	// Wait for settle → reconcile sees daemon placed, dispatches 6 regular jobs
@@ -1067,7 +1056,7 @@ func TestFailoverAgentReportsOnlyRunningJobs(t *testing.T) {
 	}
 
 	// Daemon placement should be learned from heartbeat
-	daemonPlaced := newLeader.GetPlaced(daemon.ID)
+	daemonPlaced := newLeader.GetPlaced(daemon.Name)
 	if len(daemonPlaced) != 1 {
 		t.Errorf("Daemon should have 1 placement, got %d", len(daemonPlaced))
 	}
@@ -1099,7 +1088,6 @@ func TestFailoverAgentDiesTasksRescheduled(t *testing.T) {
 
 	// Actually dispatch the job (this creates real tasks in mock agents)
 	job := &types.Job{
-		ID:      "ticker-id",
 		Name:    "ticker",
 		Command: "sh -c 'while :; do echo tick; sleep 1; done'",
 		Count:   20,
@@ -1157,7 +1145,6 @@ func TestFailoverHeartbeatLearnsWrongPlacementCount(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	job := &types.Job{
-		ID:      "ticker-id",
 		Name:    "ticker",
 		Command: "sh -c 'while :; do echo tick; sleep 1; done'",
 		Count:   20,
@@ -1209,7 +1196,6 @@ func TestRedispatchDoesNotCorruptJobCount(t *testing.T) {
 
 	// Job with count=20
 	tickerJob := &types.Job{
-		ID:      "ticker-id",
 		Name:    "ticker",
 		Command: "sh -c 'while :; do echo tick; sleep 1; done'",
 		Count:   20,
@@ -1218,7 +1204,6 @@ func TestRedispatchDoesNotCorruptJobCount(t *testing.T) {
 
 	// Job with count=-1 (run on all agents)
 	caddyJob := &types.Job{
-		ID:      "caddy-id",
 		Name:    "caddy",
 		Command: "./caddy",
 		Count:   -1,
@@ -1235,10 +1220,10 @@ func TestRedispatchDoesNotCorruptJobCount(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Verify initial state
-	if job := store.GetJob("ticker-id"); job.Count != 20 {
+	if job := store.GetJob("ticker"); job.Count != 20 {
 		t.Fatalf("Initial ticker count should be 20, got %d", job.Count)
 	}
-	if job := store.GetJob("caddy-id"); job.Count != -1 {
+	if job := store.GetJob("caddy"); job.Count != -1 {
 		t.Fatalf("Initial caddy count should be -1, got %d", job.Count)
 	}
 
@@ -1247,7 +1232,7 @@ func TestRedispatchDoesNotCorruptJobCount(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// BUG CHECK: Job counts should NOT be corrupted!
-	tickerAfter := store.GetJob("ticker-id")
+	tickerAfter := store.GetJob("ticker")
 	if tickerAfter == nil {
 		t.Fatal("ticker job should still exist")
 	}
@@ -1255,7 +1240,7 @@ func TestRedispatchDoesNotCorruptJobCount(t *testing.T) {
 		t.Errorf("BUG: ticker count corrupted! Expected 20, got %d (was set to instances on dead agent)", tickerAfter.Count)
 	}
 
-	caddyAfter := store.GetJob("caddy-id")
+	caddyAfter := store.GetJob("caddy")
 	if caddyAfter == nil {
 		t.Fatal("caddy job should still exist")
 	}
@@ -1288,7 +1273,6 @@ func TestCountMinusOneNotRedispatchedOnAgentDeath(t *testing.T) {
 
 	// count=-1 job (run on all agents, exactly once per agent)
 	daemonJob := &types.Job{
-		ID:      "daemon-id",
 		Name:    "daemon",
 		Command: "./daemon",
 		Count:   -1,
@@ -1296,8 +1280,8 @@ func TestCountMinusOneNotRedispatchedOnAgentDeath(t *testing.T) {
 	store.StoreJob(daemonJob)
 
 	// Both agents have the daemon running (1 instance each)
-	leader.RegisterAgent("agent-a", agentA.URL(), "", map[string]int{"daemon-id": 1})
-	leader.RegisterAgent("agent-b", agentB.URL(), "", map[string]int{"daemon-id": 1})
+	leader.RegisterAgent("agent-a", agentA.URL(), "", map[string]int{"daemon": 1})
+	leader.RegisterAgent("agent-b", agentB.URL(), "", map[string]int{"daemon": 1})
 	leader.Heartbeat("agent-a", agentA.URL(), []*types.Job{daemonJob}, time.Now(), "")
 	leader.Heartbeat("agent-b", agentB.URL(), []*types.Job{daemonJob}, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
@@ -1317,7 +1301,7 @@ func TestCountMinusOneNotRedispatchedOnAgentDeath(t *testing.T) {
 	}
 
 	// Verify placement only has agent-b now (not duplicated)
-	placed := leader.GetPlaced(daemonJob.ID)
+	placed := leader.GetPlaced(daemonJob.Name)
 	if len(placed) != 1 {
 		t.Errorf("BUG: Placement should have 1 entry (agent-b only), got %d: %v", len(placed), placed)
 	}
@@ -1350,7 +1334,6 @@ func TestRedispatchCorrectInstanceCount(t *testing.T) {
 
 	// Job with count=20 - dispatch it so placement is tracked
 	job := &types.Job{
-		ID:      "job-id",
 		Name:    "my-job",
 		Command: "./job",
 		Count:   20,
@@ -1418,7 +1401,6 @@ func TestRedispatchWithStalePlacement(t *testing.T) {
 
 	// Job with count=20 - actually dispatch it
 	job := &types.Job{
-		ID:      "job-id",
 		Name:    "ticker",
 		Command: "./ticker",
 		Count:   20,
@@ -1486,7 +1468,6 @@ func TestFailoverAgentDiesRealisticHeartbeat(t *testing.T) {
 
 	// Create and dispatch job with count=20
 	job := &types.Job{
-		ID:      "ticker-id",
 		Name:    "ticker",
 		Command: "sh -c 'while :; do echo tick; sleep 1; done'",
 		Count:   20,
@@ -1558,7 +1539,6 @@ func TestFailoverFailedTasksNotRedispatched(t *testing.T) {
 
 	store := NewMockJobStore()
 	job := &types.Job{
-		ID:      "api-id",
 		Name:    "my-api",
 		Command: "./api",
 		Count:   3,
@@ -1575,14 +1555,14 @@ func TestFailoverFailedTasksNotRedispatched(t *testing.T) {
 	// Agent A has 2 running + 1 failed task (restart counter exhausted)
 	agentA.mu.Lock()
 	agentA.tasks = []*types.Task{
-		{ID: "task-1", JobID: "api-id", JobName: "my-api", State: types.TaskRunning},
-		{ID: "task-2", JobID: "api-id", JobName: "my-api", State: types.TaskRunning},
-		{ID: "task-3", JobID: "api-id", JobName: "my-api", State: types.TaskFailed},
+		{ID: "task-1", JobName: "my-api", State: types.TaskRunning},
+		{ID: "task-2", JobName: "my-api", State: types.TaskRunning},
+		{ID: "task-3", JobName: "my-api", State: types.TaskFailed},
 	}
 	agentA.mu.Unlock()
 
 	// GetPlacedTaskCounts includes failed tasks (3 total, not 2)
-	leader.RegisterAgent("agent-a", agentA.URL(), "", map[string]int{"api-id": 3})
+	leader.RegisterAgent("agent-a", agentA.URL(), "", map[string]int{"my-api": 3})
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
 
 	// Wait for settle + reconciliation

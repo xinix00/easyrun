@@ -129,7 +129,7 @@ func TestChaos_TaskExceedsMaxRestarts(t *testing.T) {
 	}
 
 	// After max restarts, should give up
-	finalJob := agent.GetJobByName(job.Name)
+	finalJob := agent.GetJob(job.Name)
 	if finalJob == nil {
 		t.Error("Job should still exist")
 	}
@@ -194,7 +194,7 @@ func TestChaos_CapacityExhaustion(t *testing.T) {
 		MemoryLimit: 100 * 1024 * 1024,
 	}
 
-	hasCapacity := agent.hasCapacity(overflowJob)
+	hasCapacity := checkCapacity(agent, overflowJob)
 	if hasCapacity {
 		t.Error("Agent should reject job when at capacity")
 	}
@@ -333,9 +333,7 @@ func TestChaos_RapidJobDeletionAndCreation(t *testing.T) {
 
 	// Rapidly create and delete jobs
 	for i := 0; i < 100; i++ {
-		jobID := fmt.Sprintf("churning-job-id-%d", i)
 		job := &types.Job{
-			ID:      jobID,
 			Name:    "churning-job",
 			Command: fmt.Sprintf("./app-v%d", i),
 		}
@@ -345,8 +343,8 @@ func TestChaos_RapidJobDeletionAndCreation(t *testing.T) {
 			t.Fatalf("Failed to start job %d: %v", i, err)
 		}
 
-		// Immediately delete
-		agent.deleteJobByID(jobID)
+		// Immediately delete by name
+		agent.deleteJob("churning-job")
 	}
 
 	// Agent should be stable

@@ -80,7 +80,6 @@ func BenchmarkGetJobsEndpoint(b *testing.B) {
 	// Create 1000 jobs
 	for i := 0; i < 1000; i++ {
 		job := &types.Job{
-			ID:      fmt.Sprintf("job-%d", i),
 			Name:    fmt.Sprintf("job-%d", i),
 			Command: "echo test",
 		}
@@ -325,22 +324,22 @@ func (m *mockJobStore) GetJobs() []*types.Job {
 	return jobs
 }
 
-func (m *mockJobStore) GetJob(id string) *types.Job {
+func (m *mockJobStore) GetJob(name string) *types.Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.jobs[id]
+	return m.jobs[name]
 }
 
 func (m *mockJobStore) StoreJob(job *types.Job) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs[job.ID] = job
+	m.jobs[job.Name] = job
 }
 
-func (m *mockJobStore) DeleteJob(id string) {
+func (m *mockJobStore) DeleteJob(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.jobs, id)
+	delete(m.jobs, name)
 }
 
 func (m *mockJobStore) GetStateTime() time.Time {
@@ -351,6 +350,6 @@ func (m *mockJobStore) SyncJobs(jobs []*types.Job, updated time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, job := range jobs {
-		m.jobs[job.ID] = job
+		m.jobs[job.Name] = job
 	}
 }

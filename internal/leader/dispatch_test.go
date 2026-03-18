@@ -43,7 +43,7 @@ func TestLeaderDispatchJobToAgent(t *testing.T) {
 		t.Errorf("DispatchJob failed: %v", err)
 	}
 
-	if leader.FindJobByName("test-job") == nil {
+	if store.GetJob("test-job") == nil {
 		t.Error("Job should be stored after dispatch")
 	}
 }
@@ -131,13 +131,13 @@ func TestLeaderDispatchMultipleInstances(t *testing.T) {
 func TestLeaderDeleteJobOnMultipleAgents(t *testing.T) {
 	store := NewMockJobStore()
 	// Store job AFTER agents are registered to avoid tryRescheduleUnderscheduled
-	job := &types.Job{ID: "test-job-id", Name: "test-job", Command: "echo"}
+	job := &types.Job{Name: "test-job", Command: "echo"}
 
 	deleteCount := 0
 	var mu sync.Mutex
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete && r.URL.Path == "/delete/test-job-id" {
+		if r.Method == http.MethodDelete && r.URL.Path == "/delete/test-job" {
 			mu.Lock()
 			deleteCount++
 			mu.Unlock()
@@ -162,17 +162,16 @@ func TestLeaderDeleteJobOnMultipleAgents(t *testing.T) {
 	// Now store the job and set up placement manually
 	store.StoreJob(job)
 	leader.do(func(s *leaderState) {
-		s.nameToID[job.Name] = job.ID
 		for _, agentID := range []string{"agent-a", "agent-b"} {
 			if s.placed[agentID] == nil {
 				s.placed[agentID] = make(map[string]int)
 			}
-			s.placed[agentID]["test-job-id"]++
+			s.placed[agentID]["test-job"]++
 		}
 	})
 	time.Sleep(10 * time.Millisecond)
 
-	leader.DeleteJob("test-job")
+	leader.DeleteJobByName("test-job")
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()
@@ -261,7 +260,7 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	leader.Heartbeat("agent-a", agent1.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
-	job := &types.Job{ID: "easydns-id", Name: "easydns", Command: "/usr/bin/easydns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
+	job := &types.Job{Name: "easydns", Command: "/usr/bin/easydns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
 	_ = leader.DispatchJob(job)
 	time.Sleep(10 * time.Millisecond)
 
@@ -310,7 +309,7 @@ func TestLeaderConcurrentDispatchAndDelete(t *testing.T) {
 		wg.Add(1)
 		go func(n int) {
 			defer wg.Done()
-			leader.DeleteJob("job-" + string(rune('0'+n)))
+			leader.DeleteJobByName("job-" + string(rune('0'+n)))
 		}(i)
 	}
 
@@ -369,7 +368,7 @@ func TestLeaderDispatchAccepts202(t *testing.T) {
 		t.Errorf("DispatchJob should accept 202 Accepted, got error: %v", err)
 	}
 
-	if leader.FindJobByName("async-job") == nil {
+	if store.GetJob("async-job") == nil {
 		t.Error("Job should be stored after 202 response")
 	}
 }

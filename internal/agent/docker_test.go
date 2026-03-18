@@ -263,11 +263,10 @@ func TestDeleteDockerJob(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// Add a docker job and task
-	agent.StoreJob(&types.Job{ID: "docker-id", Name: "docker-del", Driver: types.DriverDocker, Image: "nginx:latest"})
+	agent.StoreJob(&types.Job{Name: "docker-del", Driver: types.DriverDocker, Image: "nginx:latest"})
 	agent.do(func(s *agentState) {
 		s.tasks["docker-task-1"] = &types.Task{
 			ID:      "docker-task-1",
-			JobID:   "docker-id",
 			JobName: "docker-del",
 			Driver:  types.DriverDocker,
 			Image:   "nginx:latest",
@@ -281,9 +280,9 @@ func TestDeleteDockerJob(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	deleted := agent.deleteJobByID("docker-id")
+	deleted := agent.deleteJob("docker-del")
 	if deleted != 1 {
-		t.Errorf("deleteJobByID returned %d, want 1", deleted)
+		t.Errorf("deleteJob returned %d, want 1", deleted)
 	}
 	time.Sleep(50 * time.Millisecond) // wait for async stop goroutine
 
@@ -369,7 +368,7 @@ func TestHandleLogsDockerTask(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Start a docker job
-	job := &types.Job{ID: "job-1", Name: "log-docker", Image: "nginx:latest"}
+	job := &types.Job{Name: "log-docker", Image: "nginx:latest"}
 	task := newTask(job)
 	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
@@ -422,7 +421,7 @@ func TestCheckTasksDockerCrash(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Start a docker job
-	job := &types.Job{ID: "job-1", Name: "crash-docker", Image: "myapp:v1"}
+	job := &types.Job{Name: "crash-docker", Image: "myapp:v1"}
 	task := newTask(job)
 	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)
@@ -477,7 +476,6 @@ func TestCheckTasksDockerHealthCheckFails(t *testing.T) {
 	port := getPort(t, srv)
 
 	job := &types.Job{
-		ID:    "job-1",
 		Name:  "docker-health",
 		Image: "myapp:v1",
 		Ports: map[string]int{"http": 80},
@@ -491,10 +489,9 @@ func TestCheckTasksDockerHealthCheckFails(t *testing.T) {
 
 	// Store job and create task manually
 	agent.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 		s.tasks["docker-health-task"] = &types.Task{
 			ID:      "docker-health-task",
-			JobID:   job.ID,
 			JobName: "docker-health",
 			Driver:  types.DriverDocker,
 			Image:   "myapp:v1",

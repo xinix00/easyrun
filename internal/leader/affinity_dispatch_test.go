@@ -198,7 +198,6 @@ func TestNewAgentJoinsDaemonWithAffinity(t *testing.T) {
 
 	store := NewMockJobStore()
 	daemon := &types.Job{
-		ID:       "daemon-id",
 		Name:     "darwin-only",
 		Command:  "./darwin-tool",
 		Count:    -1,

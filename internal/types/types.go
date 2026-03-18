@@ -31,11 +31,11 @@ const (
 // HealthCheck configuration for a job
 type HealthCheck struct {
 	Type             string        `json:"type,omitempty"`              // "http" (default), "tcp", "file"
-	Path             string        `json:"path"`                       // http: endpoint path, file: absolute file path
-	Port             string        `json:"port,omitempty"`             // http/tcp: named port (default "http")
-	Interval         time.Duration `json:"interval,omitempty"`         // check interval (default 10s)
-	Timeout          time.Duration `json:"timeout,omitempty"`          // http/tcp: per-request timeout (default 5s)
-	InitialTimeout   time.Duration `json:"initial_timeout,omitempty"`  // max time after start to become healthy (default 30s)
+	Path             string        `json:"path"`                        // http: endpoint path, file: absolute file path
+	Port             string        `json:"port,omitempty"`              // http/tcp: named port (default "http")
+	Interval         time.Duration `json:"interval,omitempty"`          // check interval (default 10s)
+	Timeout          time.Duration `json:"timeout,omitempty"`           // http/tcp: per-request timeout (default 5s)
+	InitialTimeout   time.Duration `json:"initial_timeout,omitempty"`   // max time after start to become healthy (default 30s)
 	FailureThreshold int           `json:"failure_threshold,omitempty"` // consecutive failures before unhealthy (default 3)
 }
 
@@ -67,32 +67,31 @@ func DriverFor(image string) string {
 	return DriverExec
 }
 
-// Job defines what the user wants to run
+// Job defines what the user wants to run.
+// Name is the unique key — no separate UUID.
 type Job struct {
-	ID           string            `json:"id,omitempty"`         // unique ID (generated)
-	Name         string            `json:"name"`                 // user-facing name (for upsert)
-	Affinity     map[string]string `json:"affinity,omitempty"`   // node attribute constraints (AND logic, equality)
-	Driver       string            `json:"driver,omitempty"`     // "exec" (default) or "docker"
-	Image        string            `json:"image,omitempty"`    // Docker image (only for driver=docker)
-	Artifacts    []Artifact        `json:"artifacts,omitempty"` // binary/assets to download (agent picks first matching)
+	Name         string            `json:"name"`                     // unique identifier
+	Affinity     map[string]string `json:"affinity,omitempty"`       // node attribute constraints (AND logic, equality)
+	Driver       string            `json:"driver,omitempty"`         // "exec" (default) or "docker"
+	Image        string            `json:"image,omitempty"`          // Docker image (only for driver=docker)
+	Artifacts    []Artifact        `json:"artifacts,omitempty"`      // binary/assets to download (agent picks first matching)
 	Command      string            `json:"command,omitempty"`
 	Count        int               `json:"count,omitempty"`          // number of instances (default 1)
 	Ports        map[string]int    `json:"ports,omitempty"`          // process: port name -> host port (0 = dynamic), docker: port name -> container port
 	CPUShares    int               `json:"cpu_shares,omitempty"`
 	MemoryLimit  uint64            `json:"memory_limit,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
-	Tags         map[string]string `json:"tags,omitempty"`    // labels for discovery/grouping
-	Volumes      map[string]string `json:"volumes,omitempty"` // host_path -> task_path (symlinked)
+	Tags         map[string]string `json:"tags,omitempty"`           // labels for discovery/grouping
+	Volumes      map[string]string `json:"volumes,omitempty"`        // host_path -> task_path (symlinked)
 	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
-	MaxRestarts  int               `json:"max_restarts,omitempty"`  // 0 = unlimited
-	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"` // rolling (default) | recreate | blue-green
-	Priority     *int              `json:"priority,omitempty"`      // nil=auto(end), 0=top, N=Nth position
+	MaxRestarts  int               `json:"max_restarts,omitempty"`   // 0 = default (5), -1 = unlimited
+	UpdatePolicy UpdatePolicy      `json:"update_policy,omitempty"`  // rolling (default) | recreate | blue-green
+	Priority     *int              `json:"priority,omitempty"`       // nil=auto(end), 0=top, N=Nth position
 }
 
 // Task represents a running instance of a Job
 type Task struct {
 	ID           string         `json:"id"`
-	JobID        string         `json:"job_id"`
 	JobName      string         `json:"job_name"`
 	Driver       string         `json:"driver"`          // "exec" or "docker"
 	Image        string         `json:"image,omitempty"` // Docker image (only for driver=docker)

@@ -29,7 +29,6 @@ func TestDispatchSimpleJob(t *testing.T) {
 
 	// Dispatch simple job (count=1)
 	job := &types.Job{
-		ID:      "simple-id",
 		Name:    "simple",
 		Command: "./simple",
 		Count:   1,

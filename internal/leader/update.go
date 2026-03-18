@@ -3,7 +3,6 @@ package leader
 import (
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
 	"easyrun/internal/types"
@@ -14,9 +13,10 @@ var (
 	RollingUpdateDelay = 2 * time.Second
 )
 
-// UpdateJob updates an existing job with a new version
+// UpdateJob updates an existing job (found by name) with a new definition.
+// The update policy is taken from newJob.UpdatePolicy (default: rolling).
 func (l *Leader) UpdateJob(newJob *types.Job) error {
-	oldJob := l.FindJobByName(newJob.Name)
+	oldJob := l.jobStore.GetJob(newJob.Name)
 	if oldJob == nil {
 		return fmt.Errorf("job %s not found", newJob.Name)
 	}
@@ -30,132 +30,154 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 
 	switch policy {
 	case types.UpdateRolling:
-		return l.updateRolling(oldJob, newJob)
+		return l.updateRolling(newJob)
 	case types.UpdateRecreate:
-		return l.updateRecreate(oldJob, newJob)
+		return l.updateRecreate(newJob)
 	case types.UpdateBlueGreen:
-		return l.updateBlueGreen(oldJob, newJob)
+		return l.updateBlueGreen(newJob)
 	default:
 		return fmt.Errorf("unknown update policy: %s", policy)
 	}
 }
 
-// updateRolling: dispatch → KILL → delay (per instance, maintains capacity)
-func (l *Leader) updateRolling(old, new *types.Job) error {
-	count := old.Count
+// updateRolling: for each instance, dispatch new → stop one old task (by task ID).
+// Snapshots old task IDs first so we know exactly which tasks to stop.
+func (l *Leader) updateRolling(job *types.Job) error {
+	count := job.Count
 	if count <= 0 {
 		count = 1
 	}
 
-	// Remove old job from store immediately so reconcileJobs won't
-	// try to re-dispatch old instances during the rolling update.
-	// We still have the old Job in memory for stopOneInstance.
-	l.jobStore.DeleteJob(old.ID)
-	// Index stays pointing to old.ID — will be updated when new is stored
+	// Snapshot old task IDs before updating the job definition.
+	// These are the tasks we need to replace.
+	oldTasks := l.snapshotJobTasks(job.Name)
 
-	for i := 0; i < count; i++ {
-		log.Printf("Rolling update %d/%d (old ID %s → new ID %s)", i+1, count, old.ID, new.ID)
+	// Store new job definition (agents will use it for new tasks).
+	l.jobStore.StoreJob(job)
 
-		// Start new instance first (tracked under new.ID)
-		if err := l.dispatchToAvailableAgent(new); err != nil {
-			// Restore old job — its instances are still running
-			l.jobStore.StoreJob(old)
-			l.do(func(s *leaderState) { s.nameToID[old.Name] = old.ID })
-			return fmt.Errorf("failed at instance %d/%d: %w", i+1, count, err)
+	replaced := 0
+	for i, oldTask := range oldTasks {
+		if i >= count {
+			break // don't replace more than desired count
+		}
+		log.Printf("Rolling update %d/%d for job %s: dispatching new instance", i+1, count, job.Name)
+
+		if err := l.dispatchToAvailableAgent(job); err != nil {
+			return fmt.Errorf("rolling update failed at instance %d/%d: %w", i+1, count, err)
 		}
 
-		// Only stop old after new is running (tracked under old.ID)
-		l.stopOneInstance(old)
-		l.eventBus.Notify("job:" + new.Name)
+		// Stop the old task by its specific task ID
+		agent := l.agentForTask(oldTask.agentID)
+		if agent != nil {
+			l.stopTaskByID(agent, oldTask.taskID)
+			l.do(func(s *leaderState) {
+				if s.placed[oldTask.agentID] != nil && s.placed[oldTask.agentID][job.Name] > 0 {
+					s.placed[oldTask.agentID][job.Name]--
+				}
+			})
+		}
+
+		replaced++
+		l.eventBus.Notify("job:" + job.Name)
 
 		if i < count-1 {
 			time.Sleep(RollingUpdateDelay)
 		}
 	}
 
-	// Store new job definition
-	l.jobStore.StoreJob(new)
-	l.do(func(s *leaderState) { s.nameToID[new.Name] = new.ID })
+	log.Printf("Rolling update for job %s complete (%d/%d instances replaced)", job.Name, replaced, count)
 	return nil
 }
 
-// updateRecreate: KILL all → dispatch all
-func (l *Leader) updateRecreate(old, new *types.Job) error {
-	l.DeleteJobByID(old)
-	return l.DispatchJob(new)
-}
-
-// updateBlueGreen: dispatch all → KILL all
-func (l *Leader) updateBlueGreen(old, new *types.Job) error {
-	if err := l.DispatchJob(new); err != nil {
-		// DispatchJob always stores the job — clean up on failure
-		// so the old version remains the only entry for this name.
-		l.jobStore.DeleteJob(new.ID)
-		l.do(func(s *leaderState) { s.nameToID[old.Name] = old.ID })
-		return err
-	}
-	l.DeleteJobByID(old) // Deletes old by ID, new stays (different ID!)
-	return nil
-}
-
-// stopOneInstance stops one instance of a job (uses placed to find agent, decrements count)
-func (l *Leader) stopOneInstance(job *types.Job) {
-	agent := query(l, func(s *leaderState) *types.Agent {
+// updateRecreate: stop all → store new definition → reconcile dispatches all new.
+func (l *Leader) updateRecreate(job *types.Job) error {
+	// Stop all running instances (deleteTaskOnAgent removes job from agent too,
+	// but we re-store immediately below via DispatchJob).
+	agents := query(l, func(s *leaderState) []*types.Agent {
+		var result []*types.Agent
 		for agentID, jobs := range s.placed {
-			if jobs[job.ID] > 0 {
-				jobs[job.ID]--
-				if jobs[job.ID] == 0 {
-					delete(jobs, job.ID)
+			if jobs[job.Name] > 0 {
+				if a := s.agents[agentID]; a != nil {
+					result = append(result, a)
 				}
-				return s.agents[agentID]
+				delete(jobs, job.Name)
 			}
 		}
-		return nil
+		return result
 	})
 
-	if agent != nil {
-		l.stopTasksOnAgent(agent, job.ID)
+	for _, agent := range agents {
+		l.stopTasksOnAgent(agent, job.Name)
 	}
+
+	return l.DispatchJob(job)
 }
 
-// stopTasksOnAgent stops tasks for a job on a specific agent WITHOUT removing the job definition.
-// Used for preemption and rolling updates — the job remains for rescheduling.
-func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobID string) {
-	url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobID)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		log.Printf("Failed to create stop request for %s on %s: %v", jobID, agent.ID, err)
-		return
+// updateBlueGreen: snapshot old tasks, dispatch all new, then stop all old.
+func (l *Leader) updateBlueGreen(job *types.Job) error {
+	oldTasks := l.snapshotJobTasks(job.Name)
+
+	// Store new definition and dispatch all new instances.
+	l.jobStore.StoreJob(job)
+	if err := l.dispatchInstances(job, job.Count); err != nil {
+		return fmt.Errorf("blue-green: failed to dispatch new instances: %w", err)
 	}
-	if l.apiKey != "" {
-		req.Header.Set("X-API-Key", l.apiKey)
+
+	// Stop all old instances by task ID.
+	for _, oldTask := range oldTasks {
+		agent := l.agentForTask(oldTask.agentID)
+		if agent != nil {
+			l.stopTaskByID(agent, oldTask.taskID)
+			l.do(func(s *leaderState) {
+				if s.placed[oldTask.agentID] != nil && s.placed[oldTask.agentID][job.Name] > 0 {
+					s.placed[oldTask.agentID][job.Name]--
+				}
+			})
+		}
 	}
-	client := &http.Client{Timeout: DeleteClientTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Failed to stop %s on %s: %v", jobID, agent.ID, err)
-		return
-	}
-	resp.Body.Close()
+
+	l.eventBus.Notify("job:" + job.Name)
+	return nil
 }
 
-// deleteTaskOnAgent deletes a job on specific agent (by job ID).
-// Uses a dedicated long timeout because Docker stops can take ~20s.
-func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobID string) {
-	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobID)
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
-	if err != nil {
-		log.Printf("Failed to create delete request for %s on %s: %v", jobID, agent.ID, err)
-		return
+// taskRef holds the agent ID and task ID of a running task.
+type taskRef struct {
+	agentID string
+	taskID  string
+}
+
+// snapshotJobTasks fetches all currently running task IDs for a job from all agents.
+// Used by rolling and blue-green updates to know which tasks to stop.
+func (l *Leader) snapshotJobTasks(jobName string) []taskRef {
+	// Only query agents that have this job placed.
+	agents := query(l, func(s *leaderState) []*types.Agent {
+		var result []*types.Agent
+		for agentID, jobs := range s.placed {
+			if jobs[jobName] > 0 {
+				if a := s.agents[agentID]; a != nil {
+					result = append(result, a)
+				}
+			}
+		}
+		return result
+	})
+
+	tasksByAgent, _ := l.GetJobStatus(jobName)
+
+	var refs []taskRef
+	for _, agent := range agents {
+		for _, task := range tasksByAgent[agent.ID] {
+			if task.State == types.TaskRunning {
+				refs = append(refs, taskRef{agentID: agent.ID, taskID: task.ID})
+			}
+		}
 	}
-	if l.apiKey != "" {
-		req.Header.Set("X-API-Key", l.apiKey)
-	}
-	client := &http.Client{Timeout: DeleteClientTimeout}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Failed to delete %s on %s: %v", jobID, agent.ID, err)
-		return
-	}
-	resp.Body.Close()
+	return refs
+}
+
+// agentForTask returns the agent with the given ID (or nil if not registered).
+func (l *Leader) agentForTask(agentID string) *types.Agent {
+	return query(l, func(s *leaderState) *types.Agent {
+		return s.agents[agentID]
+	})
 }

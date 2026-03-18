@@ -264,11 +264,10 @@ func TestHandleDeleteSuccess(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// Add a job and running task
-	agent.StoreJob(&types.Job{ID: "test-id", Name: "test", Command: "echo"})
+	agent.StoreJob(&types.Job{Name: "test", Command: "echo"})
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
 			ID:      "task-1",
-			JobID:   "test-id",
 			JobName: "test",
 			State:   types.TaskRunning,
 		}
@@ -276,7 +275,7 @@ func TestHandleDeleteSuccess(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	req := httptest.NewRequest(http.MethodDelete, "/delete/test-id", nil)
+	req := httptest.NewRequest(http.MethodDelete, "/delete/test", nil)
 	w := httptest.NewRecorder()
 
 	agent.handleDelete(w, req)
@@ -827,7 +826,7 @@ func TestHandleLogsStdoutStream(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Start a job to create a task with log broadcasters
-	job := &types.Job{ID: "job-1", Name: "log-test", Command: "echo hello"}
+	job := &types.Job{Name: "log-test", Command: "echo hello"}
 	task := newTask(job)
 	if err := agent.startJob(job, task); err != nil {
 		t.Fatalf("startJob failed: %v", err)

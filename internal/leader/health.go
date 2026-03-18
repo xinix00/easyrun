@@ -14,7 +14,6 @@ import (
 
 // Run starts the leader's state loop and dead agent checker
 func (l *Leader) Run(ctx context.Context) {
-	// Start the state loop
 	go l.stateLoop(ctx)
 
 	ticker := time.NewTicker(deadAgentCheckInterval)
@@ -32,7 +31,6 @@ func (l *Leader) Run(ctx context.Context) {
 
 // checkDeadAgents removes agents that haven't sent heartbeat and reconciles jobs
 func (l *Leader) checkDeadAgents() {
-	// Skip during settle period (learning state from agents)
 	settled := query(l, func(s *leaderState) bool { return s.settled })
 	if !settled {
 		return
@@ -63,8 +61,7 @@ func (l *Leader) checkDeadAgents() {
 }
 
 // normalizePriorities ensures all jobs have unique sequential priorities 0..N-1.
-// Called at the start of every reconcileJobs to fix any duplicates or gaps that
-// may exist in loaded state (e.g. after leader restart or version migration).
+// Called at the start of every reconcileJobs to fix any duplicates or gaps.
 func (l *Leader) normalizePriorities(jobs []*types.Job) {
 	sort.Slice(jobs, func(i, j int) bool {
 		pi, pj := effectivePriority(jobs[i].Priority), effectivePriority(jobs[j].Priority)
@@ -85,7 +82,6 @@ func (l *Leader) normalizePriorities(jobs []*types.Job) {
 }
 
 // reconcileJobs ensures all jobs have the correct number of running instances.
-// Uses placed counts (maintained by heartbeats + dispatch tracking) — no HTTP calls.
 func (l *Leader) reconcileJobs() {
 	jobs := l.jobStore.GetJobs()
 	if len(jobs) == 0 {
@@ -104,7 +100,7 @@ func (l *Leader) reconcileJobs() {
 	l.do(func(s *leaderState) { s.roundRobin = 0 })
 
 	for _, job := range jobs {
-		if job.ID == "" {
+		if job.Name == "" {
 			continue
 		}
 		if err := l.reconcileJob(job, agents); err != nil {
@@ -114,12 +110,9 @@ func (l *Leader) reconcileJobs() {
 }
 
 // reconcileJob ensures a single job has the correct instances running.
-// Uses placed counts (from heartbeats + dispatch tracking) instead of GetClusterStatus.
-// Daemon jobs (count=-1): dispatch to all agents missing it.
-// Regular jobs: dispatch missing instances via round-robin.
 func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 	// Skip jobs being actively dispatched (prevents double dispatch)
-	dispatching := query(l, func(s *leaderState) bool { return s.dispatching[job.ID] })
+	dispatching := query(l, func(s *leaderState) bool { return s.dispatching[job.Name] })
 	if dispatching {
 		return nil
 	}
@@ -129,7 +122,7 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 		missing := query(l, func(s *leaderState) []*types.Agent {
 			var need []*types.Agent
 			for _, agent := range agents {
-				if s.placed[agent.ID] == nil || s.placed[agent.ID][job.ID] == 0 {
+				if s.placed[agent.ID] == nil || s.placed[agent.ID][job.Name] == 0 {
 					need = append(need, agent)
 				}
 			}
@@ -142,7 +135,7 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 			if err := l.sendJobToAgent(agent, job); err != nil {
 				log.Printf("Failed to dispatch daemon %s to %s: %v", job.Name, agent.ID, err)
 			} else {
-				l.trackPlacement(agent.ID, job.ID)
+				l.trackPlacement(agent.ID, job.Name)
 				dispatched++
 			}
 		}
@@ -165,7 +158,7 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 		total := 0
 		for agentID := range s.agents {
 			if p := s.placed[agentID]; p != nil {
-				total += p[job.ID]
+				total += p[job.Name]
 			}
 		}
 		return total
@@ -181,7 +174,7 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 	return nil
 }
 
-// GetClusterStatus fetches status from all agents (parallel, no goroutine leaks!)
+// GetClusterStatus fetches status from all agents (parallel)
 func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	agents := l.GetAgents()
 	result := make(map[string][]*types.Task)
@@ -190,18 +183,15 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 		return result
 	}
 
-	// Context with timeout - cancels all goroutines when done
 	ctx, cancel := context.WithTimeout(context.Background(), HTTPClientTimeout)
 	defer cancel()
 
-	// Channel-based concurrency - no mutexes needed!
 	type agentResult struct {
 		agentID string
 		tasks   []*types.Task
 	}
 	resultCh := make(chan agentResult, len(agents))
 
-	// Fetch from all agents in parallel
 	for _, agent := range agents {
 		go func(a *types.Agent) {
 			tasks, err := l.fetchAgentTasks(ctx, a)
@@ -214,7 +204,6 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 		}(agent)
 	}
 
-	// Collect results (context cancellation stops all goroutines)
 	for i := 0; i < len(agents); i++ {
 		select {
 		case res := <-resultCh:
@@ -230,19 +219,17 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 	return result
 }
 
-// GetJobStatus fetches tasks for a specific job by only querying agents
-// that have the job placed. Returns tasks_by_agent and the relevant agents.
-func (l *Leader) GetJobStatus(jobID string) (map[string][]*types.Task, []*types.Agent) {
-	job := l.jobStore.GetJob(jobID)
+// GetJobStatus fetches tasks for a specific job by only querying agents that have it placed.
+func (l *Leader) GetJobStatus(jobName string) (map[string][]*types.Task, []*types.Agent) {
+	job := l.jobStore.GetJob(jobName)
 	if job == nil {
 		return nil, nil
 	}
 
-	// Find agents that have this job placed
 	agents := query(l, func(s *leaderState) []*types.Agent {
 		var result []*types.Agent
 		for agentID, jobs := range s.placed {
-			if jobs[job.ID] > 0 {
+			if jobs[jobName] > 0 {
 				if a := s.agents[agentID]; a != nil {
 					result = append(result, a)
 				}
@@ -272,10 +259,9 @@ func (l *Leader) GetJobStatus(jobID string) (map[string][]*types.Task, []*types.
 				resultCh <- agentResult{agentID: a.ID}
 				return
 			}
-			// Filter to only this job's tasks
 			var filtered []*types.Task
 			for _, t := range tasks {
-				if t.JobID == jobID {
+				if t.JobName == jobName {
 					filtered = append(filtered, t)
 				}
 			}

@@ -12,8 +12,6 @@ import (
 	"easyrun/internal/leader"
 	"easyrun/internal/types"
 	"easyrun/pkg/httputil"
-
-	"github.com/google/uuid"
 )
 
 // Server provides the HTTP API for the leader
@@ -47,7 +45,7 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 
 	// Jobs (authenticated)
 	mux.HandleFunc("GET /v1/jobs", auth(s.handleGetJobs))
-	mux.HandleFunc("POST /v1/jobs", auth(s.handleRunJob))
+	mux.HandleFunc("POST /v1/jobs", auth(s.handleApplyJob))
 	mux.HandleFunc("DELETE /v1/jobs/", auth(s.handleDeleteJob))
 
 	// Status (authenticated)
@@ -58,8 +56,8 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 	mux.HandleFunc("POST /v1/notify", auth(s.handleNotify))
 
 	// Per-job endpoints (authenticated)
-	mux.HandleFunc("GET /v1/jobs/{id}/status", auth(s.handleJobStatus))
-	mux.HandleFunc("PATCH /v1/jobs/{id}/priority", auth(s.handlePatchJobPriority))
+	mux.HandleFunc("GET /v1/jobs/{name}/status", auth(s.handleJobStatus))
+	mux.HandleFunc("PATCH /v1/jobs/{name}/priority", auth(s.handlePatchJobPriority))
 
 	s.server = &http.Server{
 		Addr:    addr,
@@ -90,32 +88,27 @@ func (s *Server) Stop() {
 	_ = s.server.Shutdown(ctx)
 }
 
-// handleHealth returns health status
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleGetAgents returns all registered agents
 func (s *Server) handleGetAgents(w http.ResponseWriter, r *http.Request) {
-	agents := s.leader.GetAgents()
-	httputil.WriteJSON(w, http.StatusOK, agents)
+	httputil.WriteJSON(w, http.StatusOK, s.leader.GetAgents())
 }
 
-// handleHeartbeat handles agent heartbeat (also registers new agents)
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID        string         `json:"id"`
 		Endpoint  string         `json:"endpoint"`
 		Version   string         `json:"version,omitempty"`
-		Jobs      []*types.Job   `json:"jobs,omitempty"`       // All known jobs (for state sync)
-		Placed    map[string]int `json:"placed,omitempty"`     // jobID -> count (ground truth from agent)
+		Jobs      []*types.Job   `json:"jobs,omitempty"`
+		Placed    map[string]int `json:"placed,omitempty"`
 		StateTime time.Time      `json:"state_time,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-
 	if req.ID == "" || req.Endpoint == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "id and endpoint required")
 		return
@@ -133,19 +126,17 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRegisterAgent registers a (re)starting agent
 func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID       string         `json:"id"`
 		Endpoint string         `json:"endpoint"`
 		Version  string         `json:"version,omitempty"`
-		Placed   map[string]int `json:"placed,omitempty"` // jobID -> count (what's running on this agent)
+		Placed   map[string]int `json:"placed,omitempty"` // jobName -> count
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-
 	if req.ID == "" || req.Endpoint == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "id and endpoint required")
 		return
@@ -159,95 +150,74 @@ func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleUnregisterAgent removes an agent
 func (s *Server) handleUnregisterAgent(w http.ResponseWriter, r *http.Request) {
 	id := strings.TrimPrefix(r.URL.Path, "/v1/agents/")
 	if id == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "agent id required")
 		return
 	}
-
 	s.leader.UnregisterAgent(id)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handleGetJobs returns all jobs
 func (s *Server) handleGetJobs(w http.ResponseWriter, r *http.Request) {
-	jobs := s.leader.GetJobs()
-	httputil.WriteJSON(w, http.StatusOK, jobs)
+	httputil.WriteJSON(w, http.StatusOK, s.leader.GetJobs())
 }
 
-// handleRunJob dispatches or updates a job (upsert based on job.Name)
-// If job with this name exists, it's updated according to update_policy
-// If job doesn't exist, it's created and dispatched
-func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
+// handleApplyJob creates or updates a job by name (upsert).
+// Name exists → UpdateJob with update_policy. Name unknown → DispatchJob.
+func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-
 	if job.Name == "" {
 		httputil.WriteError(w, http.StatusBadRequest, "name required")
 		return
 	}
-
-	if job.Command == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "command required")
+	if job.Command == "" && job.Image == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "command or image required")
 		return
 	}
 
-	// Always generate new ID (during updates, old and new job coexist temporarily)
-	job.ID = uuid.New().String()
-
-	// Check if job with this name already exists (UPDATE)
-	existingJob := s.leader.FindJobByName(job.Name)
-	if existingJob != nil {
-		job.Priority = existingJob.Priority // preserve position on update
-		log.Printf("Job %s exists (old ID %s), updating to new ID %s (policy=%s)",
-			job.Name, existingJob.ID, job.ID, job.UpdatePolicy)
-
-		// Fire-and-forget: rolling updates can take seconds per instance
-		jobCopy := job
+	// UPDATE — job already exists
+	if s.leader.GetJob(job.Name) != nil {
+		policy := job.UpdatePolicy
+		if policy == "" {
+			policy = "rolling"
+		}
 		go func() {
-			if err := s.leader.UpdateJob(&jobCopy); err != nil {
-				log.Printf("Update job %s failed: %v", jobCopy.Name, err)
+			if err := s.leader.UpdateJob(&job); err != nil {
+				log.Printf("Update job %s failed: %v", job.Name, err)
 			}
 		}()
-
 		httputil.WriteJSON(w, http.StatusAccepted, map[string]string{
-			"id":     job.ID,
 			"name":   job.Name,
 			"status": "updating",
-			"policy": string(job.UpdatePolicy),
+			"policy": string(policy),
 		})
 		return
 	}
 
+	// CREATE — new job
 	explicitPriority := job.Priority
 	if job.Priority == nil {
 		n := s.leader.NextPriority()
 		job.Priority = &n
 	}
 	if err := s.leader.DispatchJob(&job); err != nil {
-		// Job is stored but dispatch failed — report as accepted (will retry on reconciliation)
 		httputil.WriteJSON(w, http.StatusCreated, map[string]string{
-			"id":     job.ID,
 			"name":   job.Name,
 			"status": "pending",
 			"error":  err.Error(),
 		})
 		return
 	}
-
-	// If an explicit priority was given, renumber all jobs so priorities are unique.
-	// DispatchJob stored the raw value which may conflict with existing jobs.
 	if explicitPriority != nil {
-		_ = s.leader.PatchJobPriority(job.ID, *explicitPriority)
+		_ = s.leader.PatchJobPriority(job.Name, *explicitPriority)
 	}
-
 	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
-		"id":     job.ID,
 		"name":   job.Name,
 		"status": "dispatched",
 	})
@@ -255,22 +225,20 @@ func (s *Server) handleRunJob(w http.ResponseWriter, r *http.Request) {
 
 // handleDeleteJob deletes a job and cleans up all its tasks
 func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
-	if id == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job id required")
+	name := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job name required")
 		return
 	}
-
-	s.leader.DeleteJob(id)
+	s.leader.DeleteJobByName(name)
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleStatus returns cluster overview from placed data (no HTTP calls to agents).
-// For task details (state, pid, restarts), use GET /v1/jobs/{name}/status.
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	agents := s.leader.GetAgents()
 	jobs := s.leader.GetJobs()
-	placed := s.leader.GetPlacedByJobName()
+	placed := s.leader.GetPlacedCounts()
 
 	totalPlaced := 0
 	for _, count := range placed {
@@ -288,7 +256,6 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEvents streams SSE notifications when cluster state changes.
-// SSE event types: "ping" (initial), "agent", "job", "task".
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	sse := httputil.SSEWriter(w)
 	if sse == nil {
@@ -299,7 +266,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	ch := s.leader.EventBus().Subscribe()
 	defer s.leader.EventBus().Unsubscribe(ch)
 
-	// Initial ping so client does an immediate refetch
 	sse.WriteEvent("ping", "{}")
 
 	for {
@@ -314,8 +280,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			case strings.HasPrefix(msg, "agent:"):
 				sse.WriteEvent("agent", fmt.Sprintf(`{"id":%q}`, strings.TrimPrefix(msg, "agent:")))
 			case strings.HasPrefix(msg, "job:"):
-				// "job:name" = job-level change (dispatched/deleted)
-				// "job:name:event" = task lifecycle (start/started/crash/stop)
 				rest := strings.TrimPrefix(msg, "job:")
 				if name, event, ok := strings.Cut(rest, ":"); ok {
 					sse.WriteEvent("task", fmt.Sprintf(`{"job":%q,"event":%q}`, name, event))
@@ -323,7 +287,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 					sse.WriteEvent("job", fmt.Sprintf(`{"name":%q}`, rest))
 				}
 			default:
-				// Generic status change (e.g. settle period ended)
 				sse.WriteEvent("status", "{}")
 			}
 		}
@@ -331,13 +294,12 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNotify receives agent task-change notifications and fires the event bus.
-// Events: "start" (process started), "started" (healthy), "crash", "stop".
 func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Job   string `json:"job"`
 		Event string `json:"event"`
 	}
-	_ = json.NewDecoder(r.Body).Decode(&req) // best-effort, empty body = generic notify
+	_ = json.NewDecoder(r.Body).Decode(&req)
 	if req.Job != "" {
 		topic := "job:" + req.Job
 		if req.Event != "" {
@@ -350,11 +312,11 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// handlePatchJobPriority updates only the priority of a job (no update policy triggered).
+// handlePatchJobPriority updates only the priority of a job.
 func (s *Server) handlePatchJobPriority(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job id required")
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job name required")
 		return
 	}
 	var body struct {
@@ -364,7 +326,7 @@ func (s *Server) handlePatchJobPriority(w http.ResponseWriter, r *http.Request) 
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
 		return
 	}
-	if err := s.leader.PatchJobPriority(id, body.Priority); err != nil {
+	if err := s.leader.PatchJobPriority(name, body.Priority); err != nil {
 		httputil.WriteError(w, http.StatusNotFound, err.Error())
 		return
 	}
@@ -372,18 +334,16 @@ func (s *Server) handlePatchJobPriority(w http.ResponseWriter, r *http.Request) 
 }
 
 // handleJobStatus returns tasks and agents for a specific job.
-// Only queries agents that have this job placed (via placed map).
 func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if id == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job id required")
+	name := r.PathValue("name")
+	if name == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "job name required")
 		return
 	}
 
-	tasks, agents := s.leader.GetJobStatus(id)
+	tasks, agents := s.leader.GetJobStatus(name)
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{
 		"agents":         agents,
 		"tasks_by_agent": tasks,
 	})
 }
-

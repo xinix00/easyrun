@@ -11,7 +11,6 @@ func init() {
 	// Fast timeouts for tests - no waiting for fake agents
 	HTTPClientTimeout = 10 * time.Millisecond
 	DeleteClientTimeout = 10 * time.Millisecond
-	VerifyInterval = 10 * time.Millisecond
 	RollingUpdateDelay = 1 * time.Millisecond
 }
 
@@ -39,22 +38,22 @@ func (m *MockJobStore) GetJobs() []*types.Job {
 	return jobs
 }
 
-func (m *MockJobStore) GetJob(id string) *types.Job {
+func (m *MockJobStore) GetJob(name string) *types.Job {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.jobs[id]
+	return m.jobs[name]
 }
 
 func (m *MockJobStore) StoreJob(job *types.Job) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs[job.ID] = job
+	m.jobs[job.Name] = job
 }
 
-func (m *MockJobStore) DeleteJob(id string) {
+func (m *MockJobStore) DeleteJob(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	delete(m.jobs, id)
+	delete(m.jobs, name)
 }
 
 func (m *MockJobStore) GetStateTime() time.Time {
@@ -67,7 +66,7 @@ func (m *MockJobStore) SyncJobs(jobs []*types.Job, updated time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, job := range jobs {
-		m.jobs[job.ID] = job
+		m.jobs[job.Name] = job
 	}
 	m.stateTime = updated
 }

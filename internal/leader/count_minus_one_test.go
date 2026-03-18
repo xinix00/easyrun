@@ -32,7 +32,6 @@ func TestCountMinusOneDispatchesOncePerAgent(t *testing.T) {
 
 	// Dispatch count=-1 job
 	job := &types.Job{
-		ID:      "daemon-id",
 		Name:    "daemon",
 		Command: "./daemon",
 		Count:   -1,
@@ -42,7 +41,7 @@ func TestCountMinusOneDispatchesOncePerAgent(t *testing.T) {
 	store.StoreJob(job)
 
 	// Verify placement would be 3 unique agents
-	placed := leader.GetPlaced("daemon-id")
+	placed := leader.GetPlaced("daemon")
 	t.Logf("Placement for count=-1 job: %v", placed)
 
 	// NOTE: In real scenario with HTTP, placement would be populated by DispatchJob
@@ -109,8 +108,8 @@ func TestCountMinusOneDoesNotUseRoundRobin(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Deploy count=-1 job twice (should hit same agents each time)
-	job1 := &types.Job{ID: "job1", Name: "test1", Command: "./test", Count: -1}
-	job2 := &types.Job{ID: "job2", Name: "test2", Command: "./test", Count: -1}
+	job1 := &types.Job{Name: "test1", Command: "./test", Count: -1}
+	job2 := &types.Job{Name: "test2", Command: "./test", Count: -1}
 
 	store.StoreJob(job1)
 	store.StoreJob(job2)

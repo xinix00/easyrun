@@ -18,7 +18,6 @@ import (
 func init() {
 	// Fast timeouts for tests
 	leader.HTTPClientTimeout = 10 * time.Millisecond
-	leader.VerifyInterval = 10 * time.Millisecond
 }
 
 func setupTestServer(t *testing.T) (*Server, *leader.Leader, context.CancelFunc) {
@@ -242,7 +241,6 @@ func TestGetJobsWithStored(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		store.StoreJob(&types.Job{
-			ID:   fmt.Sprintf("job-%d", i),
 			Name: fmt.Sprintf("job-%d", i),
 		})
 	}
@@ -332,10 +330,8 @@ func TestRunJobCreatesNew(t *testing.T) {
 	if resp["name"] != "test-job" {
 		t.Errorf("name = %q, want %q", resp["name"], "test-job")
 	}
-	if resp["id"] == "" {
-		t.Error("Response missing id")
-	}
 }
+
 
 func TestRunJobNoAgentsAvailable(t *testing.T) {
 	server, store, cancel := setupTestServer(t)
@@ -394,7 +390,7 @@ func TestRunJobUpdateExisting(t *testing.T) {
 		t.Fatalf("Create status = %d, want 201 (body: %s)", w.Code, w.Body.String())
 	}
 
-	// Second: update same name
+	// Second: apply same name → triggers update (upsert)
 	w = doRequest(server, "POST", "/v1/jobs", types.Job{
 		Name:    "update-test",
 		Command: "echo v2",
@@ -720,7 +716,6 @@ func (ma *testMockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 	ma.seq++
 	task := &types.Task{
 		ID:      fmt.Sprintf("task-%s-%d", job.Name, ma.seq),
-		JobID:   job.ID,
 		JobName: job.Name,
 		State:   types.TaskRunning,
 	}

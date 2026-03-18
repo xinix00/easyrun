@@ -300,7 +300,7 @@ func TestPatchPriorityTriggersPreemption(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Patch counter2 to priority 0 (most important) — should trigger reconcile+preempt
-	if err := l.PatchJobPriority(counter2.ID, 0); err != nil {
+	if err := l.PatchJobPriority(counter2.Name, 0); err != nil {
 		t.Fatalf("PatchJobPriority failed: %v", err)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -408,7 +408,7 @@ func TestMultiAgentPatchPreemption(t *testing.T) {
 
 	// GUI: drag counter above counter2 → ONE PATCH (insert counter at position 0)
 	// Server renumbers: counter(0), counter2(1) atomically, then ONE reconcileJobs.
-	if err := l.PatchJobPriority(counter.ID, 0); err != nil {
+	if err := l.PatchJobPriority(counter.Name, 0); err != nil {
 		t.Fatalf("PatchJobPriority counter failed: %v", err)
 	}
 	time.Sleep(300 * time.Millisecond)
@@ -470,7 +470,7 @@ func TestDragAboveOversizedCount(t *testing.T) {
 	time.Sleep(30 * time.Millisecond)
 
 	// GUI: drag jobA to position 0 (above jobB) — one PATCH
-	if err := l.PatchJobPriority(jobA.ID, 0); err != nil {
+	if err := l.PatchJobPriority(jobA.Name, 0); err != nil {
 		t.Fatalf("PatchJobPriority: %v", err)
 	}
 	time.Sleep(500 * time.Millisecond)

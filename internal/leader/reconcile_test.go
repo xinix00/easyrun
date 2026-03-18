@@ -45,7 +45,6 @@ func TestRescheduleUnderscheduled(t *testing.T) {
 
 	// Add a job with count=3
 	job := &types.Job{
-		ID:      "job-1",
 		Name:    "test-job",
 		Command: "/bin/sleep 1000",
 		Count:   3,
@@ -57,12 +56,12 @@ func TestRescheduleUnderscheduled(t *testing.T) {
 		if s.placed["agent-1"] == nil {
 			s.placed["agent-1"] = make(map[string]int)
 		}
-		s.placed["agent-1"][job.ID] = 1
+		s.placed["agent-1"][job.Name] = 1
 	})
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify under-scheduled
-	placed := l.GetPlaced(job.ID)
+	placed := l.GetPlaced(job.Name)
 	if len(placed) != 1 {
 		t.Fatalf("expected 1 instance, got %d", len(placed))
 	}
@@ -83,7 +82,6 @@ func TestNodeRecovery(t *testing.T) {
 
 	// Job with count=1
 	job := &types.Job{
-		ID:      "job-1",
 		Name:    "postgres",
 		Command: "/usr/bin/postgres",
 		Count:   1,
@@ -99,12 +97,12 @@ func TestNodeRecovery(t *testing.T) {
 		if s.placed["node-a"] == nil {
 			s.placed["node-a"] = make(map[string]int)
 		}
-		s.placed["node-a"][job.ID] = 1
+		s.placed["node-a"][job.Name] = 1
 	})
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify placement
-	if len(l.GetPlaced(job.ID)) != 1 {
+	if len(l.GetPlaced(job.Name)) != 1 {
 		t.Fatal("expected 1 instance")
 	}
 
@@ -115,7 +113,7 @@ func TestNodeRecovery(t *testing.T) {
 	})
 
 	// Verify job is orphaned
-	if len(l.GetPlaced(job.ID)) != 0 {
+	if len(l.GetPlaced(job.Name)) != 0 {
 		t.Error("expected 0 instances after node failure")
 	}
 

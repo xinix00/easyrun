@@ -45,7 +45,6 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "counter-id",
 		Name:    "counter",
 		Command: "sh -c 'i=0; while true; do echo counter: $i; i=$((i+1)); sleep 1; done'",
 		Count:   20,
@@ -181,7 +180,6 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "counter-id",
 		Name:    "counter",
 		Command: "sh -c 'i=0; while true; do echo counter: $i; i=$((i+1)); sleep 1; done'",
 		Count:   20,
@@ -256,7 +254,6 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	for i := 0; i < aTasks; i++ {
 		agentARecovered.tasks = append(agentARecovered.tasks, &types.Task{
 			ID:      fmt.Sprintf("original-task-%d", i),
-			JobID:   "counter-id",
 			JobName: "counter",
 			State:   types.TaskRunning,
 		})
@@ -303,7 +300,6 @@ func TestNetworkBlipNoRedistribution(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "counter-id",
 		Name:    "counter",
 		Command: "sh -c 'i=0; while true; do echo counter: $i; i=$((i+1)); sleep 1; done'",
 		Count:   20,
@@ -391,7 +387,6 @@ func TestPendingTasksScheduledOnNewNode(t *testing.T) {
 
 	// Dispatch 20 tasks → beide agents krijgen 10
 	job := &types.Job{
-		ID:      "counter-id",
 		Name:    "counter",
 		Command: "sh -c 'i=0; while true; do echo counter: $i; i=$((i+1)); sleep 1; done'",
 		Count:   20,
@@ -417,8 +412,8 @@ func TestPendingTasksScheduledOnNewNode(t *testing.T) {
 	agentB.mu.Unlock()
 
 	// Agent-b re-registers with reduced placed count → triggers reconcile → dispatches 5 missing
-	leader.RegisterAgent("agent-a", agentA.URL(), "", map[string]int{"counter-id": aTasks})
-	leader.RegisterAgent("agent-b", agentB.URL(), "", map[string]int{"counter-id": 5})
+	leader.RegisterAgent("agent-a", agentA.URL(), "", map[string]int{"counter": aTasks})
+	leader.RegisterAgent("agent-b", agentB.URL(), "", map[string]int{"counter": 5})
 	time.Sleep(100 * time.Millisecond)
 
 	// RegisterAgent triggers reconcile: placed=10+5=15, desired=20, dispatches 5

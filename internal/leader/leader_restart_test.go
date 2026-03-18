@@ -33,7 +33,6 @@ func TestLeaderRestart_RejectUnknownHeartbeat(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "my-job-id",
 		Name:    "my-job",
 		Command: "./my-app",
 		Count:   20,
@@ -62,7 +61,7 @@ func TestLeaderRestart_RejectUnknownHeartbeat(t *testing.T) {
 	go leader2.stateLoop(ctx2)
 
 	// Leader registers itself
-	leader2.RegisterAgent("agent-0", agents[0].URL(), "", map[string]int{job.ID: agentTaskCounts[0]})
+	leader2.RegisterAgent("agent-0", agents[0].URL(), "", map[string]int{job.Name: agentTaskCounts[0]})
 
 	// Other agents heartbeat → should be REJECTED (unknown)
 	for i := 1; i < 4; i++ {
@@ -82,7 +81,7 @@ func TestLeaderRestart_RejectUnknownHeartbeat(t *testing.T) {
 	// Agents get 404, re-register with placed counts
 	for i := 1; i < 4; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
-		placed := map[string]int{job.ID: agentTaskCounts[i]}
+		placed := map[string]int{job.Name: agentTaskCounts[i]}
 		leader2.RegisterAgent(agentID, agents[i].URL(), "", placed)
 	}
 
@@ -131,7 +130,6 @@ func TestAgentRestart_WithinTimeout_PlacedStale(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{
-		ID:      "my-job-id",
 		Name:    "my-job",
 		Command: "./my-app",
 		Count:   20,

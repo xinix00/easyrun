@@ -96,7 +96,6 @@ func TestLeaderCanDispatchToItself(t *testing.T) {
 
 	// Job with count=1 should be dispatchable to leader itself
 	job := &types.Job{
-		ID:      "test-job",
 		Name:    "test",
 		Command: "./test",
 		Count:   1,
@@ -111,7 +110,7 @@ func TestLeaderCanDispatchToItself(t *testing.T) {
 	}
 
 	// Placement should be possible
-	placed := leader.GetPlaced(job.ID)
+	placed := leader.GetPlaced(job.Name)
 	if len(placed) > 0 {
 		// Job was dispatched (in real scenario with HTTP)
 		t.Logf("Job dispatched to %d agents including leader", len(placed))
@@ -143,7 +142,6 @@ func TestSingleNodeClusterLeaderIsOnlyAgent(t *testing.T) {
 
 	// Verify it can dispatch to itself
 	job := &types.Job{
-		ID:      "job-1",
 		Name:    "solo-job",
 		Command: "./app",
 		Count:   1,

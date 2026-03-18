@@ -38,20 +38,20 @@ const (
 
 // agentState holds all mutable state (owned by single goroutine)
 type agentState struct {
-	jobs  map[string]*types.Job
-	tasks map[string]*types.Task
-	stateTime  time.Time
+	jobs      map[string]*types.Job  // job name → job
+	tasks     map[string]*types.Task // task ID → task
+	stateTime time.Time
 }
 
 // Agent runs jobs and reports status
 type Agent struct {
-	id         string
-	endpoint   string
-	config     *config.Config
+	id           string
+	endpoint     string
+	config       *config.Config
 	execRunner   runner.Runner
 	dockerRunner runner.Runner
-	sysInfo    SystemInfo        // detected once at startup
-	attributes map[string]string // node attributes for affinity matching
+	sysInfo      SystemInfo        // detected once at startup
+	attributes   map[string]string // node attributes for affinity matching
 
 	ops chan func(*agentState) // all state access goes through here
 
@@ -60,8 +60,8 @@ type Agent struct {
 	httpClient *http.Client
 	apiKey     string // API key for authenticating with leader and protecting local endpoints
 
-	needsSave   atomic.Bool // flag for debounced persistence
-	checkStates map[string]*checkState // health check state per task (monitor goroutine only)
+	needsSave   atomic.Bool              // flag for debounced persistence
+	checkStates map[string]*checkState   // health check state per task (monitor goroutine only)
 }
 
 // New creates a new agent with optional runner (nil uses default ExecRunner)
@@ -79,7 +79,6 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 	endpoint := fmt.Sprintf("http://%s:%d", cfg.Node.IP, cfg.Node.Port)
 
 	// Build node attributes: auto-detected + user-configured (config overrides)
-	// Auto-detect docker availability
 	hasDocker := "false"
 	if _, err := exec.LookPath("docker"); err == nil {
 		hasDocker = "true"
@@ -220,6 +219,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/run", auth(a.handleRun))
 	mux.HandleFunc("/delete/", auth(a.handleDelete))
 	mux.HandleFunc("/stop/", auth(a.handleStop))
+	mux.HandleFunc("/stop-task/", auth(a.handleStopTask))
 	mux.HandleFunc("/logs/", auth(a.handleLogs))
 	mux.HandleFunc("/leader", a.handleLeader)
 
@@ -322,15 +322,10 @@ func corsMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// GetJobByName finds a job by name (jobs are stored by ID)
-func (a *Agent) GetJobByName(jobName string) *types.Job {
+// GetJob returns a specific job by name
+func (a *Agent) GetJob(name string) *types.Job {
 	return query(a, func(s *agentState) *types.Job {
-		for _, j := range s.jobs {
-			if j.Name == jobName {
-				return j
-			}
-		}
-		return nil
+		return s.jobs[name]
 	})
 }
 
@@ -345,40 +340,33 @@ func (a *Agent) GetJobs() []*types.Job {
 	})
 }
 
-// GetPlacedTaskCounts returns a map of jobID -> number of placed tasks on this agent.
+// GetPlacedTaskCounts returns a map of jobName -> number of placed tasks on this agent.
 // Counts ALL tasks (including failed) because failed tasks exhausted their restart
 // counter and should NOT be re-dispatched by the leader.
 func (a *Agent) GetPlacedTaskCounts() map[string]int {
 	return query(a, func(s *agentState) map[string]int {
 		counts := make(map[string]int)
 		for _, task := range s.tasks {
-			if task.JobID != "" {
-				counts[task.JobID]++
+			if task.JobName != "" {
+				counts[task.JobName]++
 			}
 		}
 		return counts
 	})
 }
 
-// GetJob returns a specific job by ID
-func (a *Agent) GetJob(id string) *types.Job {
-	return query(a, func(s *agentState) *types.Job {
-		return s.jobs[id]
-	})
-}
-
 // StoreJob stores a job (used by leader when it learns about remote jobs)
 func (a *Agent) StoreJob(job *types.Job) {
 	a.do(func(s *agentState) {
-		s.jobs[job.ID] = job
+		s.jobs[job.Name] = job
 		s.stateTime = time.Now()
 	})
 }
 
-// DeleteJob removes a job from the store by ID (for JobStore interface)
-func (a *Agent) DeleteJob(id string) {
+// DeleteJob removes a job from the store by name (for JobStore interface)
+func (a *Agent) DeleteJob(name string) {
 	a.do(func(s *agentState) {
-		delete(s.jobs, id)
+		delete(s.jobs, name)
 		s.stateTime = time.Now()
 	})
 	a.scheduleSave()
@@ -395,7 +383,7 @@ func (a *Agent) GetStateTime() time.Time {
 func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 	a.do(func(s *agentState) {
 		for _, job := range jobs {
-			s.jobs[job.ID] = job
+			s.jobs[job.Name] = job
 		}
 		s.stateTime = updated
 	})
@@ -426,7 +414,7 @@ func (a *Agent) LoadState() error {
 
 	a.do(func(s *agentState) {
 		for _, job := range state.Jobs {
-			s.jobs[job.ID] = job
+			s.jobs[job.Name] = job
 		}
 		s.stateTime = state.Updated
 	})
@@ -437,7 +425,6 @@ func (a *Agent) LoadState() error {
 
 // SaveState persists jobs to state.json
 func (a *Agent) SaveState() {
-	// Get state snapshot
 	type snapshot struct {
 		jobs    []*types.Job
 		updated time.Time
@@ -447,8 +434,6 @@ func (a *Agent) SaveState() {
 		for _, j := range s.jobs {
 			jobs = append(jobs, j)
 		}
-		// Don't update stateTime here - it's only updated when state actually changes
-		// (StoreJob, DeleteJob, SyncJobs), not when we persist to disk
 		return snapshot{jobs, s.stateTime}
 	})
 
@@ -485,31 +470,6 @@ func (s *agentState) resourceUsage() (cpu int, mem uint64) {
 		}
 	}
 	return
-}
-
-// hasCapacity checks if the agent has capacity for a new job.
-// Accounts for both running tasks AND pending reservations.
-func (a *Agent) hasCapacity(job *types.Job) bool {
-	return query(a, func(s *agentState) bool {
-		usedCPU, usedMem := s.resourceUsage()
-
-		if job.CPUShares > 0 {
-			maxCPU := a.sysInfo.CPUCores * 1024
-			if usedCPU+job.CPUShares > maxCPU {
-				log.Printf("Insufficient CPU: used=%d requested=%d max=%d", usedCPU, job.CPUShares, maxCPU)
-				return false
-			}
-		}
-
-		if job.MemoryLimit > 0 {
-			if usedMem+job.MemoryLimit > a.sysInfo.MemoryBytes {
-				log.Printf("Insufficient memory: used=%d requested=%d max=%d", usedMem, job.MemoryLimit, a.sysInfo.MemoryBytes)
-				return false
-			}
-		}
-
-		return true
-	})
 }
 
 // allocatePortsForJob allocates host ports appropriate for the job type.

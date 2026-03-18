@@ -10,10 +10,8 @@ import (
 	"math"
 	"net/http"
 	"sync"
-	"time"
 
 	"easyrun/internal/types"
-	"github.com/google/uuid"
 )
 
 // Sentinel errors returned by sendJobToAgent — lets callers distinguish why an agent rejected.
@@ -31,27 +29,18 @@ func effectivePriority(p *int) int {
 	return *p
 }
 
-var (
-	// VerifyInterval can be overridden in tests for faster execution
-	VerifyInterval = 500 * time.Millisecond
-)
-
-func generateID() string {
-	return uuid.New().String()
-}
 
 // DispatchJob stores a job and sends it to agents.
 // count=-1 means run on ALL agents (exactly once per agent)
 // The job is ALWAYS stored, even if dispatch fails (reconciliation will retry later).
 func (l *Leader) DispatchJob(job *types.Job) error {
-	if job.ID == "" {
-		job.ID = generateID()
+	if job.Name == "" {
+		return fmt.Errorf("job name required")
 	}
 
 	// Always store the job first — even if no agents have capacity now,
 	// reconciliation will pick it up when capacity becomes available.
 	l.jobStore.StoreJob(job)
-	l.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 
 	// During settle period: reconcileJobs after settle will dispatch
 	settled := query(l, func(s *leaderState) bool { return s.settled })
@@ -85,16 +74,16 @@ func (l *Leader) dispatchInstances(job *types.Job, count int) error {
 	// Atomically check-and-set dispatching flag to prevent concurrent dispatch
 	// of the same job from two simultaneous reconcileJobs goroutines.
 	alreadyDispatching := query(l, func(s *leaderState) bool {
-		if s.dispatching[job.ID] {
+		if s.dispatching[job.Name] {
 			return true
 		}
-		s.dispatching[job.ID] = true
+		s.dispatching[job.Name] = true
 		return false
 	})
 	if alreadyDispatching {
 		return nil
 	}
-	defer l.do(func(s *leaderState) { delete(s.dispatching, job.ID) })
+	defer l.do(func(s *leaderState) { delete(s.dispatching, job.Name) })
 
 	for i := 0; i < count; i++ {
 		if err := l.dispatchToAvailableAgent(job); err != nil {
@@ -105,19 +94,18 @@ func (l *Leader) dispatchInstances(job *types.Job, count int) error {
 }
 
 // trackPlacement records that an agent is running an instance of a job
-func (l *Leader) trackPlacement(agentID, jobID string) {
+func (l *Leader) trackPlacement(agentID, jobName string) {
 	l.do(func(s *leaderState) {
 		if s.placed[agentID] == nil {
 			s.placed[agentID] = make(map[string]int)
 		}
-		s.placed[agentID][jobID]++
+		s.placed[agentID][jobName]++
 	})
 }
 
 // dispatchToAvailableAgent tries agents until one accepts the job.
 // First pass: round-robin over all agents.
 // Second pass: preemption — evict lowest-priority job from capacity-failed agents.
-// Agents that returned 406 (affinity mismatch) are never preemption candidates.
 func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 	agentCount := query(l, func(s *leaderState) int { return len(s.agents) })
 	if agentCount == 0 {
@@ -133,14 +121,13 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 		}
 		err := l.sendJobToAgent(agent, job)
 		if err == nil {
-			l.trackPlacement(agent.ID, job.ID)
+			l.trackPlacement(agent.ID, job.Name)
 			return nil
 		}
 		if errors.Is(err, errNoCapacity) {
 			capacityCandidates = append(capacityCandidates, agent)
 			log.Printf("Agent %s at capacity for job %s, trying next agent", agent.ID, job.Name)
 		} else if !errors.Is(err, errAffinityMismatch) {
-			// errAffinityMismatch: agent can never run this job — skip silently.
 			log.Printf("Agent %s rejected job %s: %v, trying next agent", agent.ID, job.Name, err)
 		}
 	}
@@ -154,10 +141,10 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 		log.Printf("Preempting job %s (prio %d) on %s to make room for %s (prio %d)",
 			victim.Name, effectivePriority(victim.Priority), agent.ID,
 			job.Name, effectivePriority(job.Priority))
-		l.stopTasksOnAgent(agent, victim.ID)
-		l.do(func(s *leaderState) { delete(s.placed[agent.ID], victim.ID) })
+		l.stopTasksOnAgent(agent, victim.Name)
+		l.do(func(s *leaderState) { delete(s.placed[agent.ID], victim.Name) })
 		if err := l.sendJobToAgent(agent, job); err == nil {
-			l.trackPlacement(agent.ID, job.ID)
+			l.trackPlacement(agent.ID, job.Name)
 			l.eventBus.Notify("job:" + victim.Name)
 			return nil
 		}
@@ -172,11 +159,11 @@ func (l *Leader) findVictim(agentID string, jobPriority *int) *types.Job {
 	return query(l, func(s *leaderState) *types.Job {
 		var victim *types.Job
 		worstPrio := effectivePriority(jobPriority) // only evict jobs strictly less important
-		for jobID, count := range s.placed[agentID] {
+		for jobName, count := range s.placed[agentID] {
 			if count <= 0 {
 				continue
 			}
-			j := l.jobStore.GetJob(jobID)
+			j := l.jobStore.GetJob(jobName)
 			if j == nil {
 				continue
 			}
@@ -189,17 +176,22 @@ func (l *Leader) findVictim(agentID string, jobPriority *int) *types.Job {
 	})
 }
 
-// DeleteJobByID sends delete requests to all agents in parallel, waits for
-// all stops to complete, then reconciles so freed capacity is immediately usable.
-func (l *Leader) DeleteJobByID(job *types.Job) {
+// DeleteJobByName deletes a job by name: sends delete requests to all agents in parallel,
+// waits for all stops to complete, then reconciles so freed capacity is immediately usable.
+func (l *Leader) DeleteJobByName(name string) {
+	if l.jobStore.GetJob(name) == nil {
+		log.Printf("Job %s not found for deletion", name)
+		return
+	}
+
 	agents := query(l, func(s *leaderState) []*types.Agent {
 		var result []*types.Agent
 		for agentID, jobs := range s.placed {
-			if jobs[job.ID] > 0 {
+			if jobs[name] > 0 {
 				if a := s.agents[agentID]; a != nil {
 					result = append(result, a)
 				}
-				delete(jobs, job.ID)
+				delete(jobs, name)
 			}
 		}
 		return result
@@ -211,37 +203,19 @@ func (l *Leader) DeleteJobByID(job *types.Job) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			l.deleteTaskOnAgent(agent, job.ID)
+			l.deleteTaskOnAgent(agent, name)
 		}()
 	}
 	wg.Wait()
 
 	if len(agents) > 0 {
-		log.Printf("Deleted job %s (ID %s) from %d agents", job.Name, job.ID, len(agents))
+		log.Printf("Deleted job %s from %d agents", name, len(agents))
 	}
 
-	l.jobStore.DeleteJob(job.ID)
-	l.do(func(s *leaderState) {
-		if s.nameToID[job.Name] == job.ID {
-			delete(s.nameToID, job.Name)
-		}
-	})
+	l.jobStore.DeleteJob(name)
 
 	// Reconcile immediately — frees capacity and renormalizes priorities (0..N-1)
 	go l.reconcileJobs()
-}
-
-// DeleteJob deletes a job by ID (or name as fallback for API/CLI compatibility).
-func (l *Leader) DeleteJob(idOrName string) {
-	job := l.jobStore.GetJob(idOrName)
-	if job == nil {
-		job = l.FindJobByName(idOrName)
-	}
-	if job == nil {
-		log.Printf("Job %s not found for deletion", idOrName)
-		return
-	}
-	l.DeleteJobByID(job)
 }
 
 // nextAgent returns the next agent in round-robin order
@@ -257,7 +231,6 @@ func (l *Leader) nextAgent() *types.Agent {
 }
 
 // sendJobToAgent sends a job to a specific agent.
-// Agent accepts (2xx) or rejects (non-2xx) based on capacity. No polling needed.
 func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	url := fmt.Sprintf("%s/run", agent.Endpoint)
 
@@ -294,4 +267,63 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 
 	log.Printf("Job %s dispatched to agent %s", job.Name, agent.ID)
 	return nil
+}
+
+// stopTasksOnAgent stops tasks for a job on a specific agent WITHOUT removing the job definition.
+// Used for preemption and rolling updates.
+func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobName string) {
+	url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobName)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		log.Printf("Failed to create stop request for %s on %s: %v", jobName, agent.ID, err)
+		return
+	}
+	if l.apiKey != "" {
+		req.Header.Set("X-API-Key", l.apiKey)
+	}
+	resp, err := l.deleteClient.Do(req)
+	if err != nil {
+		log.Printf("Failed to stop %s on %s: %v", jobName, agent.ID, err)
+		return
+	}
+	resp.Body.Close()
+}
+
+// stopTaskByID stops a single specific task on an agent by task ID.
+// Used for rolling and blue-green updates to stop precise old instances.
+func (l *Leader) stopTaskByID(agent *types.Agent, taskID string) {
+	url := fmt.Sprintf("%s/stop-task/%s", agent.Endpoint, taskID)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		log.Printf("Failed to create stop-task request for %s on %s: %v", taskID, agent.ID, err)
+		return
+	}
+	if l.apiKey != "" {
+		req.Header.Set("X-API-Key", l.apiKey)
+	}
+	resp, err := l.deleteClient.Do(req)
+	if err != nil {
+		log.Printf("Failed to stop task %s on %s: %v", taskID, agent.ID, err)
+		return
+	}
+	resp.Body.Close()
+}
+
+// deleteTaskOnAgent deletes a job on specific agent (by job name).
+func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobName string) {
+	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobName)
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		log.Printf("Failed to create delete request for %s on %s: %v", jobName, agent.ID, err)
+		return
+	}
+	if l.apiKey != "" {
+		req.Header.Set("X-API-Key", l.apiKey)
+	}
+	resp, err := l.deleteClient.Do(req)
+	if err != nil {
+		log.Printf("Failed to delete %s on %s: %v", jobName, agent.ID, err)
+		return
+	}
+	resp.Body.Close()
 }

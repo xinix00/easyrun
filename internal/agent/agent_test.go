@@ -115,11 +115,10 @@ func TestAgentDeleteJob(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// Store job and task
-	agent.StoreJob(&types.Job{ID: "test-job-id", Name: "test-job", Command: "echo"})
+	agent.StoreJob(&types.Job{Name: "test-job", Command: "echo"})
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
 			ID:      "task-1",
-			JobID:   "test-job-id",
 			JobName: "test-job",
 			State:   types.TaskRunning,
 		}
@@ -127,14 +126,14 @@ func TestAgentDeleteJob(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	deleted := agent.deleteJobByID("test-job-id")
+	deleted := agent.deleteJob("test-job")
 
 	if deleted != 1 {
-		t.Errorf("deleteJobByID returned %d, want 1", deleted)
+		t.Errorf("deleteJob returned %d, want 1", deleted)
 	}
 
 	// Job should be removed
-	if agent.GetJob("test-job-id") != nil {
+	if agent.GetJob("test-job") != nil {
 		t.Error("Job should be removed after delete")
 	}
 }
@@ -152,7 +151,6 @@ func TestAgentStopAllTasks(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		jobName := "job-" + string(rune('a'+i))
 		job := &types.Job{
-			ID:      "job-id-" + string(rune('a'+i)),
 			Name:    jobName,
 			Command: "echo",
 		}
@@ -209,12 +207,11 @@ func TestAgentDeleteJobWithMultipleTasks(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	// One job, multiple tasks
-	agent.StoreJob(&types.Job{ID: "test-job-id", Name: "test-job", Command: "echo"})
+	agent.StoreJob(&types.Job{Name: "test-job", Command: "echo"})
 	agent.do(func(s *agentState) {
 		for i := 0; i < 3; i++ {
 			s.tasks["task-"+string(rune('a'+i))] = &types.Task{
 				ID:      "task-" + string(rune('a'+i)),
-				JobID:   "test-job-id",
 				JobName: "test-job",
 				State:   types.TaskRunning,
 			}
@@ -223,10 +220,10 @@ func TestAgentDeleteJobWithMultipleTasks(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	deleted := agent.deleteJobByID("test-job-id")
+	deleted := agent.deleteJob("test-job")
 
 	if deleted != 3 {
-		t.Errorf("deleteJobByID returned %d, want 3", deleted)
+		t.Errorf("deleteJob returned %d, want 3", deleted)
 	}
 }
 
@@ -241,15 +238,15 @@ func TestAgentDeleteJobNonExistent(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	deleted := agent.deleteJobByID("nonexistent")
+	deleted := agent.deleteJob("nonexistent")
 
 	if deleted != 0 {
-		t.Errorf("deleteJobByID returned %d, want 0", deleted)
+		t.Errorf("deleteJob returned %d, want 0", deleted)
 	}
 }
 
 func TestDeleteJobRemovesTasksBeforeStop(t *testing.T) {
-	// Verify that deleteJobByID removes tasks from state immediately,
+	// Verify that deleteJob removes tasks from state immediately,
 	// so checkTasks() won't see them and try to restart during shutdown.
 	// This prevents the race: monitor detects "crashed" tasks while
 	// docker stop is still running on other tasks.
@@ -266,13 +263,12 @@ func TestDeleteJobRemovesTasksBeforeStop(t *testing.T) {
 			defer cancel()
 			go agent.stateLoop(ctx)
 
-			agent.StoreJob(&types.Job{ID: "job-1", Name: "del-test", Driver: driver, Command: "echo"})
+			agent.StoreJob(&types.Job{Name: "del-test", Driver: driver, Command: "echo"})
 			agent.do(func(s *agentState) {
 				for i := 0; i < 3; i++ {
 					tid := fmt.Sprintf("task-%d", i)
 					s.tasks[tid] = &types.Task{
 						ID:      tid,
-						JobID:   "job-1",
 						JobName: "del-test",
 						Driver:  driver,
 						State:   types.TaskRunning,
@@ -282,12 +278,12 @@ func TestDeleteJobRemovesTasksBeforeStop(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 
 			// Delete the job
-			deleted := agent.deleteJobByID("job-1")
+			deleted := agent.deleteJob("del-test")
 			if deleted != 3 {
-				t.Fatalf("deleteJobByID returned %d, want 3", deleted)
+				t.Fatalf("deleteJob returned %d, want 3", deleted)
 			}
 
-			// deleteJobByID blocks until all stops complete — tasks should be gone
+			// deleteJob blocks until all stops complete — tasks should be gone
 			remainingTasks := query(agent, func(s *agentState) int {
 				return len(s.tasks)
 			})
@@ -296,7 +292,7 @@ func TestDeleteJobRemovesTasksBeforeStop(t *testing.T) {
 			}
 
 			// Job should be gone
-			if agent.GetJob("job-1") != nil {
+			if agent.GetJob("del-test") != nil {
 				t.Error("Job should be removed from state after delete")
 			}
 

@@ -34,7 +34,6 @@ func BenchmarkTaskCreation(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		job := &types.Job{
-			ID:      fmt.Sprintf("job-%d", i),
 			Name:    fmt.Sprintf("bench-job-%d", i),
 			Command: "echo test",
 			Count:   1,
@@ -73,7 +72,6 @@ func BenchmarkGetJobs(b *testing.B) {
 	// Pre-populate with 1000 jobs
 	for i := 0; i < 1000; i++ {
 		job := &types.Job{
-			ID:      fmt.Sprintf("job-%d", i),
 			Name:    fmt.Sprintf("job-%d", i),
 			Command: "echo test",
 		}
@@ -111,7 +109,6 @@ func BenchmarkSyncJobs(b *testing.B) {
 	jobs := make([]*types.Job, 100)
 	for i := 0; i < 100; i++ {
 		jobs[i] = &types.Job{
-			ID:      fmt.Sprintf("job-%d", i),
 			Name:    fmt.Sprintf("job-%d", i),
 			Command: "echo test",
 		}
@@ -143,37 +140,33 @@ func BenchmarkCapacityCheck(b *testing.B) {
 	// Add some running tasks
 	for i := 0; i < 50; i++ {
 		job := &types.Job{
-			ID:          fmt.Sprintf("job-%d", i),
 			Name:        fmt.Sprintf("job-%d", i),
 			Command:     "echo test",
 			CPUShares:   100,
 			MemoryLimit: 100 * 1024 * 1024,
 		}
 		task := &types.Task{
-			ID:      fmt.Sprintf("task-%d", i),
-			JobName: job.Name,
-			State:   types.TaskRunning,
+			ID:          fmt.Sprintf("task-%d", i),
+			JobName:     job.Name,
+			State:       types.TaskRunning,
+			CPUShares:   100,
+			MemoryLimit: 100 * 1024 * 1024,
 		}
 		agent.do(func(s *agentState) {
 			s.jobs[job.Name] = job
-
 			s.tasks[task.ID] = task
 		})
-	}
-
-	testJob := &types.Job{
-		ID:          "test-job",
-		Name:        "test-job",
-		Command:     "echo test",
-		CPUShares:   200,
-		MemoryLimit: 200 * 1024 * 1024,
 	}
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		_ = agent.hasCapacity(testJob)
+		// Benchmark the resourceUsage query (replaces hasCapacity)
+		_ = query(agent, func(s *agentState) int {
+			cpu, _ := s.resourceUsage()
+			return cpu
+		})
 	}
 }
 
@@ -231,7 +224,7 @@ func BenchmarkConcurrentStateAccess(b *testing.B) {
 		i := 0
 		for pb.Next() {
 			jobName := fmt.Sprintf("job-%d", i%100)
-			_ = agent.GetJobByName(jobName)
+			_ = agent.GetJob(jobName)
 			i++
 		}
 	})

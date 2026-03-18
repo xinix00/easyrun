@@ -18,32 +18,30 @@ func TestDeleteJobByName(t *testing.T) {
 	go leader.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	// Create job with ID
+	// Create job (Name is the unique key)
 	job := &types.Job{
-		ID:      "test-id-123",
 		Name:    "test-app",
 		Command: "./test",
 		Count:   1,
 	}
 
-	// Store via leader (updates nameToID index)
+	// Store via jobStore
 	leader.jobStore.StoreJob(job)
-	leader.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
 
-	// Verify it exists via FindJobByName
-	found := leader.FindJobByName("test-app")
+	// Verify it exists via GetJob
+	found := store.GetJob("test-app")
 	if found == nil {
-		t.Fatal("FindJobByName should find the job")
+		t.Fatal("GetJob should find the job")
 	}
 
 	// Delete by name (like GUI does)
-	leader.DeleteJob("test-app")
+	leader.DeleteJobByName("test-app")
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify deleted
-	found = leader.FindJobByName("test-app")
+	found = store.GetJob("test-app")
 	if found != nil {
-		t.Errorf("Job should be deleted, but found: ID=%s, Name=%s", found.ID, found.Name)
+		t.Errorf("Job should be deleted, but found: Name=%s", found.Name)
 	}
 
 	jobs := store.GetJobs()
@@ -52,8 +50,8 @@ func TestDeleteJobByName(t *testing.T) {
 	}
 }
 
-// TestFindJobByNameWithIDBasedStore verifies FindJobByName works with ID-indexed store
-func TestFindJobByNameWithIDBasedStore(t *testing.T) {
+// TestGetJobByName verifies jobStore.GetJob works with name-indexed store
+func TestGetJobByName(t *testing.T) {
 	store := NewMockJobStore()
 	leader := New("leader", store, nil)
 
@@ -62,31 +60,30 @@ func TestFindJobByNameWithIDBasedStore(t *testing.T) {
 	go leader.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	// Store multiple jobs and update index
+	// Store multiple jobs
 	jobs := []*types.Job{
-		{ID: "id-1", Name: "app-1", Command: "echo 1"},
-		{ID: "id-2", Name: "app-2", Command: "echo 2"},
-		{ID: "id-3", Name: "app-3", Command: "echo 3"},
+		{Name: "app-1", Command: "echo 1"},
+		{Name: "app-2", Command: "echo 2"},
+		{Name: "app-3", Command: "echo 3"},
 	}
 
 	for _, j := range jobs {
 		store.StoreJob(j)
-		leader.do(func(s *leaderState) { s.nameToID[j.Name] = j.ID })
 	}
 	time.Sleep(10 * time.Millisecond)
 
-	// FindJobByName should work
-	found := leader.FindJobByName("app-2")
+	// GetJob should work
+	found := store.GetJob("app-2")
 	if found == nil {
-		t.Fatal("FindJobByName should find app-2")
+		t.Fatal("GetJob should find app-2")
 	}
-	if found.ID != "id-2" {
-		t.Errorf("Found job ID = %s, want id-2", found.ID)
+	if found.Name != "app-2" {
+		t.Errorf("Found job Name = %s, want app-2", found.Name)
 	}
 
 	// Non-existent name should return nil
-	notFound := leader.FindJobByName("nonexistent")
+	notFound := store.GetJob("nonexistent")
 	if notFound != nil {
-		t.Error("FindJobByName should return nil for nonexistent job")
+		t.Error("GetJob should return nil for nonexistent job")
 	}
 }

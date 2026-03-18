@@ -8,12 +8,6 @@ import (
 	"easyrun/internal/types"
 )
 
-// storeJobWithIndex stores a job in the store and updates the leader's nameToID index
-func storeJobWithIndex(l *Leader, job *types.Job) {
-	l.jobStore.StoreJob(job)
-	l.do(func(s *leaderState) { s.nameToID[job.Name] = job.ID })
-}
-
 // TestDeleteJobRemovesFromStore verifies job is removed from store, not just placement
 func TestDeleteJobRemovesFromStore(t *testing.T) {
 	store := NewMockJobStore()
@@ -23,14 +17,13 @@ func TestDeleteJobRemovesFromStore(t *testing.T) {
 	defer cancel()
 	go leader.stateLoop(ctx)
 
-	// Create job
+	// Create job (Name is the unique key)
 	job := &types.Job{
-		ID:      "job-id",
 		Name:    "to-delete",
 		Command: "./app",
 		Count:   1,
 	}
-	storeJobWithIndex(leader, job)
+	store.StoreJob(job)
 
 	// Verify it exists
 	jobs := store.GetJobs()
@@ -38,8 +31,8 @@ func TestDeleteJobRemovesFromStore(t *testing.T) {
 		t.Fatalf("Expected 1 job before delete, got %d", len(jobs))
 	}
 
-	// Delete job
-	leader.DeleteJob("to-delete")
+	// Delete job by name
+	leader.DeleteJobByName("to-delete")
 	time.Sleep(10 * time.Millisecond)
 
 	// Verify removed from store
@@ -49,7 +42,7 @@ func TestDeleteJobRemovesFromStore(t *testing.T) {
 	}
 
 	// Verify can't find by name
-	found := leader.FindJobByName("to-delete")
+	found := store.GetJob("to-delete")
 	if found != nil {
 		t.Error("Job should not be findable after delete")
 	}
@@ -66,15 +59,14 @@ func TestDeleteJobWithNoPlacementStillRemovesFromStore(t *testing.T) {
 
 	// Create job (no placement - never dispatched)
 	job := &types.Job{
-		ID:      "orphan-id",
 		Name:    "orphan",
 		Command: "./orphan",
 		Count:   1,
 	}
-	storeJobWithIndex(leader, job)
+	store.StoreJob(job)
 
 	// Delete (no agents to cleanup, just remove from store)
-	leader.DeleteJob("orphan")
+	leader.DeleteJobByName("orphan")
 	time.Sleep(10 * time.Millisecond)
 
 	// Should be gone from store
@@ -94,19 +86,18 @@ func TestDeleteJobTwiceDoesNotError(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	job := &types.Job{
-		ID:      "job-id",
 		Name:    "test",
 		Command: "./test",
 		Count:   1,
 	}
-	storeJobWithIndex(leader, job)
+	store.StoreJob(job)
 
 	// Delete once
-	leader.DeleteJob("test")
+	leader.DeleteJobByName("test")
 	time.Sleep(5 * time.Millisecond)
 
 	// Delete again (should be safe, just log "not found")
-	leader.DeleteJob("test")
+	leader.DeleteJobByName("test")
 	time.Sleep(5 * time.Millisecond)
 
 	// Should still be empty

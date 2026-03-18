@@ -49,7 +49,6 @@ func TestLeaderCheckDeadAgents(t *testing.T) {
 func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 	store := NewMockJobStore()
 	store.StoreJob(&types.Job{
-		ID:      "test-job-id",
 		Name:    "test-job",
 		Command: "echo",
 		Count:   1,
@@ -69,7 +68,6 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 			acceptCount++
 			tasks = append(tasks, &types.Task{
 				ID:      fmt.Sprintf("task-%d", acceptCount),
-				JobID:   "test-job-id",
 				JobName: "test-job",
 				State:   types.TaskRunning,
 			})
@@ -104,7 +102,7 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 		if s.placed["dying-agent"] == nil {
 			s.placed["dying-agent"] = make(map[string]int)
 		}
-		s.placed["dying-agent"]["test-job-id"] = 1
+		s.placed["dying-agent"]["test-job"] = 1
 	})
 	time.Sleep(10 * time.Millisecond)
 
@@ -258,7 +256,7 @@ func TestLeaderMultipleAgentsPartialFailure(t *testing.T) {
 		switch r.URL.Path {
 		case "/run":
 			successCount++
-			tasks = append(tasks, &types.Task{ID: "task-1", JobID: "test-id", JobName: "test", State: types.TaskRunning})
+			tasks = append(tasks, &types.Task{ID: "task-1", JobName: "test", State: types.TaskRunning})
 			w.WriteHeader(http.StatusCreated)
 		case "/tasks":
 			_ = json.NewEncoder(w).Encode(tasks)
@@ -317,7 +315,7 @@ func TestLeaderDeleteJobNotFound(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Deleting non-existent job should not panic
-	leader.DeleteJob("nonexistent-job")
+	leader.DeleteJobByName("nonexistent-job")
 	// If we get here without panic, test passes
 }
 
