@@ -264,9 +264,9 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 
 	// Setup volume mounts (symlinks from host to task dir)
 	for hostPath, taskPath := range job.Volumes {
-		// Ensure host path exists
-		if _, err := os.Stat(hostPath); err != nil {
-			return "", fmt.Errorf("volume host path %s does not exist: %w", hostPath, err)
+		// Ensure host path exists (create if needed)
+		if err := os.MkdirAll(hostPath, 0755); err != nil {
+			return "", fmt.Errorf("failed to create volume host path %s: %w", hostPath, err)
 		}
 
 		// Create target path inside task dir
