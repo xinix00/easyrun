@@ -12,14 +12,16 @@ import (
 	"easyrun/internal/types"
 )
 
-// downloadS3 downloads from S3 URL (s3://bucket/key)
+// downloadS3 downloads from S3-compatible URL.
+// URL format: s3://host/path (e.g., s3://easyflor-builds.fsn1.your-objectstorage.com/dir/file.tar.gz)
+// Auth: access_key, secret_key, region (optional, defaults to us-east-1)
 func downloadS3(artifact *types.Artifact, destPath string) error {
 	u, err := url.Parse(artifact.URL)
 	if err != nil {
 		return fmt.Errorf("invalid S3 URL: %w", err)
 	}
 
-	bucket := u.Host
+	host := u.Host
 	key := strings.TrimPrefix(u.Path, "/")
 	region := artifact.Auth["region"]
 	accessKey := artifact.Auth["access_key"]
@@ -33,9 +35,8 @@ func downloadS3(artifact *types.Artifact, destPath string) error {
 	}
 
 	// Build signed HTTPS URL
-	httpsURL, headers := signS3GetRequest(bucket, key, region, accessKey, secretKey)
+	httpsURL, headers := signS3GetRequest(host, key, region, accessKey, secretKey)
 
-	// Create temporary artifact with signed request
 	signedArtifact := &types.Artifact{
 		URL:     httpsURL,
 		Headers: headers,
@@ -45,12 +46,11 @@ func downloadS3(artifact *types.Artifact, destPath string) error {
 }
 
 // signS3GetRequest creates AWS Signature Version 4 for S3 GET request
-func signS3GetRequest(bucket, key, region, accessKey, secretKey string) (string, map[string]string) {
+func signS3GetRequest(host, key, region, accessKey, secretKey string) (string, map[string]string) {
 	now := time.Now().UTC()
 	amzDate := now.Format("20060102T150405Z")
 	dateStamp := now.Format("20060102")
 
-	host := fmt.Sprintf("%s.s3.%s.amazonaws.com", bucket, region)
 	httpsURL := fmt.Sprintf("https://%s/%s", host, key)
 
 	// Canonical request
@@ -78,7 +78,6 @@ func signS3GetRequest(bucket, key, region, accessKey, secretKey string) (string,
 	// Signature
 	signature := hex.EncodeToString(hmacSHA256(signingKey, []byte(stringToSign)))
 
-	// Authorization header
 	authorization := fmt.Sprintf("%s Credential=%s/%s, SignedHeaders=%s, Signature=%s",
 		algorithm, accessKey, credentialScope, signedHeaders, signature)
 

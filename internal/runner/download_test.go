@@ -420,10 +420,10 @@ func TestDownloadS3MissingCredentials(t *testing.T) {
 }
 
 func TestSignS3GetRequest(t *testing.T) {
-	url, headers := signS3GetRequest("mybucket", "path/to/file.tar.gz", "us-east-1", "AKIAEXAMPLE", "secretkey")
+	url, headers := signS3GetRequest("mybucket.s3.us-east-1.amazonaws.com", "path/to/file.tar.gz", "us-east-1", "AKIAEXAMPLE", "secretkey")
 
 	if !strings.Contains(url, "mybucket.s3.us-east-1.amazonaws.com") {
-		t.Errorf("URL = %q, want to contain bucket+region host", url)
+		t.Errorf("URL = %q, want to contain host", url)
 	}
 	if !strings.Contains(url, "path/to/file.tar.gz") {
 		t.Errorf("URL = %q, want to contain key path", url)
@@ -445,6 +445,17 @@ func TestSignS3GetRequest(t *testing.T) {
 
 	if headers["x-amz-date"] == "" {
 		t.Error("Missing x-amz-date header")
+	}
+}
+
+func TestSignS3GetRequestCustomEndpoint(t *testing.T) {
+	url, headers := signS3GetRequest("easyflor-builds.fsn1.your-objectstorage.com", "ravendb/file.tar.bz2", "us-east-1", "AKIAEXAMPLE", "secretkey")
+
+	if !strings.Contains(url, "easyflor-builds.fsn1.your-objectstorage.com/ravendb/file.tar.bz2") {
+		t.Errorf("URL = %q, want custom endpoint + key", url)
+	}
+	if headers["Authorization"] == "" {
+		t.Error("Missing Authorization header")
 	}
 }
 
