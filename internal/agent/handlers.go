@@ -249,7 +249,11 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		if err := a.startJob(&job, task); err != nil {
 			log.Printf("Failed to start job %s: %v", job.Name, err)
-			a.do(func(s *agentState) { delete(s.tasks, task.ID) })
+			a.do(func(s *agentState) {
+				if t := s.tasks[task.ID]; t != nil {
+					t.State = types.TaskFailed
+				}
+			})
 		}
 	}()
 }

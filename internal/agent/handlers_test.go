@@ -928,3 +928,150 @@ func TestStopDuringStartDoesNotResurrectTask(t *testing.T) {
 		t.Errorf("Ghost task! Expected 0 tasks after startJob completed, got %d", count)
 	}
 }
+
+// ============== EARLY FAILURE TESTS ==============
+
+// TestHandleRun_EarlyFailure_TaskStaysFailed verifies that when startJob
+// fails (e.g., volume doesn't exist, runner error), the task stays in state
+// with state=failed instead of being deleted.
+func TestHandleRun_EarlyFailure_TaskStaysFailed(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	mockRunner.SetRunError(ErrSimulated)
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	job := types.Job{Name: "failing-app", Command: "echo hello"}
+	body, _ := json.Marshal(job)
+	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+
+	agent.handleRun(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("Expected 202 Accepted, got %d", w.Code)
+	}
+
+	// Wait for background startJob to fail
+	time.Sleep(50 * time.Millisecond)
+
+	// Task should still exist with state=failed (NOT deleted)
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		var result []*types.Task
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
+
+	if len(tasks) != 1 {
+		t.Fatalf("Expected 1 task (failed), got %d (task was deleted instead of marked failed)", len(tasks))
+	}
+	if tasks[0].State != types.TaskFailed {
+		t.Errorf("Task state should be 'failed', got %q", tasks[0].State)
+	}
+	if tasks[0].JobName != "failing-app" {
+		t.Errorf("Task job name should be 'failing-app', got %q", tasks[0].JobName)
+	}
+}
+
+// TestHandleRun_EarlyFailure_VisibleInTaskList verifies that a failed task
+// shows up in the /tasks endpoint response.
+func TestHandleRun_EarlyFailure_VisibleInTaskList(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	mockRunner.SetRunError(ErrSimulated)
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Dispatch job that will fail
+	job := types.Job{Name: "broken", Command: "echo"}
+	body, _ := json.Marshal(job)
+	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	agent.handleRun(w, req)
+	time.Sleep(50 * time.Millisecond)
+
+	// GET /tasks should show the failed task
+	req = httptest.NewRequest(http.MethodGet, "/tasks", nil)
+	w = httptest.NewRecorder()
+	agent.handleTasks(w, req)
+
+	var tasks []*types.Task
+	if err := json.NewDecoder(w.Body).Decode(&tasks); err != nil {
+		t.Fatalf("Failed to decode tasks: %v", err)
+	}
+
+	if len(tasks) != 1 {
+		t.Fatalf("Expected 1 task in /tasks response, got %d", len(tasks))
+	}
+	if tasks[0].State != types.TaskFailed {
+		t.Errorf("Task in /tasks should be 'failed', got %q", tasks[0].State)
+	}
+}
+
+// TestHandleRun_EarlyFailure_ThenSuccess verifies that after an early failure,
+// a subsequent successful dispatch works correctly alongside the failed task.
+func TestHandleRun_EarlyFailure_ThenSuccess(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+	agent := New(cfg, "test-agent", mockRunner)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// First dispatch: will fail
+	mockRunner.SetRunError(ErrSimulated)
+	job1 := types.Job{Name: "app", Command: "echo v1"}
+	body, _ := json.Marshal(job1)
+	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	agent.handleRun(w, req)
+	time.Sleep(50 * time.Millisecond)
+
+	// Second dispatch: will succeed
+	mockRunner.SetRunError(nil)
+	job2 := types.Job{Name: "app", Command: "echo v2"}
+	body, _ = json.Marshal(job2)
+	req = httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	agent.handleRun(w, req)
+	time.Sleep(50 * time.Millisecond)
+
+	tasks := query(agent, func(s *agentState) []*types.Task {
+		var result []*types.Task
+		for _, t := range s.tasks {
+			result = append(result, t)
+		}
+		return result
+	})
+
+	// Should have 2 tasks: 1 failed + 1 running
+	failed := 0
+	running := 0
+	for _, task := range tasks {
+		switch task.State {
+		case types.TaskFailed:
+			failed++
+		case types.TaskRunning:
+			running++
+		}
+	}
+
+	if failed != 1 {
+		t.Errorf("Expected 1 failed task, got %d", failed)
+	}
+	if running != 1 {
+		t.Errorf("Expected 1 running task, got %d", running)
+	}
+}
