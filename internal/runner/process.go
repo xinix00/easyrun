@@ -150,8 +150,8 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 	done := make(chan struct{})
 	go func() {
 		for i := 0; i < processExitPollAttempts; i++ {
-			if err := syscall.Kill(pid, 0); err != nil {
-				break
+			if err := syscall.Kill(-pid, 0); err != nil {
+				break // entire process group dead
 			}
 			time.Sleep(processExitPollInterval)
 		}
@@ -177,16 +177,17 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 
 // Status returns the current state of a task.
 func (r *ExecRunner) Status(task *types.Task) (types.TaskState, error) {
-	if task.Pid > 0 {
-		pgErr := syscall.Kill(-task.Pid, 0)
-		pidErr := syscall.Kill(task.Pid, 0)
-		if pgErr == nil {
-			return types.TaskRunning, nil
-		}
-		// Process group dead but something unexpected — log for debugging
-		log.Printf("[status] task %s pid=%d pgid_check=%v pid_check=%v", task.ID[:8], task.Pid, pgErr, pidErr)
+	// PID not yet set → process still starting (artifact download, etc.)
+	if task.Pid == 0 {
+		return types.TaskRunning, nil
 	}
 
+	// Check process group (covers parent + forked children)
+	if err := syscall.Kill(-task.Pid, 0); err == nil {
+		return types.TaskRunning, nil
+	}
+
+	// Dead — determine stopped vs failed
 	r.mu.RLock()
 	cmd, ok := r.processes[task.ID]
 	r.mu.RUnlock()
