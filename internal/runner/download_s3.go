@@ -82,8 +82,9 @@ func signS3GetRequest(host, key, region, accessKey, secretKey string) (string, m
 		algorithm, accessKey, credentialScope, signedHeaders, signature)
 
 	headers := map[string]string{
-		"Authorization": authorization,
-		"x-amz-date":    amzDate,
+		"Authorization":        authorization,
+		"x-amz-date":           amzDate,
+		"x-amz-content-sha256": payloadHash,
 	}
 
 	return httpsURL, headers
