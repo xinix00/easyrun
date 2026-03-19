@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"runtime"
 	"sync"
 	"syscall"
@@ -257,8 +258,8 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 			return "", fmt.Errorf("failed to create volume host path %s: %w", hostPath, err)
 		}
 
-		// Create target path inside task dir
-		target := filepath.Join(taskDir, taskPath)
+		// Create target path inside task dir (strip leading / to keep it relative)
+		target := filepath.Join(taskDir, strings.TrimPrefix(taskPath, "/"))
 		targetDir := filepath.Dir(target)
 		if err := os.MkdirAll(targetDir, 0755); err != nil {
 			return "", fmt.Errorf("failed to create volume target dir %s: %w", targetDir, err)
