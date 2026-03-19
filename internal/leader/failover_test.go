@@ -39,6 +39,7 @@ func newMockAgent() *mockAgent {
 	mux.HandleFunc("/run", ma.handleRun)
 	mux.HandleFunc("/tasks", ma.handleTasks)
 	mux.HandleFunc("/delete/", ma.handleDelete)
+	mux.HandleFunc("/stop-task/", ma.handleStopTask)
 	mux.HandleFunc("/stop/", ma.handleStop)
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -252,6 +253,80 @@ func (ma *mockAgent) handleStop(w http.ResponseWriter, r *http.Request) {
 	ma.mu.Unlock()
 
 	_ = json.NewEncoder(w).Encode(map[string]int{"stopped": stopped})
+}
+
+// handleStopTask stops a single task by its ID (used by rolling/blue-green updates)
+func (ma *mockAgent) handleStopTask(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	taskID := r.URL.Path[len("/stop-task/"):]
+
+	ma.mu.Lock()
+	stopped := 0
+	filtered := make([]*types.Task, 0, len(ma.tasks))
+	for _, task := range ma.tasks {
+		if task.ID == taskID {
+			stopped++
+		} else {
+			filtered = append(filtered, task)
+		}
+	}
+	ma.tasks = filtered
+	ma.mu.Unlock()
+
+	_ = json.NewEncoder(w).Encode(map[string]int{"stopped": stopped})
+}
+
+// MarkTaskState changes the state of a specific task (for simulating failures)
+func (ma *mockAgent) MarkTaskState(taskID string, state types.TaskState) {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	for _, task := range ma.tasks {
+		if task.ID == taskID {
+			task.State = state
+			return
+		}
+	}
+}
+
+// MarkJobTasksState changes the state of all tasks for a job
+func (ma *mockAgent) MarkJobTasksState(jobName string, state types.TaskState) {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	for _, task := range ma.tasks {
+		if task.JobName == jobName {
+			task.State = state
+		}
+	}
+}
+
+// TaskIDs returns all task IDs for a given job name
+func (ma *mockAgent) TaskIDs(jobName string) []string {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	var ids []string
+	for _, task := range ma.tasks {
+		if task.JobName == jobName {
+			ids = append(ids, task.ID)
+		}
+	}
+	return ids
+}
+
+// RunningTaskCount returns the number of tasks in "running" state
+func (ma *mockAgent) RunningTaskCount() int {
+	ma.mu.Lock()
+	defer ma.mu.Unlock()
+	count := 0
+	for _, task := range ma.tasks {
+		if task.State == types.TaskRunning {
+			count++
+		}
+	}
+	return count
 }
 
 // AddTasks pre-populates the mock agent with tasks (simulates pre-existing tasks from old leader)

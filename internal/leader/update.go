@@ -13,8 +13,26 @@ var (
 	RollingUpdateDelay = 2 * time.Second
 )
 
+// lockJob atomically sets the dispatching flag for a job.
+// Returns false if the job is already being dispatched or updated.
+func (l *Leader) lockJob(name string) bool {
+	return !query(l, func(s *leaderState) bool {
+		if s.dispatching[name] {
+			return true
+		}
+		s.dispatching[name] = true
+		return false
+	})
+}
+
+// unlockJob clears the dispatching flag for a job.
+func (l *Leader) unlockJob(name string) {
+	l.do(func(s *leaderState) { delete(s.dispatching, name) })
+}
+
 // UpdateJob updates an existing job (found by name) with a new definition.
 // The update policy is taken from newJob.UpdatePolicy (default: rolling).
+// Returns an error if the job is already being updated or dispatched.
 func (l *Leader) UpdateJob(newJob *types.Job) error {
 	oldJob := l.jobStore.GetJob(newJob.Name)
 	if oldJob == nil {
@@ -24,6 +42,10 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 	policy := newJob.UpdatePolicy
 	if policy == "" {
 		policy = types.UpdateRolling
+	}
+
+	if !l.lockJob(newJob.Name) {
+		return fmt.Errorf("job %s is already being updated or dispatched", newJob.Name)
 	}
 
 	log.Printf("Updating job %s with policy=%s", newJob.Name, policy)
@@ -40,33 +62,26 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 	}
 }
 
-// updateRolling: for each instance, dispatch new → stop one old task (by task ID).
-// Snapshots old task IDs first so we know exactly which tasks to stop.
+// updateRolling: for each old task, dispatch new (if within count) → stop old.
+// After the loop, reconcileJobs dispatches extra instances for scale-up.
 func (l *Leader) updateRolling(job *types.Job) error {
 	count := job.Count
 	if count <= 0 {
 		count = 1
 	}
 
-	// Snapshot old task IDs before updating the job definition.
-	// These are the tasks we need to replace.
 	oldTasks := l.snapshotJobTasks(job.Name)
-
-	// Store new job definition (agents will use it for new tasks).
 	l.jobStore.StoreJob(job)
 
-	replaced := 0
 	for i, oldTask := range oldTasks {
-		if i >= count {
-			break // don't replace more than desired count
-		}
-		log.Printf("Rolling update %d/%d for job %s: dispatching new instance", i+1, count, job.Name)
-
-		if err := l.dispatchToAvailableAgent(job); err != nil {
-			return fmt.Errorf("rolling update failed at instance %d/%d: %w", i+1, count, err)
+		if i < count {
+			// Replace: dispatch new version before stopping old (zero downtime)
+			if err := l.dispatchToAvailableAgent(job); err != nil {
+				return fmt.Errorf("rolling update failed at instance %d: %w", i+1, err)
+			}
 		}
 
-		// Stop the old task by its specific task ID
+		// Stop old task (replacement or scale-down excess)
 		agent := l.agentForTask(oldTask.agentID)
 		if agent != nil {
 			l.stopTaskByID(agent, oldTask.taskID)
@@ -77,7 +92,6 @@ func (l *Leader) updateRolling(job *types.Job) error {
 			})
 		}
 
-		replaced++
 		l.eventBus.Notify("job:" + job.Name)
 
 		if i < count-1 {
@@ -85,14 +99,16 @@ func (l *Leader) updateRolling(job *types.Job) error {
 		}
 	}
 
-	log.Printf("Rolling update for job %s complete (%d/%d instances replaced)", job.Name, replaced, count)
+	log.Printf("Rolling update for job %s complete (%d old, %d desired)", job.Name, len(oldTasks), count)
+
+	// Reconcile handles scale-up (placed < desired → dispatch extra).
+	l.unlockJob(job.Name)
+	go l.reconcileJobs()
 	return nil
 }
 
-// updateRecreate: stop all → store new definition → reconcile dispatches all new.
+// updateRecreate: stop all → store new definition → dispatch all new.
 func (l *Leader) updateRecreate(job *types.Job) error {
-	// Stop all running instances (deleteTaskOnAgent removes job from agent too,
-	// but we re-store immediately below via DispatchJob).
 	agents := query(l, func(s *leaderState) []*types.Agent {
 		var result []*types.Agent
 		for agentID, jobs := range s.placed {
@@ -110,17 +126,26 @@ func (l *Leader) updateRecreate(job *types.Job) error {
 		_ = l.stopTasksOnAgent(agent, job.Name)
 	}
 
+	l.unlockJob(job.Name)
 	return l.DispatchJob(job)
 }
 
 // updateBlueGreen: snapshot old tasks, dispatch all new, then stop all old.
 func (l *Leader) updateBlueGreen(job *types.Job) error {
+	defer l.unlockJob(job.Name)
 	oldTasks := l.snapshotJobTasks(job.Name)
+
+	count := job.Count
+	if count <= 0 {
+		count = 1
+	}
 
 	// Store new definition and dispatch all new instances.
 	l.jobStore.StoreJob(job)
-	if err := l.dispatchInstances(job, job.Count); err != nil {
-		return fmt.Errorf("blue-green: failed to dispatch new instances: %w", err)
+	for i := 0; i < count; i++ {
+		if err := l.dispatchToAvailableAgent(job); err != nil {
+			return fmt.Errorf("blue-green: failed to dispatch instance %d/%d: %w", i+1, count, err)
+		}
 	}
 
 	// Stop all old instances by task ID.
