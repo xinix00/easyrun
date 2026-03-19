@@ -176,17 +176,17 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 }
 
 // Status returns the current state of a task.
-// Always checks the process group (not just the parent PID) so that
-// daemonizing processes (fork + parent exits) are still tracked correctly.
 func (r *ExecRunner) Status(task *types.Task) (types.TaskState, error) {
-	// Process group alive? (covers parent + all children)
 	if task.Pid > 0 {
-		if err := syscall.Kill(-task.Pid, 0); err == nil {
+		pgErr := syscall.Kill(-task.Pid, 0)
+		pidErr := syscall.Kill(task.Pid, 0)
+		if pgErr == nil {
 			return types.TaskRunning, nil
 		}
+		// Process group dead but something unexpected — log for debugging
+		log.Printf("[status] task %s pid=%d pgid_check=%v pid_check=%v", task.ID[:8], task.Pid, pgErr, pidErr)
 	}
 
-	// Process group dead — determine stopped vs failed
 	r.mu.RLock()
 	cmd, ok := r.processes[task.ID]
 	r.mu.RUnlock()
