@@ -84,7 +84,7 @@ type Job struct {
 	Tags         map[string]string `json:"tags,omitempty"`           // labels for discovery/grouping
 	Volumes      map[string]string `json:"volumes,omitempty"`        // host_path -> task_path (symlinked)
 	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
-	MaxRestarts    int               `json:"max_restarts,omitempty"`    // 0 = default (5), -1 = unlimited
+	MaxRestarts    *int              `json:"max_restarts,omitempty"`    // nil = default (5), 0 = no restarts, -1 = unlimited
 	RestartWindow  time.Duration     `json:"restart_window,omitempty"`  // 0 = default (5m), reset restart count if last crash was longer ago
 	UpdatePolicy   UpdatePolicy      `json:"update_policy,omitempty"`   // rolling (default) | recreate | blue-green
 	Priority     *int              `json:"priority,omitempty"`       // nil=auto(end), 0=top, N=Nth position

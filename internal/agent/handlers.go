@@ -461,9 +461,9 @@ func (a *Agent) restartTask(task *types.Task) {
 		return
 	}
 
-	maxRestarts := job.MaxRestarts
-	if maxRestarts == 0 {
-		maxRestarts = defaultMaxRestarts
+	maxRestarts := defaultMaxRestarts
+	if job.MaxRestarts != nil {
+		maxRestarts = *job.MaxRestarts
 	}
 	restartWindow := job.RestartWindow
 	if restartWindow == 0 {
