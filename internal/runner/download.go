@@ -126,6 +126,12 @@ func extractTar(r io.Reader, destDir string) error {
 			return err
 		}
 
+		// Skip root directory entry
+		name := filepath.Clean(header.Name)
+		if name == "." {
+			continue
+		}
+
 		target := filepath.Join(destDir, header.Name)
 
 		// Security: prevent path traversal
@@ -168,6 +174,11 @@ func extractZip(zipPath, destDir string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
+		name := filepath.Clean(f.Name)
+		if name == "." {
+			continue
+		}
+
 		target := filepath.Join(destDir, f.Name)
 
 		// Security: prevent path traversal
