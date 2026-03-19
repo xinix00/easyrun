@@ -1061,6 +1061,61 @@ func TestPriorityReorder_ThreeJobs(t *testing.T) {
 	}
 }
 
+// TestUpdateJob_PreservesPriority verifies that updating a job without
+// explicitly setting priority preserves the old job's relative position.
+func TestUpdateJob_PreservesPriority(t *testing.T) {
+	agent := newMockAgent()
+	defer agent.Close()
+
+	l, store, cancel := setupLeader(t)
+	defer cancel()
+
+	registerAgent(l, "a1", agent)
+	time.Sleep(10 * time.Millisecond)
+
+	// Deploy 3 jobs: A(0), B(1), C(2)
+	for i, name := range []string{"A", "B", "C"} {
+		if err := l.DispatchJob(&types.Job{
+			Name: name, Command: "./" + name, Count: 1, Priority: prio(i),
+		}); err != nil {
+			t.Fatalf("Dispatch %s failed: %v", name, err)
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// Update B without setting priority (nil) → should keep position 1
+	if err := l.UpdateJob(&types.Job{
+		Name:    "B",
+		Command: "./B-v2",
+		Count:   1,
+	}); err != nil {
+		t.Fatalf("UpdateJob failed: %v", err)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	// After normalization: A(0), B(1), C(2) — B keeps its position
+	jobA := store.GetJob("A")
+	jobB := store.GetJob("B")
+	jobC := store.GetJob("C")
+
+	if jobB.Priority == nil {
+		t.Fatal("B priority should be preserved, got nil")
+	}
+
+	// B should still be between A and C
+	if *jobA.Priority >= *jobB.Priority {
+		t.Errorf("A(%d) should be before B(%d)", *jobA.Priority, *jobB.Priority)
+	}
+	if *jobB.Priority >= *jobC.Priority {
+		t.Errorf("B(%d) should be before C(%d)", *jobB.Priority, *jobC.Priority)
+	}
+
+	// Command should be updated
+	if jobB.Command != "./B-v2" {
+		t.Errorf("B command should be ./B-v2, got %s", jobB.Command)
+	}
+}
+
 // ============================================================
 //  F. DEPLOY / DELETE / REDEPLOY LIFECYCLE
 // ============================================================

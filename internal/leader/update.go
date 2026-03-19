@@ -39,6 +39,11 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 		return fmt.Errorf("job %s not found", newJob.Name)
 	}
 
+	// Preserve priority from old job if not explicitly set
+	if newJob.Priority == nil {
+		newJob.Priority = oldJob.Priority
+	}
+
 	policy := newJob.UpdatePolicy
 	if policy == "" {
 		policy = types.UpdateRolling
@@ -50,16 +55,20 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 
 	log.Printf("Updating job %s with policy=%s", newJob.Name, policy)
 
+	var err error
 	switch policy {
 	case types.UpdateRolling:
-		return l.updateRolling(newJob)
+		err = l.updateRolling(newJob)
 	case types.UpdateRecreate:
-		return l.updateRecreate(newJob)
+		err = l.updateRecreate(newJob)
 	case types.UpdateBlueGreen:
-		return l.updateBlueGreen(newJob)
+		err = l.updateBlueGreen(newJob)
 	default:
 		return fmt.Errorf("unknown update policy: %s", policy)
 	}
+
+	l.normalizePriorities(l.jobStore.GetJobs())
+	return err
 }
 
 // updateRolling: for each old task, dispatch new (if within count) → stop old.
