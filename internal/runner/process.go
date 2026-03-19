@@ -175,39 +175,26 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 	return nil
 }
 
-// Status returns the current state of a task
+// Status returns the current state of a task.
+// Always checks the process group (not just the parent PID) so that
+// daemonizing processes (fork + parent exits) are still tracked correctly.
 func (r *ExecRunner) Status(task *types.Task) (types.TaskState, error) {
+	// Process group alive? (covers parent + all children)
+	if task.Pid > 0 {
+		if err := syscall.Kill(-task.Pid, 0); err == nil {
+			return types.TaskRunning, nil
+		}
+	}
+
+	// Process group dead — determine stopped vs failed
 	r.mu.RLock()
 	cmd, ok := r.processes[task.ID]
 	r.mu.RUnlock()
 
-	if !ok {
-		// Check by PID
-		if task.Pid > 0 {
-			if err := syscall.Kill(task.Pid, 0); err != nil {
-				return types.TaskFailed, nil
-			}
-			return types.TaskRunning, nil
-		}
-		return types.TaskFailed, nil
+	if ok && cmd.ProcessState != nil && cmd.ProcessState.Success() {
+		return types.TaskStopped, nil
 	}
-
-	if cmd.ProcessState != nil {
-		if cmd.ProcessState.Success() {
-			return types.TaskStopped, nil
-		}
-		// Log why it failed
-		log.Printf("Task %s failed: %s (exit code: %d)", task.ID, cmd.ProcessState.String(), cmd.ProcessState.ExitCode())
-		return types.TaskFailed, nil
-	}
-
-	if cmd.Process != nil {
-		if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-			return types.TaskFailed, nil
-		}
-	}
-
-	return types.TaskRunning, nil
+	return types.TaskFailed, nil
 }
 
 // applyLimits applies resource limits if set on the job

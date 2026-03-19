@@ -19,8 +19,8 @@ func (r *ExecRunner) wrapCommand(command string, memoryLimit uint64) string {
 	if memoryLimit == 0 {
 		return command
 	}
-	// ulimit -v sets virtual memory limit in KB (may fail on Apple Silicon, that's ok)
-	return fmt.Sprintf("ulimit -v %d 2>/dev/null; %s", memoryLimit/1024, command)
+	// ulimit -v sets virtual memory limit in KB
+	return fmt.Sprintf("ulimit -v %d; %s", memoryLimit/1024, command)
 }
 
 // applyMemoryLimit on macOS is a no-op
