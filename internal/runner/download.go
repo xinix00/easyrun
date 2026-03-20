@@ -34,8 +34,12 @@ func downloadArtifact(artifact *types.Artifact, destDir string) error {
 	if shouldExtract {
 		tempFile = filepath.Join(destDir, ".download."+artifact.Extract)
 	} else {
-		// Raw file: use basename from URL
-		tempFile = filepath.Join(destDir, filepath.Base(u.Path))
+		// Raw file: use filename override or basename from URL
+		name := artifact.Filename
+		if name == "" {
+			name = filepath.Base(u.Path)
+		}
+		tempFile = filepath.Join(destDir, name)
 	}
 
 	if shouldExtract {
