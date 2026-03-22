@@ -302,12 +302,15 @@ func getOrCreateNodeID(cfg *config.Config) string {
 }
 
 func getOutboundIP() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		return "127.0.0.1"
+	for {
+		conn, err := net.Dial("udp", "8.8.8.8:80")
+		if err != nil {
+			log.Println("Waiting for network...")
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		localAddr := conn.LocalAddr().(*net.UDPAddr)
+		conn.Close()
+		return localAddr.IP.String()
 	}
-	defer conn.Close()
-
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
 }
