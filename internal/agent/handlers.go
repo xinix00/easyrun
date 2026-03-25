@@ -254,6 +254,8 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 					t.State = types.TaskFailed
 				}
 			})
+			a.notifyLeader(job.Name, "crash")
+			a.restartTask(task)
 		}
 	}()
 }
@@ -493,12 +495,23 @@ func (a *Agent) restartTask(task *types.Task) {
 		return
 	}
 
+	// Exponential backoff: 1s, 2s, 4s, 8s, 16s, ...
+	if restartCount > 0 {
+		backoff := time.Second << uint(restartCount-1)
+		if backoff > 30*time.Second {
+			backoff = 30 * time.Second
+		}
+		log.Printf("Task %s restart #%d, waiting %s before retry", task.ID, restartCount, backoff)
+		time.Sleep(backoff)
+	}
+
 	// Clean up old runner entries (process already dead)
 	_ = a.runnerFor(task.Driver).Stop(task)
 
 	ports, err := a.allocatePortsForJob(job)
 	if err != nil {
 		log.Printf("Failed to allocate ports for restart: %v", err)
+		a.restartTask(task)
 		return
 	}
 
@@ -522,11 +535,13 @@ func (a *Agent) restartTask(task *types.Task) {
 
 	if err := a.runnerFor(job.Driver).Run(job, replacement); err != nil {
 		log.Printf("Failed to restart task %s: %v", task.ID, err)
+		// Retry via restartTask (maxRestarts check prevents infinite recursion)
 		a.do(func(s *agentState) {
 			if t := s.tasks[replacement.ID]; t != nil {
 				t.State = types.TaskFailed
 			}
 		})
+		a.restartTask(replacement)
 		return
 	}
 

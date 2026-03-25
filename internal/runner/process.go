@@ -63,8 +63,10 @@ func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 
 	// Download artifact if specified (agent already resolved to first matching entry)
 	if len(job.Artifacts) > 0 {
+		log.Printf("Downloading artifact for task %s: %s", taskID, job.Artifacts[0].URL)
 		// Download directly to taskDir so commands like "./binary" work
 		if err := downloadArtifact(&job.Artifacts[0], taskDir); err != nil {
+			log.Printf("Artifact download failed for task %s: %v", taskID, err)
 			r.cleanupTaskDir(taskID)
 			return fmt.Errorf("failed to download artifact: %w", err)
 		}
