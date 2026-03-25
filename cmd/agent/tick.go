@@ -87,7 +87,7 @@ func (s *agentLoop) tick() {
 	}
 
 	if s.stopLeader != nil {
-		// We are leader — renew lease AND send heartbeat to ourselves
+		// We are leader — renew raft lease
 		if !s.disc.RenewLease() {
 			agents := s.l.GetAgents()
 			if len(agents) > 0 {
@@ -99,12 +99,14 @@ func (s *agentLoop) tick() {
 				s.stopLeader()
 				s.stopLeader = nil
 				s.l = nil
+				return
 			}
 		} else {
 			s.failCount = 0
-			leaderAddr = fmt.Sprintf("%s:%d", s.cfg.Node.IP, s.cfg.Node.Port+1000)
-			_, _ = s.doHeartbeat(leaderAddr, s.ag.ID(), s.ag.Endpoint(), s.ag.GetJobs(), s.ag.GetStateTime(), s.cfg.APIKey)
 		}
+		// Self-heartbeat for job state sync
+		leaderAddr = fmt.Sprintf("%s:%d", s.cfg.Node.IP, s.cfg.Node.Port+1000)
+		_, _ = s.doHeartbeat(leaderAddr, s.ag.ID(), s.ag.Endpoint(), s.ag.GetJobs(), s.ag.GetStateTime(), s.cfg.APIKey)
 	} else if leaderAddr != "" {
 		// On startup (or after leader change): register first with placed counts
 		if !s.registered {

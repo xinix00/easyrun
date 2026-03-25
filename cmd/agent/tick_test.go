@@ -320,6 +320,61 @@ func TestTick_PartialFailureThenSuccess_Resets(t *testing.T) {
 	}
 }
 
+// Leader with raft unreachable but agents connected stays leader
+func TestTick_LeaderRaftDown_StaysLeader(t *testing.T) {
+	disc := &mockDiscoverer{renewLeaseOK: false}
+	loop := newTestLoop(disc, &mockAgent{id: "leader1"})
+	loop.stopLeader = func() {}
+	loop.l = &mockLeader{agents: []*types.Agent{{ID: "follower1"}}}
+
+	loop.tick()
+
+	if loop.stopLeader == nil {
+		t.Error("should still be leader when agents are connected")
+	}
+}
+
+// Leader with raft unreachable and NO agents loses leadership
+func TestTick_LeaderRaftDown_NoAgents_LosesLeadership(t *testing.T) {
+	disc := &mockDiscoverer{renewLeaseOK: false}
+	loop := newTestLoop(disc, &mockAgent{id: "leader1"})
+
+	stopCalled := false
+	loop.stopLeader = func() { stopCalled = true }
+	loop.l = &mockLeader{agents: []*types.Agent{}}
+
+	loop.tick()
+
+	if !stopCalled {
+		t.Error("should have called stopLeader")
+	}
+	if loop.stopLeader != nil {
+		t.Error("stopLeader should be nil after losing leadership")
+	}
+}
+
+// Raft recovers after being down → failCount resets
+func TestTick_LeaderRaftRecovers_ResetsFailCount(t *testing.T) {
+	disc := &mockDiscoverer{renewLeaseOK: false}
+	loop := newTestLoop(disc, &mockAgent{id: "leader1"})
+	loop.stopLeader = func() {}
+	loop.l = &mockLeader{agents: []*types.Agent{{ID: "follower1"}}}
+	loop.failCount = 3
+
+	// Raft down: stays leader, failCount unchanged
+	loop.tick()
+	if loop.failCount != 3 {
+		t.Fatalf("failCount should stay %d during raft-down, got %d", 3, loop.failCount)
+	}
+
+	// Raft recovers
+	disc.renewLeaseOK = true
+	loop.tick()
+	if loop.failCount != 0 {
+		t.Errorf("failCount should reset to 0 after raft recovery, got %d", loop.failCount)
+	}
+}
+
 // Uses cached leader address, does not call GetLeader when lastLeaderAddr set
 func TestTick_UsesCachedLeaderAddr(t *testing.T) {
 	disc := &mockDiscoverer{leader: "wrong:9080"}
