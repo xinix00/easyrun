@@ -524,6 +524,7 @@ func (a *Agent) restartTask(task *types.Task) {
 			return false
 		}
 		replacement.RestartCount = old.RestartCount + 1
+		replacement.LastFailedAt = old.LastFailedAt
 		delete(s.tasks, task.ID)
 		s.tasks[replacement.ID] = replacement
 		return true
