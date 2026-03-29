@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // ============== RUNNER SELECTION TESTS ==============

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // TestVolumeAffinity tests that jobs with volumes are rejected by nodes without those volumes

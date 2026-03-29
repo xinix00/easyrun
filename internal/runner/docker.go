@@ -9,11 +9,11 @@ import (
 	"sync"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 const (
-	containerPrefix     = "easyrun-"
+	containerPrefix     = "hop-"
 	dockerStopTimeout   = 10 // seconds (SIGTERM grace period, then SIGKILL)
 	dockerCommandTimeout = 30 * time.Second // max time for docker stop + rm
 )
@@ -169,7 +169,7 @@ func (r *DockerRunner) GetStderr(taskID string) *LogBroadcaster {
 	return r.stderrLog[taskID]
 }
 
-// Cleanup removes all easyrun containers
+// Cleanup removes all hop containers
 func (r *DockerRunner) Cleanup() error {
 	out, err := exec.Command("docker", "ps", "-a", "--filter", "name="+containerPrefix, "--format", "{{.Names}}").Output()
 	if err != nil {

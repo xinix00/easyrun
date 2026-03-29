@@ -38,7 +38,7 @@ jobs:
 
           for plat in $PLATFORMS; do
             IFS=: read -r os arch <<< "$plat"
-            dir="dist/easyrun-${VERSION}-${os}-${arch}"
+            dir="dist/hop-${VERSION}-${os}-${arch}"
             mkdir -p "$dir"
 
             for b in $BINS; do

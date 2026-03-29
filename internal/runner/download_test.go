@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // --- downloadArtifact edge cases ---
@@ -449,9 +449,9 @@ func TestSignS3GetRequest(t *testing.T) {
 }
 
 func TestSignS3GetRequestCustomEndpoint(t *testing.T) {
-	url, headers := signS3GetRequest("easyflor-builds.fsn1.your-objectstorage.com", "ravendb/file.tar.bz2", "us-east-1", "AKIAEXAMPLE", "secretkey")
+	url, headers := signS3GetRequest("haas-builds.fsn1.your-objectstorage.com", "ravendb/file.tar.bz2", "us-east-1", "AKIAEXAMPLE", "secretkey")
 
-	if !strings.Contains(url, "easyflor-builds.fsn1.your-objectstorage.com/ravendb/file.tar.bz2") {
+	if !strings.Contains(url, "haas-builds.fsn1.your-objectstorage.com/ravendb/file.tar.bz2") {
 		t.Errorf("URL = %q, want custom endpoint + key", url)
 	}
 	if headers["Authorization"] == "" {

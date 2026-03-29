@@ -13,9 +13,9 @@ GOOS=linux GOARCH=amd64 go build -o bin/agent-linux ./cmd/agent
 
 ## Test Lokaal
 
-1. Start EasyRaft (in easyraft/ folder):
+1. Start HopRaft (in hopraft/ folder):
 ```bash
-cd easyraft
+cd hopraft
 go run ./cmd/election -http-port 7080 -raft-port 7946
 ```
 
@@ -69,7 +69,7 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
     /api/
         server.go          # Leader HTTP API
     /discovery/
-        discovery.go       # EasyRaft client
+        discovery.go       # HopRaft client
     /types/
         types.go           # Core data types (Job, Task, Agent, etc.)
 /pkg
@@ -86,8 +86,8 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 |---------|-------|--------------|
 | Agent | 8080 | Agent HTTP API |
 | Leader | 9080 | Leader HTTP API (port+1000) |
-| EasyRaft HTTP | 7080 | EasyRaft HTTP API |
-| EasyRaft UDP | 7946 | EasyRaft verkiezing |
+| HopRaft HTTP | 7080 | HopRaft HTTP API |
+| HopRaft UDP | 7946 | HopRaft verkiezing |
 
 ## Tests
 

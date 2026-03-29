@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"sync"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // Sentinel errors returned by sendJobToAgent — lets callers distinguish why an agent rejected.

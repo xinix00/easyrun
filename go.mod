@@ -1,4 +1,4 @@
-module easyrun
+module hop
 
 go 1.24.3
 

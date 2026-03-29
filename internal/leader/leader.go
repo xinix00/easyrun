@@ -8,7 +8,7 @@ import (
 	"sort"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 const (

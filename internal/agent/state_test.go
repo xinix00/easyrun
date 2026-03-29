@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
-	"easyrun/pkg/config"
+	"hop/internal/types"
+	"hop/pkg/config"
 )
 
 // testConfig creates a test configuration
@@ -18,8 +18,8 @@ func testConfig() *config.Config {
 			Port: 8080,
 		},
 		Paths: config.PathsConfig{
-			RootfsBase: "/tmp/test-easyrun",
-			StateFile:  "/tmp/test-easyrun/state.json",
+			RootfsBase: "/tmp/test-hop",
+			StateFile:  "/tmp/test-hop/state.json",
 		},
 		Capacity: config.CapacityConfig{
 			CPUShares: 1000,

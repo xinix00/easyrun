@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // TestLeaderRegistersItself verifies leader appears in agents list

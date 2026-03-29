@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // TestConcurrentDispatchNewAgentJoinOverScheduling reproduces the over-scheduling bug:

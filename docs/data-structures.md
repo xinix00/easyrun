@@ -100,7 +100,7 @@ const (
 | `count: 0` or omitted | Default to 1 instance |
 | `count: -1` | **Run on ALL agents** |
 
-`count: -1` is useful for node-level services like easydns or monitoring agents. New agents automatically receive all `count: -1` jobs on registration.
+`count: -1` is useful for node-level services like hopdns or monitoring agents. New agents automatically receive all `count: -1` jobs on registration.
 
 ### Ports
 

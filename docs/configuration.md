@@ -13,7 +13,7 @@ node:
 
 cluster:
   name: "my-cluster"
-  raft_endpoints:           # EasyRaft endpoints
+  raft_endpoints:           # HopRaft endpoints
     - "http://10.0.0.1:7080"
     - "http://10.0.0.2:7080"
     - "http://10.0.0.3:7080"
@@ -23,10 +23,10 @@ capacity:
   memory: 8589934592        # 8GB in bytes
 
 paths:
-  state_file: "/var/lib/easyrun/state.json"
-  rootfs_base: "/var/lib/easyrun/rootfs"
-  artifacts: "/var/lib/easyrun/artifacts"
-  cache: "/var/lib/easyrun/cache"
+  state_file: "/var/lib/hop/state.json"
+  rootfs_base: "/var/lib/hop/rootfs"
+  artifacts: "/var/lib/hop/artifacts"
+  cache: "/var/lib/hop/cache"
 
 runner:
   isolate: true             # Enable process isolation (chroot on Linux)
@@ -44,8 +44,8 @@ timeouts:
 |------|-------------|---------|
 | `--config` | Path to config file | (none, uses defaults) |
 | `--cluster` | Cluster name | (from config) |
-| `--raft` | EasyRaft endpoint | (from config) |
-| `--standalone` | Run without easyraft (single-node mode) | false |
+| `--raft` | HopRaft endpoint | (from config) |
+| `--standalone` | Run without hopraft (single-node mode) | false |
 | `--api-key` | API key for authentication (overrides config) | (from config) |
 
 ## Development Config
@@ -60,7 +60,7 @@ node:
 cluster:
   name: "dev"
   raft_endpoints:
-    - "http://127.0.0.1:7080"  # Lokale easyraft instance
+    - "http://127.0.0.1:7080"  # Lokale hopraft instance
 
 capacity:
   cpu_shares: 14000

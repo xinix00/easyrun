@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // ============== MOCK AGENT FOR INTEGRATION TESTS ==============
 
-// mockAgent simulates an easyrun agent for testing
+// mockAgent simulates an hop agent for testing
 type mockAgent struct {
 	server   *httptest.Server
 	mu       sync.Mutex
@@ -585,11 +585,11 @@ func TestFailoverNewAgentGetsAllDaemonJobs(t *testing.T) {
 
 	// Existing agent has 3 daemon jobs
 	daemonJobs := []*types.Job{
-		{Name: "easydns", Command: "./easydns", Count: -1},
-		{Name: "easylb", Command: "./easylb", Count: -1},
+		{Name: "hopdns", Command: "./hopdns", Count: -1},
+		{Name: "hoplb", Command: "./hoplb", Count: -1},
 		{Name: "monitoring", Command: "./monitor", Count: -1},
 	}
-	newLeader.RegisterAgent("existing", existingAgent.URL(), "", map[string]int{"easydns": 1, "easylb": 1, "monitoring": 1})
+	newLeader.RegisterAgent("existing", existingAgent.URL(), "", map[string]int{"hopdns": 1, "hoplb": 1, "monitoring": 1})
 	newLeader.Heartbeat("existing", existingAgent.URL(), daemonJobs, time.Now(), "")
 	time.Sleep(20 * time.Millisecond)
 

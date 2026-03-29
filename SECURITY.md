@@ -1,10 +1,10 @@
 # Security Architecture
 
-How the Easy Infrastructure Suite achieves production-grade security through simplicity.
+How the Hop Infrastructure Suite achieves production-grade security through simplicity.
 
 ## Design Philosophy
 
-Traditional orchestrators solve multi-tenancy with complex software controls (RBAC, NetworkPolicy, service mesh). Easy takes a different approach: **physical separation over logical separation.**
+Traditional orchestrators solve multi-tenancy with complex software controls (RBAC, NetworkPolicy, service mesh). Hop takes a different approach: **physical separation over logical separation.**
 
 ```mermaid
 graph TB
@@ -17,7 +17,7 @@ graph TB
         K8S -.->|"NetworkPolicy<br/>RBAC<br/>Quotas<br/>Service Mesh"| RISK["⚠ One misconfiguration<br/>breaks everything"]
     end
 
-    subgraph "Easy Infrastructure"
+    subgraph "Hop Infrastructure"
         direction TB
         CA[Cluster A<br/>VLAN 10<br/>Team A]
         CB[Cluster B<br/>VLAN 20<br/>Team B]
@@ -149,21 +149,21 @@ graph LR
     UDM_A ===|"Site-to-site VPN<br/>VLAN 10 bridged"| UDM_B
 ```
 
-Same VLAN, two sites, hardware-encrypted tunnel. Nodes 1-4 are in the same cluster — easyrun sees no difference between local and remote nodes.
+Same VLAN, two sites, hardware-encrypted tunnel. Nodes 1-4 are in the same cluster — hop sees no difference between local and remote nodes.
 
 ### Tailscale example (identity-based)
 
 ```json
 {
   "acls": [
-    {"action": "accept", "src": ["tag:admin"],      "dst": ["tag:easyrun:*"]},
-    {"action": "accept", "src": ["tag:deploy"],      "dst": ["tag:easyrun:8080"]},
-    {"action": "accept", "src": ["tag:monitoring"],   "dst": ["tag:easyrun:9090"]}
+    {"action": "accept", "src": ["tag:admin"],      "dst": ["tag:hop:*"]},
+    {"action": "accept", "src": ["tag:deploy"],      "dst": ["tag:hop:8080"]},
+    {"action": "accept", "src": ["tag:monitoring"],   "dst": ["tag:hop:9090"]}
   ]
 }
 ```
 
-**Key point:** Easy does not depend on any specific network solution. VLAN isolation works with any vendor or technology. Pick what fits your infrastructure.
+**Key point:** Hop does not depend on any specific network solution. VLAN isolation works with any vendor or technology. Pick what fits your infrastructure.
 
 ## Layer 3: Cluster-per-Application-Group
 
@@ -178,7 +178,7 @@ graph TB
         SC --> NS3["namespace: data<br/>NetworkPolicy?<br/>ResourceQuota?<br/>RBAC roles?"]
     end
 
-    subgraph "Separate clusters (Easy model)"
+    subgraph "Separate clusters (Hop model)"
         C1["Frontend Cluster<br/>3 nodes, full access"]
         C2["API Cluster<br/>5 nodes, full access"]
         C3["Data Cluster<br/>3 nodes, full access"]
@@ -218,7 +218,7 @@ graph TB
 
 ## Secrets Management
 
-Easy does not store secrets. Secrets are injected at deploy time via external secrets managers.
+Hop does not store secrets. Secrets are injected at deploy time via external secrets managers.
 
 ```mermaid
 sequenceDiagram
@@ -226,7 +226,7 @@ sequenceDiagram
     participant Git as Git Repo
     participant OP as 1Password
     participant CLI as run apply
-    participant ER as easyrun
+    participant ER as hop
 
     Dev->>Git: Push job template
     Dev->>CLI: ./deploy.sh myapp
@@ -241,18 +241,18 @@ sequenceDiagram
 **What this means for compliance:**
 - No secrets at rest in the orchestrator
 - Secrets rotation handled by the secrets manager
-- Audit trail for secret access is in 1Password/Vault, not in Easy
+- Audit trail for secret access is in 1Password/Vault, not in Hop
 
 ## Attack Surface Comparison
 
 ```mermaid
 graph LR
-    subgraph Easy["Easy (5 binaries)"]
-        ER[easyrun]
-        ED[easydns]
-        EL[easylb]
-        EP[easyprom]
-        RF[easyraft]
+    subgraph Hop["Easy (5 binaries)"]
+        ER[hop]
+        ED[hopdns]
+        EL[hoplb]
+        EP[hopprom]
+        RF[hopraft]
     end
 
     subgraph K8s["Kubernetes (15+ components)"]
@@ -274,7 +274,7 @@ graph LR
     end
 ```
 
-| Metric | Easy | Kubernetes |
+| Metric | Hop | Kubernetes |
 |--------|------|------------|
 | Components | 5 binaries | 15+ components |
 | External dependencies | 3 Go libraries | Hundreds (CRI, CNI, CSI, ...) |
@@ -289,37 +289,37 @@ graph LR
 
 ### SOC 2 Type II
 
-| Trust Service Criteria | Easy Implementation |
+| Trust Service Criteria | Hop Implementation |
 |------------------------|---------------------|
 | **CC6.1** Logical access | Network ACLs (Tailscale/UniFi/firewall) |
 | **CC6.2** Access credentials | VPN device keys + 1Password |
 | **CC6.3** Access removal | Device/key removal = instant revoke |
 | **CC6.6** System boundaries | VLAN per cluster + Network ACLs (Tailscale/UniFi/firewall) |
 | **CC6.7** Data transmission | WireGuard encryption (all traffic) |
-| **CC7.1** Threat detection | easyprom + Prometheus alerting |
-| **CC7.2** Monitoring | easyprom metrics, network/VPN access logs |
+| **CC7.1** Threat detection | hopprom + Prometheus alerting |
+| **CC7.2** Monitoring | hopprom metrics, network/VPN access logs |
 | **CC8.1** Change management | Git-based deploys, `run apply` from version control |
 | **A1.2** Recovery | Auto-restart, leader failover, state persistence |
 
 ### ISO 27001
 
-| Control | Easy Implementation |
+| Control | Hop Implementation |
 |---------|---------------------|
 | **A.9.1** Access control policy | Network ACLs (Tailscale/UniFi/firewall) + cluster-per-group |
 | **A.9.2** User access management | VPN/network identity management |
 | **A.10.1** Cryptographic controls | WireGuard encryption (all traffic) |
 | **A.12.1** Operational procedures | `run apply` from git, repeatable deploys |
-| **A.12.4** Logging and monitoring | easyprom + Prometheus + network/VPN logs |
+| **A.12.4** Logging and monitoring | hopprom + Prometheus + network/VPN logs |
 | **A.13.1** Network security | VLAN isolation + encrypted network layer |
 | **A.14.2** Secure development | Static binaries, minimal dependencies |
 | **A.17.1** Continuity | Multi-node clusters, auto-failover |
 
 ### HIPAA
 
-| Safeguard | Easy Implementation |
+| Safeguard | Hop Implementation |
 |-----------|---------------------|
 | **Access control** | VPN identity + network ACLs |
-| **Audit controls** | Network/VPN logs + easyprom metrics |
+| **Audit controls** | Network/VPN logs + hopprom metrics |
 | **Integrity controls** | Encrypted transport (WireGuard) |
 | **Transmission security** | All traffic encrypted by default |
 | **Workstation security** | VPN/network device authorization |
@@ -339,7 +339,7 @@ Most gaps are **documentation and process**, not technology.
 
 ## Security Monitoring
 
-easyprom + Prometheus provides security-relevant alerting:
+hopprom + Prometheus provides security-relevant alerting:
 
 ```yaml
 groups:
@@ -347,7 +347,7 @@ groups:
     rules:
       # Unexpected agent (possible unauthorized node)
       - alert: UnknownAgent
-        expr: easyrun_agents_total > expected_agent_count
+        expr: hop_agents_total > expected_agent_count
         for: 1m
         labels:
           severity: critical
@@ -356,14 +356,14 @@ groups:
 
       # High failure rate (possible attack or misconfiguration)
       - alert: HighFailureRate
-        expr: rate(easyrun_task_failures_total[5m]) > 1
+        expr: rate(hop_task_failures_total[5m]) > 1
         for: 5m
         labels:
           severity: warning
 
       # Agent down (possible infrastructure issue)
       - alert: AgentDown
-        expr: easyrun_agents_healthy < easyrun_agents_total
+        expr: hop_agents_healthy < hop_agents_total
         for: 2m
         labels:
           severity: critical
@@ -375,10 +375,10 @@ groups:
 
 - [ ] Dedicated VLAN configured
 - [ ] Network ACLs (Tailscale/UniFi/firewall) defined and reviewed
-- [ ] easyraft API key generated and secured
+- [ ] hopraft API key generated and secured
 - [ ] Secrets injected via 1Password/Vault (never in job configs)
 - [ ] Disk encryption enabled on all nodes (LUKS/FileVault)
-- [ ] easyprom + Prometheus alerting configured
+- [ ] hopprom + Prometheus alerting configured
 - [ ] Firewall rules: only VPN/VLAN traffic allowed
 
 ### Per application
@@ -399,7 +399,7 @@ groups:
 
 ## Scaling Through Constant Complexity
 
-Traditional orchestrators become harder to secure as they grow. More tenants = more RBAC rules, more NetworkPolicies, more audit complexity. Easy's cluster-per-group model means **security complexity is O(1), not O(n).**
+Traditional orchestrators become harder to secure as they grow. More tenants = more RBAC rules, more NetworkPolicies, more audit complexity. Hop's cluster-per-group model means **security complexity is O(1), not O(n).**
 
 ```mermaid
 graph LR
@@ -409,7 +409,7 @@ graph LR
         S2["100 teams"] -->|"100× RBAC rules<br/>100× NetworkPolicies<br/>100× audit scope"| C2["Unmanageable"]
     end
 
-    subgraph Easy["Easy: Complexity stays constant"]
+    subgraph Hop["Hop: Complexity stays constant"]
         direction TB
         E1["10 clusters"] -->|"Same config per cluster<br/>Same VLAN setup<br/>Same audit scope"| EC1["Low complexity"]
         E2["100 clusters"] -->|"Same config per cluster<br/>Same VLAN setup<br/>Same audit scope"| EC2["Low complexity"]
@@ -418,7 +418,7 @@ graph LR
 
 **Why this works:**
 
-| Aspect | Shared cluster (traditional) | Cluster-per-group (Easy) |
+| Aspect | Shared cluster (traditional) | Cluster-per-group (Hop) |
 |--------|------------------------------|--------------------------|
 | Adding a team | New RBAC roles, NetworkPolicies, quotas, audit rules | New VLAN + new cluster (identical config) |
 | Security audit | Audit grows linearly with tenants | Audit one cluster = audit all clusters |
@@ -457,7 +457,7 @@ graph TB
 
 ## Summary
 
-Easy's security model is built on **proven, simple, auditable** layers:
+Hop's security model is built on **proven, simple, auditable** layers:
 
 | Layer | Technology | Age | Complexity |
 |-------|-----------|-----|------------|

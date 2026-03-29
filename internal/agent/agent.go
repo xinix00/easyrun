@@ -15,10 +15,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"easyrun/internal/runner"
-	"easyrun/internal/types"
-	"easyrun/pkg/config"
-	"easyrun/pkg/httputil"
+	"hop/internal/runner"
+	"hop/internal/types"
+	"hop/pkg/config"
+	"hop/pkg/httputil"
 )
 
 // State represents persisted state

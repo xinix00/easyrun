@@ -16,12 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	"easyrun/internal/agent"
-	"easyrun/internal/api"
-	"easyrun/internal/discovery"
-	"easyrun/internal/leader"
-	"easyrun/internal/types"
-	"easyrun/pkg/config"
+	"hop/internal/agent"
+	"hop/internal/api"
+	"hop/internal/discovery"
+	"hop/internal/leader"
+	"hop/internal/types"
+	"hop/pkg/config"
 
 	"github.com/google/uuid"
 )
@@ -33,9 +33,9 @@ var version = "dev"
 func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	nodeName := flag.String("node", "", "Node name/ID (overrides config file)")
-	clusterName := flag.String("cluster", "", "Cluster name (e.g., easyflor-prod)")
-	raftEndpoint := flag.String("raft", "", "EasyRaft endpoint (overrides config file)")
-	standalone := flag.Bool("standalone", false, "Run without easyraft (single-node mode)")
+	clusterName := flag.String("cluster", "", "Cluster name (e.g., haas-prod)")
+	raftEndpoint := flag.String("raft", "", "HopRaft endpoint (overrides config file)")
+	standalone := flag.Bool("standalone", false, "Run without hopraft (single-node mode)")
 	apiKey := flag.String("api-key", "", "API key for authentication (overrides config file)")
 	flag.Parse()
 
@@ -80,13 +80,13 @@ func main() {
 		cfg.Node.IP = getOutboundIP()
 	}
 
-	log.Printf("Starting easyrun agent %s", version)
+	log.Printf("Starting hop agent %s", version)
 	log.Printf("Node %s on %s:%d", nodeID, cfg.Node.IP, cfg.Node.Port)
 	log.Printf("Cluster: %s", cfg.Cluster.Name)
 	if *standalone {
 		log.Println("Running in standalone mode (no raft)")
 	} else {
-		log.Printf("Using easyraft: %v", cfg.Cluster.RaftEndpoints)
+		log.Printf("Using hopraft: %v", cfg.Cluster.RaftEndpoints)
 	}
 
 	// Create context for graceful shutdown

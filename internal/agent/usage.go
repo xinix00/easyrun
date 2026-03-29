@@ -48,7 +48,7 @@ func parseCPUTime(s string) (float64, error) {
 // getDockerUsage returns CPU% and Mem% of total host for a docker container.
 // Uses docker stats with percentage format to avoid parsing human-readable byte strings.
 func getDockerUsage(taskID string) (cpuPercent float64, memPercent float64, err error) {
-	containerName := "easyrun-" + taskID
+	containerName := "hop-" + taskID
 	out, err := exec.Command("docker", "stats", "--no-stream", "--format",
 		"{{.CPUPerc}} {{.MemPerc}}", containerName).Output()
 	if err != nil {

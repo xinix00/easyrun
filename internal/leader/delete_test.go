@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // TestDeleteJobRemovesFromStore verifies job is removed from store, not just placement

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // mockLeader captures notify events from agents

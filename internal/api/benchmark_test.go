@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/leader"
-	"easyrun/internal/types"
+	"hop/internal/leader"
+	"hop/internal/types"
 )
 
 // mockAgentServer returns a test server that responds instantly to agent API calls.

@@ -3,7 +3,7 @@
 ## Configuratie
 
 ```bash
-export EASYRUN_LEADER=localhost:9080
+export HOP_LEADER=localhost:9080
 # of
 ./bin/run --leader localhost:9080 ...
 ```

@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 const (
@@ -237,7 +237,7 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 	// Base directory for all tasks
 	base := r.config.RootfsBase
 	if base == "" {
-		base = "/tmp/easyrun"
+		base = "/tmp/hop"
 	}
 
 	taskDir := filepath.Join(base, taskID)
@@ -346,7 +346,7 @@ func (r *ExecRunner) GetStderr(taskID string) *LogBroadcaster {
 func (r *ExecRunner) Cleanup() error {
 	base := r.config.RootfsBase
 	if base == "" {
-		base = "/tmp/easyrun"
+		base = "/tmp/hop"
 	}
 
 	// Remove everything and recreate

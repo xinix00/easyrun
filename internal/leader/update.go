@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 var (

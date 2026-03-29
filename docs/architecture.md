@@ -2,7 +2,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                     EasyRaft                        │
+│                     HopRaft                        │
 │              (leader election via HTTP)             │
 └─────────────────────────────────────────────────────┘
                           │
@@ -135,14 +135,14 @@ Without settle:
 
 ## Components
 
-### EasyRaft
+### HopRaft
 - Separate service for leader election
 - Runs on 3+ nodes for HA
 - Uses UDP for internal election (lowest IP wins)
 - HTTP API for lease management
 
 ### Leader
-- Node that has lease via EasyRaft
+- Node that has lease via HopRaft
 - Receives heartbeats from agents
 - Dispatches regular jobs via deterministic round-robin (agents sorted by ID)
 - Dispatches daemon jobs (count=-1) via reconcile-based dispatch
@@ -207,7 +207,7 @@ Without settle:
 
 ### DockerRunner
 - Runs Docker containers via `docker` CLI (no SDK, no external dependencies)
-- Container naming: `easyrun-<taskID>` for predictable lifecycle management
+- Container naming: `hop-<taskID>` for predictable lifecycle management
 - Port mapping: `-p hostPort:containerPort` (host ports always dynamic)
 - Resource limits: `--memory`, `--cpu-shares` (maps directly from Job fields)
 - Volumes: `-v hostPath:containerPath`
@@ -215,7 +215,7 @@ Without settle:
 - Logs: `docker logs -f` piped to LogBroadcaster (same SSE streaming as processes)
 - Stop: `docker stop` (SIGTERM → 10s → SIGKILL) + `docker rm`
 - Status: `docker inspect -f '{{.State.Running}}'`
-- Cleanup at startup: `docker rm -f` all `easyrun-*` containers
+- Cleanup at startup: `docker rm -f` all `hop-*` containers
 
 ## Named Ports
 
@@ -274,7 +274,7 @@ Jobs have `tags` field for external tooling:
 }
 ```
 
-Easyrun only stores tags - external tooling does the discovery logic.
+Hop only stores tags - external tooling does the discovery logic.
 
 ## Health Checks
 
@@ -315,7 +315,7 @@ Three check types: HTTP, TCP, and file-based.
 
 ### Leader fails
 1. Agents get heartbeat timeout
-2. After 3 failures: agents try to become leader via EasyRaft
+2. After 3 failures: agents try to become leader via HopRaft
 3. First to get lease becomes new leader with settle period (30s)
 4. Agents re-register with placed counts (leader returns 404 → triggers re-registration)
 5. After settle: reconciliation dispatches only truly missing instances
@@ -328,6 +328,6 @@ Three check types: HTTP, TCP, and file-based.
 
 ### Agent isolated (network partition)
 1. Agent can't reach leader
-2. Agent can't become leader (no EasyRaft quorum)
+2. Agent can't become leader (no HopRaft quorum)
 3. After 6 ticks (60s): agent stops all tasks
 4. Prevents duplicate running tasks

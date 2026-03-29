@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"easyrun/pkg/config"
+	"hop/pkg/config"
 )
 
 func TestGetOrCreateNodeID_FromConfig(t *testing.T) {

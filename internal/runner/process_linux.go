@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
-const cgroupBase = "/sys/fs/cgroup/easyrun"
+const cgroupBase = "/sys/fs/cgroup/hop"
 
 // wrapCommand on Linux returns the command as-is
 // Memory limiting is done via cgroups after process start

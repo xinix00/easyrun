@@ -3,7 +3,7 @@ package runner
 import (
 	"testing"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 func TestDockerRunnerRequiresImage(t *testing.T) {

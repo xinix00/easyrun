@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // ============== HEARTBEAT TESTS ==============

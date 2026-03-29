@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // envKey converts a name to an uppercase environment variable key

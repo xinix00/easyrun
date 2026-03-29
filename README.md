@@ -1,4 +1,4 @@
-# Easyrun
+# Hop
 
 Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
@@ -131,7 +131,7 @@ go build -o bin/run ./cmd/cli
   "cpu_shares": 2048,
   "memory_limit": 536870912,
   "env": {"DB_HOST": "postgres.internal"},
-  "tags": {"service": "api", "easylb-urlprefix": "*.api.example.com"},
+  "tags": {"service": "api", "hoplb-urlprefix": "*.api.example.com"},
   "volumes": {"/data/shared": "data"},
   "health_check": {
     "type": "http",
@@ -284,8 +284,8 @@ Run Docker containers instead of processes by setting the `image` field:
 - `ports` values are **container ports** (host ports always dynamically allocated)
 - Resource limits map to `--memory` and `--cpu-shares`
 - Volumes map to `-v hostPath:containerPath`
-- Container naming: `easyrun-<taskID>`
-- Cleanup at agent start: `docker rm -f` all `easyrun-*` containers
+- Container naming: `hop-<taskID>`
+- Cleanup at agent start: `docker rm -f` all `hop-*` containers
 
 ## Documentation
 

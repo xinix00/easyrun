@@ -1,4 +1,4 @@
-# Easyrun
+# Hop
 
 Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 

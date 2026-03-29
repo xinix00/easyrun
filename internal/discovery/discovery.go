@@ -12,8 +12,8 @@ import (
 
 const httpClientTimeout = 5 * time.Second
 
-// Discovery handles leader election via easyraft
-// easyraft manages all the complexity - we just ask it who's leader
+// Discovery handles leader election via hopraft
+// hopraft manages all the complexity - we just ask it who's leader
 type Discovery struct {
 	clusterName  string
 	nodeAddr     string
@@ -24,7 +24,7 @@ type Discovery struct {
 
 // New creates a new Discovery instance
 func New(clusterName, nodeIP string, nodePort int, raftEndpoints []string, leaderLease time.Duration) *Discovery {
-	// Just use the first endpoint - easyraft handles its own HA
+	// Just use the first endpoint - hopraft handles its own HA
 	endpoint := ""
 	if len(raftEndpoints) > 0 {
 		endpoint = raftEndpoints[0]

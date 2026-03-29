@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/runner"
-	"easyrun/internal/types"
-	"easyrun/pkg/config"
+	"hop/internal/runner"
+	"hop/internal/types"
+	"hop/pkg/config"
 )
 
 // TestChaos_AllTasksCrashSimultaneously tests mass task failure

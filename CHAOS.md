@@ -38,7 +38,7 @@ Catastrophic failure scenarios to ensure system resilience.
 
 ```bash
 # All chaos tests
-cd easyrun
+cd hop
 go test -run=TestChaos -v ./internal/...
 
 # Specific scenario
@@ -217,13 +217,13 @@ Result: Degrades gracefully
 
 ```prometheus
 # Task recovery rate
-rate(easyrun_task_failures_total[5m]) / rate(easyrun_task_starts_total[5m])
+rate(hop_task_failures_total[5m]) / rate(hop_task_starts_total[5m])
 
 # Agent health
-easyrun_agents_healthy / easyrun_agents_total
+hop_agents_healthy / hop_agents_total
 
 # Job degradation
-easyrun_job_instances_running < easyrun_job_instances_expected
+hop_job_instances_running < hop_job_instances_expected
 ```
 
 ### What We Test vs Don't Test
@@ -244,19 +244,19 @@ easyrun_job_instances_running < easyrun_job_instances_expected
 - Clock skew between nodes
 - DNS failures
 - TLS certificate expiry
-- EasyRaft leader election edge cases
+- HopRaft leader election edge cases
 
 ## Known Limitations
 
 **Single leader = SPOF:**
 - If leader dies, no dispatching until failover
 - Existing tasks keep running (agents are autonomous)
-- Failover typically <5 seconds with EasyRaft
+- Failover typically <5 seconds with HopRaft
 - New leader needs settle period (30s) before reconciling
 
 **No quorum:**
-- Unlike k8s (etcd quorum), easyrun survives with 1 node
-- Leader election requires EasyRaft quorum (3+ nodes)
+- Unlike k8s (etcd quorum), hop survives with 1 node
+- Leader election requires HopRaft quorum (3+ nodes)
 
 **State eventually consistent:**
 - 10 second heartbeat interval = 10s propagation delay
@@ -274,7 +274,7 @@ easyrun_job_instances_running < easyrun_job_instances_expected
 
 ```
 3 nodes minimum for HA:
-- EasyRaft elects leader
+- HopRaft elects leader
 - If leader dies, new leader in <5s
 - Settle period (30s) for agents to register
 - Reconciliation restores desired state
@@ -284,7 +284,7 @@ easyrun_job_instances_running < easyrun_job_instances_expected
 
 ```bash
 # Backup leader state
-cp /var/lib/easyrun/state-{cluster}.json /backup/state-$(date +%s).json
+cp /var/lib/hop/state-{cluster}.json /backup/state-$(date +%s).json
 
 # Restore after catastrophic failure
 1. Stop all agents

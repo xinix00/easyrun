@@ -4,8 +4,8 @@ import (
 	"errors"
 	"sync"
 
-	"easyrun/internal/runner"
-	"easyrun/internal/types"
+	"hop/internal/runner"
+	"hop/internal/types"
 )
 
 // ErrSimulated is returned by mock runner when configured to fail

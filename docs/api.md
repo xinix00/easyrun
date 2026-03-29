@@ -4,7 +4,7 @@ There are two APIs: the **Leader API** (port+1000) and the **Agent API** (port).
 
 ## Leader API
 
-Runs on the node that is leader (via easyraft). Default port: 9080.
+Runs on the node that is leader (via hopraft). Default port: 9080.
 
 ### Health
 
@@ -35,7 +35,7 @@ Returns cluster overview (from placed data, no HTTP calls to agents):
 }
 ```
 
-- **cluster_name:** Cluster name from config — used by easydns for federation discovery.
+- **cluster_name:** Cluster name from config — used by hopdns for federation discovery.
 - **settling:** `true` during the settle period after leader election (30s). During this period, jobs are stored but not dispatched until agents have registered with their placed counts.
 - **placed:** Job name → total placed count across all agents.
 
@@ -350,7 +350,7 @@ The agent proxies these paths to the current leader:
 - `/v1/status`
 - `/v1/events` (SSE proxy)
 
-This means easydns/easylb/easyprom can query their local agent and automatically get cluster-wide data.
+This means hopdns/hoplb/hopprom can query their local agent and automatically get cluster-wide data.
 
 ### Events (SSE)
 

@@ -1,11 +1,11 @@
 # Quick Start
 
-Get easyrun running in 30 seconds.
+Get hop running in 30 seconds.
 
 ## Build
 
 ```bash
-cd easyrun
+cd hop
 go build -o ../bin/agent ./cmd/agent
 go build -o ../bin/run ./cmd/cli
 ```
@@ -17,7 +17,7 @@ go build -o ../bin/run ./cmd/cli
 ../bin/agent --cluster=dev --standalone
 
 # Output:
-# Starting easyrun agent dev
+# Starting hop agent dev
 # Node a1b2c3d4 on 192.168.1.5:8080
 # Cluster: dev
 # Running in standalone mode (no raft)
@@ -27,7 +27,7 @@ go build -o ../bin/run ./cmd/cli
 ## Deploy a Job
 
 ```bash
-export EASYRUN_LEADER=localhost:9080
+export HOP_LEADER=localhost:9080
 
 # Deploy
 ../bin/run deploy --name nginx --command "nginx -g 'daemon off;'"
@@ -42,8 +42,8 @@ export EASYRUN_LEADER=localhost:9080
 ## Multi-Node Cluster
 
 ```bash
-# 1. Start EasyRaft (leader election)
-# See easyraft/ for setup
+# 1. Start HopRaft (leader election)
+# See hopraft/ for setup
 
 # 2. Start agents on each node
 ../bin/agent --cluster=my-cluster --raft http://raft-server:7080
@@ -67,7 +67,7 @@ node:
   port: 8080
 
 paths:
-  state_file: /var/lib/easyrun/state.json
+  state_file: /var/lib/hop/state.json
 
 runner:
   isolate: true  # chroot on Linux, sandbox on macOS
@@ -80,9 +80,9 @@ runner:
 ## Production (systemd)
 
 ```bash
-sudo tee /etc/systemd/system/easyrun.service <<EOF
+sudo tee /etc/systemd/system/hop.service <<EOF
 [Unit]
-Description=EasyRun Agent
+Description=Hop Agent
 After=network.target
 
 [Service]
@@ -95,7 +95,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-sudo systemctl enable --now easyrun
+sudo systemctl enable --now hop
 ```
 
 ## What Gets Auto-Detected

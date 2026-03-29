@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
-	"easyrun/pkg/config"
+	"hop/internal/types"
+	"hop/pkg/config"
 )
 
 // ---- mocks ----

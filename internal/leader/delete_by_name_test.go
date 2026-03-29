@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // TestDeleteJobByName verifies delete by name works (API compatibility)

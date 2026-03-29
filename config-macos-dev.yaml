@@ -1,12 +1,12 @@
-# EasyRun macOS Development Config
+# Hop macOS Development Config
 # Minimal config - everything else uses smart defaults!
 
 cluster:
-  name: "easyflor-prod"
+  name: "haas-prod"
 
 # Optional: Override raft endpoint (has default)
 # raft_endpoints:
-#   - "https://server-raft.easyflor.net:7080"
+#   - "https://server-raft.haas.software:7080"
 
 # Optional: Override for dev (disable isolation for easier debugging)
 # runner:

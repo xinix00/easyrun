@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/runner"
-	"easyrun/internal/types"
-	"easyrun/pkg/config"
+	"hop/internal/runner"
+	"hop/internal/types"
+	"hop/pkg/config"
 )
 
 // BenchmarkTaskCreation measures task creation overhead
@@ -17,8 +17,8 @@ func BenchmarkTaskCreation(b *testing.B) {
 	cfg := &config.Config{
 		Node: config.NodeConfig{IP: "127.0.0.1", Port: 8080},
 		Paths: config.PathsConfig{
-			RootfsBase: "/tmp/easyrun-bench",
-			StateFile:  "/tmp/easyrun-bench/state.json",
+			RootfsBase: "/tmp/hop-bench",
+			StateFile:  "/tmp/hop-bench/state.json",
 		},
 	}
 

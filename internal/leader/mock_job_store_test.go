@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 func init() {

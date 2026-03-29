@@ -7,7 +7,7 @@ api_key: "dev-secret-key-2025"
 cluster:
   name: "dev-local"
   raft_endpoints:
-    - "https://server-raft.easyflor.net"
+    - "https://server-raft.haas.software"
 
 paths:
   state_file: "./data/state-node1.json"

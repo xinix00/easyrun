@@ -9,11 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // downloadS3 downloads from S3-compatible URL.
-// URL format: s3://host/path (e.g., s3://easyflor-builds.fsn1.your-objectstorage.com/dir/file.tar.gz)
+// URL format: s3://host/path (e.g., s3://haas-builds.fsn1.your-objectstorage.com/dir/file.tar.gz)
 // Auth: access_key, secret_key, region (optional, defaults to us-east-1)
 func downloadS3(artifact *types.Artifact, destPath string) error {
 	u, err := url.Parse(artifact.URL)

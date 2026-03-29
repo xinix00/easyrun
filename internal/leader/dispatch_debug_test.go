@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // TestDispatchSimpleJob verifies basic dispatch still works after refactor

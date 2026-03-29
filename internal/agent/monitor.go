@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 const defaultFailureThreshold = 3

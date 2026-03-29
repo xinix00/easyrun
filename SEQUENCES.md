@@ -1,6 +1,6 @@
-# EasyRun Sequence Diagrams
+# Hop Sequence Diagrams
 
-Overzicht van alle belangrijke call flows in easyrun, inclusief de volgorde waarin componenten elkaar aanroepen.
+Overzicht van alle belangrijke call flows in hop, inclusief de volgorde waarin componenten elkaar aanroepen.
 
 ## Inhoudsopgave
 
@@ -16,7 +16,7 @@ Overzicht van alle belangrijke call flows in easyrun, inclusief de volgorde waar
 - [10. Task Monitoring & Restart](#10-task-monitoring--restart)
 - [11. Dead Agent Detection & Reconciliation](#11-dead-agent-detection--reconciliation)
 - [12. Leader Failover](#12-leader-failover)
-- [13. Proxy to Leader (easydns/easylb/easyprom)](#13-proxy-to-leader)
+- [13. Proxy to Leader (hopdns/hoplb/hopprom)](#13-proxy-to-leader)
 - [14. Agent Isolation (network split)](#14-agent-isolation-network-split)
 - [Bevindingen: Volgordes & Mogelijke Issues](#bevindingen)
 
@@ -24,7 +24,7 @@ Overzicht van alle belangrijke call flows in easyrun, inclusief de volgorde waar
 
 ## 1. Agent Startup
 
-Wat er gebeurt wanneer een easyrun agent proces start.
+Wat er gebeurt wanneer een hop agent proces start.
 
 ```mermaid
 sequenceDiagram
@@ -56,7 +56,7 @@ sequenceDiagram
     A->>R: Cleanup()
     R->>FS: RemoveAll(rootfsBase) + MkdirAll
     A->>DR: Cleanup()
-    DR->>DR: docker ps -a --filter name=easyrun-
+    DR->>DR: docker ps -a --filter name=hop-
     DR->>DR: docker rm -f (elk)
 
     M->>A: LoadState()
@@ -86,7 +86,7 @@ sequenceDiagram
     participant SL as stateLoop
 
     M->>D: TryBecomeLeader()
-    D->>D: POST /leader/{cluster} naar EasyRaft
+    D->>D: POST /leader/{cluster} naar HopRaft
     D-->>M: true (success)
 
     M->>M: becomeLeader()
@@ -136,7 +136,7 @@ sequenceDiagram
 
     alt Wij zijn leader
         T->>D: RenewLease()
-        D->>D: POST /leader/{cluster} naar EasyRaft
+        D->>D: POST /leader/{cluster} naar HopRaft
         alt Raft bereikbaar
             D-->>T: true
             T->>T: failCount = 0
@@ -557,7 +557,7 @@ sequenceDiagram
     participant A1 as Agent A (was follower)
     participant A2 as Agent B (was follower)
     participant OLD as Old Leader (crashed)
-    participant RAFT as EasyRaft
+    participant RAFT as HopRaft
     participant NL as New Leader (A1)
 
     Note over OLD: T=0s: Leader crasht
@@ -611,11 +611,11 @@ sequenceDiagram
 
 ## 13. Proxy to Leader
 
-Hoe easydns/easylb/easyprom cluster data opvragen via hun lokale agent.
+Hoe hopdns/hoplb/hopprom cluster data opvragen via hun lokale agent.
 
 ```mermaid
 sequenceDiagram
-    participant S as easydns/easylb/easyprom
+    participant S as hopdns/hoplb/hopprom
     participant AG as Lokale Agent (:8080)
     participant D as Discovery
     participant API as Leader API (:9080)

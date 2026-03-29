@@ -7,8 +7,8 @@ import (
 	"log"
 	"time"
 
-	"easyrun/internal/types"
-	"easyrun/pkg/config"
+	"hop/internal/types"
+	"hop/pkg/config"
 )
 
 // Discoverer handles leader election queries.

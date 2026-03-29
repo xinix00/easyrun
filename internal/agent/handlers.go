@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"easyrun/internal/runner"
-	"easyrun/internal/types"
-	"easyrun/pkg/httputil"
+	"hop/internal/runner"
+	"hop/internal/types"
+	"hop/pkg/httputil"
 
 	"github.com/google/uuid"
 )

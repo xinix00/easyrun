@@ -1,6 +1,6 @@
 # Performance Benchmarks
 
-Comprehensive performance tests for easyrun's critical components.
+Comprehensive performance tests for hop's critical components.
 
 ## Running Benchmarks
 

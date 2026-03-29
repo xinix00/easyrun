@@ -29,7 +29,7 @@ type NodeConfig struct {
 // ClusterConfig holds cluster-wide configuration
 type ClusterConfig struct {
 	Name         string   `yaml:"name"`
-	RaftEndpoints []string `yaml:"raft_endpoints"` // EasyRaft endpoints (e.g., ["http://10.0.0.1:8080", "http://10.0.0.2:8080"])
+	RaftEndpoints []string `yaml:"raft_endpoints"` // HopRaft endpoints (e.g., ["http://10.0.0.1:8080", "http://10.0.0.2:8080"])
 }
 
 // CapacityConfig holds resource capacity configuration

@@ -9,7 +9,7 @@ import (
 	"sort"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // Run starts the leader's state loop and dead agent checker

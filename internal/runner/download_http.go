@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 const downloadTimeout = 5 * time.Minute

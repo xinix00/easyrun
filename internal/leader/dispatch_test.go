@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // ============== DISPATCH TESTS ==============
@@ -229,7 +229,7 @@ func TestLeaderDispatchCountMinusOne(t *testing.T) {
 	}
 	time.Sleep(10 * time.Millisecond)
 
-	job := &types.Job{Name: "easydns", Command: "/usr/bin/easydns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
+	job := &types.Job{Name: "hopdns", Command: "/usr/bin/hopdns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
 
 	err := leader.DispatchJob(job)
 	if err != nil {
@@ -260,7 +260,7 @@ func TestLeaderCountMinusOneNewAgent(t *testing.T) {
 	leader.Heartbeat("agent-a", agent1.URL(), nil, time.Time{}, "")
 	time.Sleep(10 * time.Millisecond)
 
-	job := &types.Job{Name: "easydns", Command: "/usr/bin/easydns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
+	job := &types.Job{Name: "hopdns", Command: "/usr/bin/hopdns", Count: -1, HealthCheck: &types.HealthCheck{InitialTimeout: 2 * time.Second}}
 	_ = leader.DispatchJob(job)
 	time.Sleep(10 * time.Millisecond)
 

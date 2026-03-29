@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // ============== ROBUSTNESS TESTS ==============

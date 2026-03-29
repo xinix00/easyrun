@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // ============== HTTP HANDLER TESTS ==============

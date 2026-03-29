@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // startLeader creates and starts a leader for benchmarking.

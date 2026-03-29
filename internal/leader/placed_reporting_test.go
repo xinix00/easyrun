@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // TestGetPlacedCounts_PreExistingJobs verifies placed counts work for jobs
@@ -148,7 +148,7 @@ func TestGetPlacedCounts_MixedPreExistingAndNew(t *testing.T) {
 func TestGetPlacedCounts_DaemonJob(t *testing.T) {
 	store := NewMockJobStore()
 
-	daemonJob := &types.Job{Name: "easydns", Command: "./easydns", Count: -1}
+	daemonJob := &types.Job{Name: "hopdns", Command: "./hopdns", Count: -1}
 	store.StoreJob(daemonJob)
 	store.stateTime = time.Now()
 
@@ -159,14 +159,14 @@ func TestGetPlacedCounts_DaemonJob(t *testing.T) {
 	go l.stateLoop(ctx)
 
 	// 3 agents each running the daemon
-	l.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", map[string]int{"easydns": 1})
-	l.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", map[string]int{"easydns": 1})
-	l.RegisterAgent("agent-3", "http://10.0.0.3:8080", "", map[string]int{"easydns": 1})
+	l.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", map[string]int{"hopdns": 1})
+	l.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", map[string]int{"hopdns": 1})
+	l.RegisterAgent("agent-3", "http://10.0.0.3:8080", "", map[string]int{"hopdns": 1})
 	time.Sleep(20 * time.Millisecond)
 
 	placed := l.GetPlacedCounts()
-	if placed["easydns"] != 3 {
-		t.Errorf("easydns placed = %d, want 3", placed["easydns"])
+	if placed["hopdns"] != 3 {
+		t.Errorf("hopdns placed = %d, want 3", placed["hopdns"])
 	}
 }
 

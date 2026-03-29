@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // downloadArtifact downloads and extracts an artifact to destDir

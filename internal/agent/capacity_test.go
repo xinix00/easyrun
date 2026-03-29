@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // ============== CAPACITY CHECK TESTS ==============

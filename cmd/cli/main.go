@@ -14,7 +14,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 var (
@@ -23,8 +23,8 @@ var (
 )
 
 func main() {
-	flag.StringVar(&leaderAddr, "leader", envOr("EASYRUN_LEADER", "localhost:9080"), "Leader address")
-	flag.StringVar(&apiKey, "api-key", os.Getenv("EASYRUN_API_KEY"), "API key for authentication")
+	flag.StringVar(&leaderAddr, "leader", envOr("HOP_LEADER", "localhost:9080"), "Leader address")
+	flag.StringVar(&apiKey, "api-key", os.Getenv("HOP_API_KEY"), "API key for authentication")
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "Usage: run [flags] <command> [args]\n\nCommands:\n  apply    Create or update a job (upsert by name)\n  delete   Delete a job and all its tasks\n  status   Show cluster status\n  agents   List agents or show agent details\n  logs     Stream task logs\n\nFlags:\n")
 		flag.PrintDefaults()

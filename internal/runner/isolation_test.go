@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // skipWithoutIsolation skips if the OS cannot run isolated processes

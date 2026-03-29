@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall"
 
-	"easyrun/internal/types"
+	"hop/internal/types"
 )
 
 // wrapCommand on macOS wraps the command with ulimit for memory limiting

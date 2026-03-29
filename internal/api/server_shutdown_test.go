@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"easyrun/internal/leader"
+	"hop/internal/leader"
 )
 
 // TestServerPortNotReleasedWithoutStop proves that cancelling the context

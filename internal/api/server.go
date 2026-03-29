@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"easyrun/internal/leader"
-	"easyrun/internal/types"
-	"easyrun/pkg/httputil"
+	"hop/internal/leader"
+	"hop/internal/types"
+	"hop/pkg/httputil"
 )
 
 // Server provides the HTTP API for the leader
