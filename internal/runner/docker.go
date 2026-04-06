@@ -112,11 +112,8 @@ func (r *DockerRunner) Run(job *types.Job, task *types.Task) error {
 	// Build port bindings and exposed ports
 	portBindings := map[string][]portBinding{}
 	exposedPorts := map[string]struct{}{}
-	for name, hostPort := range task.Ports {
-		containerPort := job.Ports[name]
-		if containerPort == 0 {
-			containerPort = hostPort
-		}
+	for _, hostPort := range task.Ports {
+		containerPort := hostPort // container port = host port (same convention)
 		key := fmt.Sprintf("%d/tcp", containerPort)
 		exposedPorts[key] = struct{}{}
 		portBindings[key] = []portBinding{{HostPort: fmt.Sprintf("%d", hostPort)}}

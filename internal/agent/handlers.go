@@ -20,11 +20,6 @@ import (
 
 // proxyToLeader forwards requests to the current leader
 func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
-	if a.getLeader == nil {
-		httputil.WriteError(w, http.StatusServiceUnavailable, "leader discovery not configured")
-		return
-	}
-
 	leaderAddr := a.getLeader()
 	if leaderAddr == "" {
 		httputil.WriteError(w, http.StatusServiceUnavailable, "no leader available")
@@ -61,10 +56,6 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 // proxySSEToLeader forwards the SSE event stream from the leader.
 // Uses a dedicated client without timeout and flushes after each SSE event.
 func (a *Agent) proxySSEToLeader(w http.ResponseWriter, r *http.Request) {
-	if a.getLeader == nil {
-		httputil.WriteError(w, http.StatusServiceUnavailable, "leader discovery not configured")
-		return
-	}
 	leaderAddr := a.getLeader()
 	if leaderAddr == "" {
 		httputil.WriteError(w, http.StatusServiceUnavailable, "no leader available")
@@ -108,9 +99,6 @@ func (a *Agent) proxySSEToLeader(w http.ResponseWriter, r *http.Request) {
 // notifyLeader sends a lightweight event to the leader's /v1/notify endpoint.
 // Events: "start" (process started), "started" (healthy), "crash", "stop".
 func (a *Agent) notifyLeader(jobName, event string) {
-	if a.getLeader == nil {
-		return
-	}
 	addr := a.getLeader()
 	if addr == "" {
 		return
@@ -133,10 +121,7 @@ func (a *Agent) notifyLeader(jobName, event string) {
 
 // handleLeader returns the current leader address
 func (a *Agent) handleLeader(w http.ResponseWriter, r *http.Request) {
-	leader := ""
-	if a.getLeader != nil {
-		leader = a.getLeader()
-	}
+	leader := a.getLeader()
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"leader": leader})
 }
 
@@ -492,6 +477,7 @@ func (a *Agent) restartTask(task *types.Task) {
 				t.State = types.TaskFailed
 			}
 		})
+		delete(a.checkStates, task.ID)
 		return
 	}
 
@@ -547,6 +533,7 @@ func (a *Agent) restartTask(task *types.Task) {
 	}
 
 	log.Printf("Restarted task %s -> %s (job %s), restart #%d", task.ID, replacement.ID, job.Name, replacement.RestartCount)
+	go a.notifyLeader(job.Name, "started")
 }
 
 // deleteJob removes job definition AND cleans up all tasks by job name
@@ -565,6 +552,9 @@ func (a *Agent) deleteJob(jobName string) int {
 	a.scheduleSave()
 
 	a.stopTasks(tasks)
+	for _, task := range tasks {
+		delete(a.checkStates, task.ID)
+	}
 	log.Printf("Deleted job %s: %d tasks stopped", jobName, len(tasks))
 
 	go a.notifyLeader(jobName, "stop")
