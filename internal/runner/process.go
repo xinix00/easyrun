@@ -364,7 +364,7 @@ func (r *ExecRunner) Cleanup() error {
 
 	// Remove everything and recreate
 	os.RemoveAll(base)
-	return os.MkdirAll(base, 0755)
+	return os.MkdirAll(base, 0777)
 }
 
 // lookupCredential resolves a username to UID/GID for process credential switching
