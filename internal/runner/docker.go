@@ -20,7 +20,7 @@ const (
 	containerPrefix      = "hop-"
 	dockerStopTimeout    = 10 // seconds
 	dockerCommandTimeout = 30 * time.Second
-	dockerSocket         = "/var/run/docker.sock"
+	defaultDockerSocket  = "/var/run/docker.sock"
 )
 
 // DockerRunner runs jobs as Docker containers via the Docker API directly.
@@ -34,13 +34,16 @@ type DockerRunner struct {
 }
 
 // NewDockerRunner creates a new Docker runner
-func NewDockerRunner(nodeAttrs map[string]string) *DockerRunner {
+func NewDockerRunner(nodeAttrs map[string]string, socketPath string) *DockerRunner {
+	if socketPath == "" {
+		socketPath = defaultDockerSocket
+	}
 	return &DockerRunner{
 		nodeAttrs: nodeAttrs,
 		client: &http.Client{
 			Transport: &http.Transport{
 				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-					return net.Dial("unix", dockerSocket)
+					return net.Dial("unix", socketPath)
 				},
 			},
 		},

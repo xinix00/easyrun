@@ -7,7 +7,7 @@ import (
 )
 
 func TestDockerRunnerRequiresImage(t *testing.T) {
-	r := NewDockerRunner(nil)
+	r := NewDockerRunner(nil, "")
 	job := &types.Job{
 		Name:    "no-image",
 		Command: "echo hello",
@@ -21,7 +21,7 @@ func TestDockerRunnerRequiresImage(t *testing.T) {
 }
 
 func TestDockerRunnerStatusNotFound(t *testing.T) {
-	r := NewDockerRunner(nil)
+	r := NewDockerRunner(nil, "")
 	task := &types.Task{
 		ID:    "nonexistent-container-id",
 		Image: "nginx:latest",
@@ -37,7 +37,7 @@ func TestDockerRunnerStatusNotFound(t *testing.T) {
 }
 
 func TestDockerRunnerStopNonExistent(t *testing.T) {
-	r := NewDockerRunner(nil)
+	r := NewDockerRunner(nil, "")
 	task := &types.Task{
 		ID:    "nonexistent-container-id",
 		Image: "nginx:latest",
@@ -51,7 +51,7 @@ func TestDockerRunnerStopNonExistent(t *testing.T) {
 }
 
 func TestDockerRunnerGetStdoutStderrNil(t *testing.T) {
-	r := NewDockerRunner(nil)
+	r := NewDockerRunner(nil, "")
 
 	if r.GetStdout("nonexistent") != nil {
 		t.Error("GetStdout should return nil for unknown task")
@@ -62,7 +62,7 @@ func TestDockerRunnerGetStdoutStderrNil(t *testing.T) {
 }
 
 func TestDockerRunnerCleanup(t *testing.T) {
-	r := NewDockerRunner(nil)
+	r := NewDockerRunner(nil, "")
 
 	// Cleanup should not error even if docker is not available
 	err := r.Cleanup()

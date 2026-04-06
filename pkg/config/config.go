@@ -46,7 +46,8 @@ type PathsConfig struct {
 
 // RunnerConfig holds runner configuration
 type RunnerConfig struct {
-	Isolate bool `yaml:"isolate"` // Enable process isolation (chroot on Linux, sandbox on macOS). Default: true
+	Isolate      bool   `yaml:"isolate"`       // Enable process isolation (chroot on Linux, sandbox on macOS). Default: true
+	DockerSocket string `yaml:"docker_socket"` // Docker daemon socket path. Default: /tmp/hop/docker.sock
 }
 
 // TimeoutsConfig holds timeout configuration
@@ -78,7 +79,8 @@ func DefaultConfig() *Config {
 			RootfsBase: "/tmp/hop",
 		},
 		Runner: RunnerConfig{
-			Isolate: true, // Security by default
+			Isolate:      true,
+			DockerSocket: "/var/run/docker.sock",
 		},
 		Timeouts: TimeoutsConfig{
 			HealthCheckInterval: 5 * time.Second,

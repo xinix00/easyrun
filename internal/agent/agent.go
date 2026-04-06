@@ -97,7 +97,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		endpoint:     endpoint,
 		config:       cfg,
 		execRunner:   r,
-		dockerRunner: runner.NewDockerRunner(attrs),
+		dockerRunner: runner.NewDockerRunner(attrs, cfg.Runner.DockerSocket),
 		sysInfo:      GetSystemInfo(), // detect once at startup
 		attributes:   attrs,
 		ops:          make(chan func(*agentState), stateChannelBufferSize),
