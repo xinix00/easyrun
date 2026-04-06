@@ -7,9 +7,11 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
-	"strings"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -352,6 +354,17 @@ func (r *ExecRunner) Cleanup() error {
 	// Remove everything and recreate
 	os.RemoveAll(base)
 	return os.MkdirAll(base, 0755)
+}
+
+// lookupCredential resolves a username to UID/GID for process credential switching
+func lookupCredential(username string) (*syscall.Credential, string, error) {
+	u, err := user.Lookup(username)
+	if err != nil {
+		return nil, "", fmt.Errorf("user %q not found: %w", username, err)
+	}
+	uid, _ := strconv.Atoi(u.Uid)
+	gid, _ := strconv.Atoi(u.Gid)
+	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}, u.HomeDir, nil
 }
 
 // copyFile copies a file from src to dst

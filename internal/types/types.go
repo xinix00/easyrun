@@ -76,6 +76,7 @@ type Job struct {
 	Driver       string            `json:"driver,omitempty"`         // "exec" (default) or "docker"
 	Image        string            `json:"image,omitempty"`          // Docker image (only for driver=docker)
 	Artifacts    []Artifact        `json:"artifacts,omitempty"`      // binary/assets to download (agent picks first matching)
+	User         string            `json:"user,omitempty"`           // run as this user (default: inherit from agent)
 	Command      string            `json:"command,omitempty"`
 	Count        int               `json:"count,omitempty"`          // number of instances (default 1)
 	Ports        map[string]int    `json:"ports,omitempty"`          // process: port name -> host port (0 = dynamic), docker: port name -> container port

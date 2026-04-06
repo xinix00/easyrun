@@ -14,19 +14,13 @@ import (
 	"hop/internal/types"
 )
 
-// wrapCommand on macOS wraps the command with ulimit for memory limiting
+// wrapCommand on macOS is a no-op — macOS does not support ulimit -v
 func (r *ExecRunner) wrapCommand(command string, memoryLimit uint64) string {
-	if memoryLimit == 0 {
-		return command
-	}
-	// ulimit -v sets virtual memory limit in KB
-	return fmt.Sprintf("ulimit -v %d; %s", memoryLimit/1024, command)
+	return command
 }
 
-// applyMemoryLimit on macOS is a no-op
-// Memory limiting is done via ulimit in wrapCommand (before exec)
+// applyMemoryLimit on macOS is a no-op — no cgroups, no reliable memory limiting
 func (r *ExecRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
-	// Already handled via ulimit wrapper
 }
 
 // mountVolume on macOS uses symlinks
@@ -61,14 +55,24 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 		cmd.Dir = taskDir
 	}
 
+	sysProcAttr := &syscall.SysProcAttr{
+		Setpgid: true,
+	}
+	if job.User != "" {
+		cred, _, err := lookupCredential(job.User)
+		if err != nil {
+			log.Printf("Warning: %v, running as current user", err)
+		} else {
+			sysProcAttr.Credential = cred
+		}
+	}
+
 	cmd.Env = append([]string{
 		fmt.Sprintf("HOME=%s", taskDir),
 		fmt.Sprintf("TMPDIR=%s/tmp", taskDir),
 		"PATH=/usr/local/bin:/usr/bin:/bin",
 	}, portEnvVars...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true,
-	}
+	cmd.SysProcAttr = sysProcAttr
 
 	for k, v := range job.Env {
 		cmd.Env = append(cmd.Env, fmt.Sprintf("%s=%s", k, v))

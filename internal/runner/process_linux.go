@@ -4,6 +4,7 @@ package runner
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -75,15 +76,24 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 		}
 	} else {
 		// Non-isolated mode
+		sysProcAttr := &syscall.SysProcAttr{
+			Setpgid: true,
+		}
+		if job.User != "" {
+			cred, _, err := lookupCredential(job.User)
+			if err != nil {
+				log.Printf("Warning: %v, running as current user", err)
+			} else {
+				sysProcAttr.Credential = cred
+			}
+		}
 		cmd.Dir = taskDir
 		cmd.Env = []string{
 			fmt.Sprintf("HOME=%s", taskDir),
 			fmt.Sprintf("TMPDIR=%s/tmp", taskDir),
 			"PATH=/usr/local/bin:/usr/bin:/bin",
 		}
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Setpgid: true,
-		}
+		cmd.SysProcAttr = sysProcAttr
 	}
 
 	cmd.Env = append(cmd.Env, portEnvVars...)
