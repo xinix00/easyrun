@@ -244,7 +244,15 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 
 	taskDir := filepath.Join(base, taskID)
 
-	// Create directory structure
+	// Resolve user for ownership
+	uid, gid := -1, -1
+	if job.User != "" {
+		if cred, _, err := lookupCredential(job.User); err == nil {
+			uid, gid = int(cred.Uid), int(cred.Gid)
+		}
+	}
+
+	// Create directory structure (chown if user is set so child entries inherit)
 	dirs := []string{
 		taskDir,
 		filepath.Join(taskDir, "tmp"),
@@ -252,6 +260,9 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return "", fmt.Errorf("failed to create %s: %w", dir, err)
+		}
+		if uid >= 0 {
+			_ = os.Chown(dir, uid, gid)
 		}
 	}
 
