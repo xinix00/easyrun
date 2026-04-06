@@ -487,20 +487,8 @@ func (s *agentState) resourceUsage() (cpu int, mem uint64) {
 }
 
 // allocatePortsForJob allocates host ports appropriate for the job type.
-// For Docker jobs, Ports values are container ports — host ports are always dynamic.
-// For process jobs, uses the existing logic (0 = dynamic, >0 = fixed).
+// For all jobs: 0 = dynamic (allocate free port), >0 = fixed (use as-is).
 func (a *Agent) allocatePortsForJob(job *types.Job) (map[string]int, error) {
-	if job.Driver == types.DriverDocker {
-		ports := make(map[string]int)
-		for name := range job.Ports {
-			p, err := getFreePort()
-			if err != nil {
-				return nil, fmt.Errorf("failed to allocate host port for %s: %w", name, err)
-			}
-			ports[name] = p
-		}
-		return ports, nil
-	}
 	return allocatePorts(job.Ports)
 }
 
