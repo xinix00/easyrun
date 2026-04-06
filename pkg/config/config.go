@@ -42,8 +42,6 @@ type CapacityConfig struct {
 type PathsConfig struct {
 	StateFile  string `yaml:"state_file"`
 	RootfsBase string `yaml:"rootfs_base"`
-	Artifacts  string `yaml:"artifacts"`
-	Cache      string `yaml:"cache"`
 }
 
 // RunnerConfig holds runner configuration
@@ -77,9 +75,7 @@ func DefaultConfig() *Config {
 		},
 		Paths: PathsConfig{
 			StateFile:  "./data/state.json",
-			RootfsBase: "./data/rootfs",
-			Artifacts:  "./data/artifacts",
-			Cache:      "./data/cache",
+			RootfsBase: "/tmp/hop",
 		},
 		Runner: RunnerConfig{
 			Isolate: true, // Security by default

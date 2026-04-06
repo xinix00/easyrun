@@ -68,9 +68,6 @@ type Config struct {
 	// RootfsBase is the base path for task directories
 	RootfsBase string
 
-	// ArtifactsDir is where downloaded artifacts are stored
-	ArtifactsDir string
-
 	// MaxCPUShares is the total CPU shares for nice calculation (0 = auto-detect from CPU cores)
 	MaxCPUShares int
 

@@ -86,7 +86,6 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 	if r == nil {
 		r = runner.NewExecRunner(&runner.Config{
 			RootfsBase:   cfg.Paths.RootfsBase,
-			ArtifactsDir: cfg.Paths.Artifacts,
 			MaxCPUShares: cfg.Capacity.CPUShares,
 			Isolate:      cfg.Runner.Isolate,
 			NodeAttrs:    attrs,
