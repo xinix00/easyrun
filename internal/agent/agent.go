@@ -104,6 +104,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		httpClient:   &http.Client{Timeout: proxyTimeout},
 		apiKey:       cfg.APIKey,
 		checkStates:  make(map[string]*checkState),
+		getLeader:    func() string { return "" }, // overridden by SetLeaderFunc; default = "no leader"
 	}
 }
 

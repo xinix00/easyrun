@@ -6,6 +6,8 @@ import (
 	"time"
 )
 
+func intPtr(n int) *int { return &n }
+
 func TestTaskStateConstants(t *testing.T) {
 	tests := []struct {
 		state TaskState
@@ -50,7 +52,7 @@ func TestJobJSONRoundtrip(t *testing.T) {
 			Interval: 10 * time.Second,
 			Timeout:  5 * time.Second,
 		},
-		MaxRestarts: 5,
+		MaxRestarts: intPtr(5),
 	}
 
 	data, err := json.Marshal(job)

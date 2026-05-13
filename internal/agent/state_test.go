@@ -10,6 +10,9 @@ import (
 	"hop/pkg/config"
 )
 
+// intPtr returns a pointer to an int literal (helper for *int struct fields).
+func intPtr(n int) *int { return &n }
+
 // testConfig creates a test configuration
 func testConfig() *config.Config {
 	return &config.Config{

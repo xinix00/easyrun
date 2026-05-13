@@ -31,7 +31,7 @@ func TestChaos_AllTasksCrashSimultaneously(t *testing.T) {
 		job := &types.Job{
 			Name:        fmt.Sprintf("job-%d", i),
 			Command:     "./app",
-			MaxRestarts: 2,
+			MaxRestarts: intPtr(2),
 		}
 
 		task := newTask(job)
@@ -84,7 +84,7 @@ func TestChaos_TaskExceedsMaxRestarts(t *testing.T) {
 	job := &types.Job{
 		Name:        "crasher",
 		Command:     "./crasher",
-		MaxRestarts: 3,
+		MaxRestarts: intPtr(3),
 	}
 
 	task := newTask(job)
@@ -221,7 +221,7 @@ func TestChaos_TaskZombie(t *testing.T) {
 	defer cancel()
 	go agent.stateLoop(ctx)
 
-	job := &types.Job{Name: "zombie-job", Command: "./app", MaxRestarts: 2}
+	job := &types.Job{Name: "zombie-job", Command: "./app", MaxRestarts: intPtr(2)}
 	task := newTask(job)
 	_ = agent.startJob(job, task)
 

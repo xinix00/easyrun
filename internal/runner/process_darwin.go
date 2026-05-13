@@ -115,7 +115,7 @@ func (r *ExecRunner) generateSandboxProfile(taskDir string, job *types.Job) stri
 	return sb.String()
 }
 
-// linkLibraries is a no-op on macOS with sandbox (not needed)
-func (r *ExecRunner) linkLibraries(taskDir string) {
-	// Sandbox allows access to system libraries directly
+// setupIsolationEnv is a no-op on macOS: sandbox-exec runs against the host
+// filesystem (no chroot), so the task directory needs no special preparation.
+func (r *ExecRunner) setupIsolationEnv(taskDir string) {
 }

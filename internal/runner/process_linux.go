@@ -66,9 +66,12 @@ func (r *ExecRunner) mountVolume(hostPath, targetPath string) error {
 	return syscall.Mount(hostPath, targetPath, "", syscall.MS_BIND, "")
 }
 
-// unmountVolume cleans up a mounted volume
+// unmountVolume cleans up a mounted volume. MNT_DETACH (lazy unmount) keeps
+// cleanup safe even when something inside still holds a reference — without it,
+// EBUSY would leave the bind mount in place and a subsequent RemoveAll on
+// taskDir would walk into the bound source and delete files from the host.
 func (r *ExecRunner) unmountVolume(targetPath string) error {
-	return syscall.Unmount(targetPath, 0)
+	return syscall.Unmount(targetPath, syscall.MNT_DETACH)
 }
 
 // setupCommand configures the command with optional namespace isolation
@@ -124,17 +127,42 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 	return cmd
 }
 
-// linkLibraries symlinks required libraries for chroot on Linux
-func (r *ExecRunner) linkLibraries(taskDir string) {
-	// Link common library paths
-	libs := []string{
-		"/lib",
-		"/lib64",
-		"/usr/lib",
+// setupIsolationEnv prepares the chroot with read-only bind mounts of system
+// paths so /bin/sh and shared libraries resolve correctly inside the jail.
+// Absolute symlinks would break here: once chroot is applied, a target like
+// "/bin/sh" resolves back to taskDir/bin/sh — the link itself — and the kernel
+// returns ELOOP. Bind mounts work because they propagate into the child's
+// mount namespace via CLONE_NEWNS.
+func (r *ExecRunner) setupIsolationEnv(taskDir string) {
+	binds := []string{"/bin", "/usr", "/lib", "/lib64"}
+	for _, src := range binds {
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		target := filepath.Join(taskDir, src)
+		if err := os.MkdirAll(target, 0755); err != nil {
+			log.Printf("Warning: failed to create bind target %s: %v", target, err)
+			continue
+		}
+		if err := syscall.Mount(src, target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+			log.Printf("Warning: failed to bind-mount %s into chroot: %v", src, err)
+			continue
+		}
+		if err := syscall.Mount("", target, "", syscall.MS_REMOUNT|syscall.MS_BIND|syscall.MS_RDONLY, ""); err != nil {
+			log.Printf("Warning: failed to remount %s read-only: %v", target, err)
+		}
 	}
-	for _, lib := range libs {
-		if _, err := os.Stat(lib); err == nil {
-			_ = os.Symlink(lib, filepath.Join(taskDir, lib))
+
+	// Single-file bind for resolv.conf so the rest of /etc (shadow, passwd, …)
+	// stays hidden from the task.
+	if _, err := os.Stat("/etc/resolv.conf"); err == nil {
+		etcDir := filepath.Join(taskDir, "etc")
+		if err := os.MkdirAll(etcDir, 0755); err == nil {
+			target := filepath.Join(etcDir, "resolv.conf")
+			if f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0644); err == nil {
+				_ = f.Close()
+				_ = syscall.Mount("/etc/resolv.conf", target, "", syscall.MS_BIND, "")
+			}
 		}
 	}
 }

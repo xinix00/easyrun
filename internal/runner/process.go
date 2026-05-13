@@ -3,7 +3,6 @@ package runner
 import (
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -294,30 +293,6 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 	return taskDir, nil
 }
 
-// setupIsolationEnv creates symlinks for minimal shell environment (Linux chroot)
-func (r *ExecRunner) setupIsolationEnv(taskDir string) {
-	// Create directories
-	dirs := []string{
-		filepath.Join(taskDir, "bin"),
-		filepath.Join(taskDir, "usr", "bin"),
-		filepath.Join(taskDir, "lib"),
-		filepath.Join(taskDir, "usr", "lib"),
-		filepath.Join(taskDir, "etc"),
-	}
-	for _, dir := range dirs {
-		_ = os.MkdirAll(dir, 0755)
-	}
-
-	// Symlink shell
-	_ = os.Symlink("/bin/sh", filepath.Join(taskDir, "bin", "sh"))
-
-	// Copy resolv.conf to /etc
-	_ = r.copyFile("/etc/resolv.conf", filepath.Join(taskDir, "etc", "resolv.conf"))
-
-	// Platform-specific library linking
-	r.linkLibraries(taskDir)
-}
-
 // cleanupTaskDir removes the task directory
 func (r *ExecRunner) cleanupTaskDir(taskID string) {
 	r.mu.Lock()
@@ -381,20 +356,3 @@ func lookupCredential(username string) (*syscall.Credential, string, error) {
 	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}, u.HomeDir, nil
 }
 
-// copyFile copies a file from src to dst
-func (r *ExecRunner) copyFile(src, dst string) error {
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	_, err = io.Copy(dstFile, srcFile)
-	return err
-}

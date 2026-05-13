@@ -398,3 +398,149 @@ func TestCapacityIncludesAttributes(t *testing.T) {
 		t.Errorf("attributes[region] = %q, want %q", resp.Attributes["region"], "eu-west-1")
 	}
 }
+
+// ============== ARTIFACT-FILTERING INVARIANT (REGRESSION) ==============
+//
+// The runner expects job.Artifacts to contain at most one entry (the matched
+// one). Every code path that calls runner.Run must first funnel through
+// resolveJobForRun. Previously, restartTask bypassed this and called Run
+// with the full unfiltered list, so process.go's Artifacts[0] picked the
+// wrong entry on every restart (e.g. darwin-arm64 on a linux node).
+//
+// These tests pin both ends of that contract:
+//   - resolveJobForRun returns a filtered copy without touching the original
+//   - every runner.Run call (initial + restart) sees exactly one matched entry
+
+func TestResolveJobForRunFiltersToSingleMatch(t *testing.T) {
+	cfg := testConfig()
+	cfg.Node.Attributes = map[string]string{"node.os": "linux", "node.arch": "amd64"}
+	agent := New(cfg, "linux-node", NewMockRunner())
+
+	job := &types.Job{
+		Name: "test",
+		Artifacts: []types.Artifact{
+			{URL: "darwin-arm64", Match: map[string]string{"node.os": "darwin", "node.arch": "arm64"}},
+			{URL: "linux-amd64", Match: map[string]string{"node.os": "linux", "node.arch": "amd64"}},
+		},
+	}
+
+	runJob, err := agent.resolveJobForRun(job)
+	if err != nil {
+		t.Fatalf("resolveJobForRun: %v", err)
+	}
+	if len(runJob.Artifacts) != 1 {
+		t.Fatalf("Got %d artifacts, want 1", len(runJob.Artifacts))
+	}
+	if runJob.Artifacts[0].URL != "linux-amd64" {
+		t.Errorf("URL = %q, want linux-amd64", runJob.Artifacts[0].URL)
+	}
+	// Stored job must not be mutated — the leader pushes the full list and
+	// other agents (with different OS/arch) may resolve to a different entry.
+	if len(job.Artifacts) != 2 {
+		t.Errorf("Original job was mutated: got %d artifacts, want 2", len(job.Artifacts))
+	}
+}
+
+func TestResolveJobForRunNoMatch(t *testing.T) {
+	cfg := testConfig()
+	cfg.Node.Attributes = map[string]string{"node.os": "linux", "node.arch": "amd64"}
+	agent := New(cfg, "linux-node", NewMockRunner())
+
+	job := &types.Job{
+		Artifacts: []types.Artifact{
+			{URL: "darwin-arm64", Match: map[string]string{"node.os": "darwin"}},
+			{URL: "windows-amd64", Match: map[string]string{"node.os": "windows"}},
+		},
+	}
+
+	if _, err := agent.resolveJobForRun(job); err == nil {
+		t.Error("Expected error when no artifact matches, got nil")
+	}
+}
+
+func TestResolveJobForRunPassthroughWithoutArtifacts(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "node-1", NewMockRunner())
+
+	job := &types.Job{Name: "no-artifacts", Command: "./app"}
+	runJob, err := agent.resolveJobForRun(job)
+	if err != nil {
+		t.Fatalf("resolveJobForRun: %v", err)
+	}
+	if runJob != job {
+		t.Error("Expected same pointer when job has no artifacts (no copy needed)")
+	}
+}
+
+// TestRunnerNeverSeesMismatchedArtifactOnRestart is the regression test for
+// the bug fixed in v0.19.4: restartTask bypassed resolveArtifact, so a Linux
+// node would fetch the darwin-arm64 artifact on restart because process.go
+// blindly grabbed Artifacts[0].
+//
+// The contract is platform-agnostic: whichever artifact the agent picks on
+// the first start, every restart must pick the same one — and the runner
+// must never see more than that one entry.
+func TestRunnerNeverSeesMismatchedArtifactOnRestart(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+
+	// Capture what every Run() call sees. The lock here is the MockRunner's
+	// internal mutex (taken by Run before invoking onRun), so direct reads
+	// are safe.
+	var seen []types.Artifact
+	mockRunner.onRun = func(job *types.Job) error {
+		// Defensive copy so later mutations to job can't poison the record.
+		artifacts := append([]types.Artifact(nil), job.Artifacts...)
+		seen = append(seen, artifacts...)
+		return ErrSimulated // force restart on every attempt
+	}
+
+	agent := New(cfg, "test-node", mockRunner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Build a job with two artifacts. The match for the current host is the
+	// "wanted" one — whichever it is, restart must keep picking it.
+	wantedURL := "current-" + runtime.GOOS + "-" + runtime.GOARCH
+	otherURL := "other-platform"
+	job := &types.Job{
+		Name:    "regression",
+		Command: "./app",
+		Artifacts: []types.Artifact{
+			{URL: otherURL, Match: map[string]string{"node.os": "no-such-os"}},
+			{URL: wantedURL, Match: map[string]string{"node.os": runtime.GOOS, "node.arch": runtime.GOARCH}},
+		},
+		MaxRestarts: intPtr(1),
+	}
+
+	task := newTask(job)
+	// Mimic handleRun's capacity reservation: job + task are in state BEFORE
+	// startJob runs. Without this, startJob's Run failure leaves no task for
+	// restartTask's atomic swap to find — it would return early and Run would
+	// never be called twice, hiding the bug we're trying to catch.
+	agent.do(func(s *agentState) {
+		s.jobs[job.Name] = job
+		s.tasks[task.ID] = task
+	})
+
+	_ = agent.startJob(job, task)
+
+	// startJob fails → handleRun's caller (or test driver here) calls restartTask.
+	// We mimic that path directly to keep the test focused on the runner-facing
+	// invariant rather than the dispatch wrapper.
+	agent.restartTask(task)
+
+	// Backoff is 1s before the first restart (see handlers.go).
+	time.Sleep(1500 * time.Millisecond)
+
+	if len(seen) == 0 {
+		t.Fatal("MockRunner.Run was never called")
+	}
+	for i, art := range seen {
+		if art.URL != wantedURL {
+			t.Errorf("Run call #%d saw artifact %q, want %q — runner must only ever see the matched entry", i, art.URL, wantedURL)
+		}
+	}
+}

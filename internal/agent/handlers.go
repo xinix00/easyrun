@@ -121,8 +121,7 @@ func (a *Agent) notifyLeader(jobName, event string) {
 
 // handleLeader returns the current leader address
 func (a *Agent) handleLeader(w http.ResponseWriter, r *http.Request) {
-	leader := a.getLeader()
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{"leader": leader})
+	httputil.WriteJSON(w, http.StatusOK, map[string]string{"leader": a.getLeader()})
 }
 
 // handleHealth returns basic health status

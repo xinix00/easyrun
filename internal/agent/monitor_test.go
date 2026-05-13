@@ -650,7 +650,7 @@ func TestRestartTaskMaxRestartsExceeded(t *testing.T) {
 	job := &types.Job{
 		Name:        "max-restart",
 		Command:     "echo hello",
-		MaxRestarts: 3,
+		MaxRestarts: intPtr(3),
 	}
 
 	agent.do(func(s *agentState) {
@@ -707,7 +707,7 @@ func TestRestartTaskUnlimitedRestarts(t *testing.T) {
 	job := &types.Job{
 		Name:        "unlimited",
 		Command:     "echo hello",
-		MaxRestarts: -1, // Unlimited
+		MaxRestarts: intPtr(-1), // Unlimited
 	}
 
 	agent.do(func(s *agentState) {
@@ -753,7 +753,7 @@ func TestRestartTaskGracePeriodResetsCount(t *testing.T) {
 	job := &types.Job{
 		Name:          "grace-test",
 		Command:       "echo hello",
-		MaxRestarts:   3,
+		MaxRestarts:   intPtr(3),
 		RestartWindow: 100 * time.Millisecond, // Short window for testing
 	}
 
