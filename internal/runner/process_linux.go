@@ -42,8 +42,27 @@ func (r *ExecRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
 	}
 }
 
-// mountVolume bind-mounts a host path into the task directory
+// mountVolume bind-mounts a host path into the task directory.
+// The target must exist before mount(2) — directory for dir sources, file for file sources.
 func (r *ExecRunner) mountVolume(hostPath, targetPath string) error {
+	info, err := os.Stat(hostPath)
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		if err := os.MkdirAll(targetPath, 0755); err != nil {
+			return err
+		}
+	} else {
+		if err := os.MkdirAll(filepath.Dir(targetPath), 0755); err != nil {
+			return err
+		}
+		f, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			return err
+		}
+		_ = f.Close()
+	}
 	return syscall.Mount(hostPath, targetPath, "", syscall.MS_BIND, "")
 }
 
