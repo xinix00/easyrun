@@ -396,7 +396,11 @@ func (r *ExecRunner) Cleanup() error {
 	if err := os.MkdirAll(base, 0777); err != nil {
 		return err
 	}
-	return os.Chmod(base, 0777)
+	if err := os.Chmod(base, 0777); err != nil {
+		return err
+	}
+	ensureCgroupControllers()
+	return nil
 }
 
 // lookupCredential resolves a username to UID/GID for process credential switching

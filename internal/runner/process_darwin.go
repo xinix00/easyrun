@@ -135,8 +135,12 @@ func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
 	return ""
 }
 
-// fakeCpuinfo is a no-op on macOS for the same reason.
+// fakeCpuinfo is a no-op on macOS.
 func (r *ExecRunner) fakeCpuinfo(taskDir string, cpuShares int) string {
 	return ""
 }
+
+// ensureCgroupControllers is a no-op on macOS (no cgroups).
+func ensureCgroupControllers() {}
+
 

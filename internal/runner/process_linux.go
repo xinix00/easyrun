@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"syscall"
 
 	"hop/internal/types"
@@ -74,87 +73,96 @@ func (r *ExecRunner) attachCgroup(cmd *exec.Cmd, fd int) {
 	cmd.SysProcAttr.CgroupFD = fd
 }
 
-// fakeMeminfo writes a synthetic /proc/meminfo for the task and bind-mounts
-// it over the chroot's /proc/meminfo. Returns the mount target (for cleanup
-// tracking) or "" if no fake was created — when MemoryLimit is unset the
-// host total is honest, and when /proc isn't mounted there's nothing to
-// overmount.
-//
-// Static snapshot at start: MemFree/MemAvailable seed at full limit. We
-// don't track allocations live (that's lxcfs territory). Enough for tools
-// that read MemTotal for heap sizing.
+// fakeMeminfo writes a synthetic /proc/meminfo into the chroot. /proc as a
+// whole is NOT bound from the host; this file (and fakeCpuinfo) is all the
+// task gets. Static snapshot — enough for tools that read MemTotal at startup
+// for heap sizing.
 func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
 	if memoryLimit == 0 {
 		return ""
 	}
-	target := filepath.Join(taskDir, "proc/meminfo")
-	if _, err := os.Stat(target); err != nil {
+	procDir := filepath.Join(taskDir, "proc")
+	if err := os.MkdirAll(procDir, 0755); err != nil {
+		log.Printf("Warning: failed to create %s: %v", procDir, err)
 		return ""
 	}
-	src := filepath.Join(taskDir, ".hop-meminfo")
+	target := filepath.Join(procDir, "meminfo")
 	kb := memoryLimit / 1024
 	content := fmt.Sprintf(
 		"MemTotal:       %d kB\n"+
 			"MemFree:        %d kB\n"+
 			"MemAvailable:   %d kB\n"+
-			"Buffers:               0 kB\n"+
-			"Cached:                0 kB\n"+
-			"SwapTotal:             0 kB\n"+
-			"SwapFree:              0 kB\n",
+			"Buffers:        0 kB\n"+
+			"Cached:         0 kB\n"+
+			"SwapTotal:      0 kB\n"+
+			"SwapFree:       0 kB\n",
 		kb, kb, kb,
 	)
-	if err := os.WriteFile(src, []byte(content), 0644); err != nil {
-		log.Printf("Warning: meminfo fake write: %v", err)
-		return ""
-	}
-	if err := syscall.Mount(src, target, "", syscall.MS_BIND, ""); err != nil {
-		log.Printf("Warning: meminfo overmount: %v", err)
+	if err := os.WriteFile(target, []byte(content), 0644); err != nil {
+		log.Printf("Warning: meminfo write: %v", err)
 		return ""
 	}
 	return target
 }
 
 // fakeCpuinfo writes a synthetic /proc/cpuinfo with N processor blocks where
-// N is derived from CPUShares (1024 shares = 1 core, Docker convention) and
-// bind-mounts it over the chroot's /proc/cpuinfo. Static — anything that
-// re-counts cores at runtime is rare; init-time reads are what matter
-// (CoreCLR thread pool, Go runtime.NumCPU, etc.).
+// N is derived from CPUShares (1024 shares = 1 core, Docker convention).
+// Static. Some tools read it for heuristics — .NET ignores it in favor of
+// sched_getaffinity, so it doesn't affect Environment.ProcessorCount.
 func (r *ExecRunner) fakeCpuinfo(taskDir string, cpuShares int) string {
 	if cpuShares <= 0 {
 		return ""
 	}
-	target := filepath.Join(taskDir, "proc/cpuinfo")
-	if _, err := os.Stat(target); err != nil {
+	procDir := filepath.Join(taskDir, "proc")
+	if err := os.MkdirAll(procDir, 0755); err != nil {
 		return ""
 	}
 	cores := (cpuShares + 512) / 1024
 	if cores < 1 {
 		cores = 1
 	}
-	var sb strings.Builder
+	var buf []byte
 	for i := 0; i < cores; i++ {
-		fmt.Fprintf(&sb,
+		buf = append(buf, []byte(fmt.Sprintf(
 			"processor\t: %d\n"+
 				"vendor_id\t: HopVirtualCPU\n"+
 				"model name\t: hop virtual cpu\n"+
 				"cpu MHz\t\t: 1000.000\n"+
 				"cache size\t: 0 KB\n"+
 				"siblings\t: %d\n"+
-				"cpu cores\t: %d\n"+
-				"\n",
+				"cpu cores\t: %d\n\n",
 			i, cores, cores,
-		)
+		))...)
 	}
-	src := filepath.Join(taskDir, ".hop-cpuinfo")
-	if err := os.WriteFile(src, []byte(sb.String()), 0644); err != nil {
-		log.Printf("Warning: cpuinfo fake write: %v", err)
-		return ""
-	}
-	if err := syscall.Mount(src, target, "", syscall.MS_BIND, ""); err != nil {
-		log.Printf("Warning: cpuinfo overmount: %v", err)
+	target := filepath.Join(procDir, "cpuinfo")
+	if err := os.WriteFile(target, buf, 0644); err != nil {
+		log.Printf("Warning: cpuinfo write: %v", err)
 		return ""
 	}
 	return target
+}
+
+// ensureCgroupControllers enables +memory in the subtree_control chain so
+// per-task cgroups created later actually expose memory.max / memory.current.
+// Without this, our writes to memory.max silently no-op and Sparrow-based
+// runtimes (RavenDB) see "no cgroup limit" — which is fine for functionality
+// (they fall back to /proc/meminfo which fakeMeminfo overrides) but disables
+// the kernel-level OOM hard cap and leaves the cgroup-limit widget blank.
+//
+// Best-effort: if the root cgroup is owned by systemd we may get EACCES, in
+// which case the operator must enable +memory themselves (or run hop under a
+// delegated slice). We log and continue.
+func ensureCgroupControllers() {
+	if err := os.WriteFile("/sys/fs/cgroup/cgroup.subtree_control", []byte("+memory"), 0644); err != nil {
+		log.Printf("Warning: could not enable +memory on root cgroup: %v (continuing — set it manually or via systemd delegation)", err)
+	}
+	if err := os.MkdirAll(cgroupBase, 0755); err != nil {
+		log.Printf("Warning: could not create %s: %v", cgroupBase, err)
+		return
+	}
+	if err := os.WriteFile(cgroupBase+"/cgroup.subtree_control", []byte("+memory"), 0644); err != nil {
+		log.Printf("Warning: could not enable +memory on %s: %v", cgroupBase, err)
+	}
 }
 
 // mountVolume bind-mounts a host path into the task directory.
@@ -264,8 +272,6 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) []string {
 		{"/lib", true},
 		{"/lib64", true},
 		{"/dev", false},
-		{"/proc", true},
-		{"/sys", true},
 	}
 	var mounted []string
 	for _, b := range binds {
