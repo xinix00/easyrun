@@ -76,8 +76,22 @@ func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 	// Build port environment variables
 	portEnvVars := PortEnvVars(task.Ports)
 
+	// Pre-create the cgroup so the child is born inside it via
+	// clone3(CLONE_INTO_CGROUP). Doing this before exec avoids a race where
+	// the task reads /proc/self/cgroup (and memory.max) before we've moved
+	// it into the per-task cgroup — RavenDB and other runtimes cache that
+	// path once at startup and would otherwise see stale/wrong values.
+	cgroupFD, err := r.prepareCgroup(taskID, job.MemoryLimit)
+	if err != nil {
+		log.Printf("Warning: cgroup setup for %s failed, starting without limit: %v", taskID, err)
+		cgroupFD = -1
+	}
+
 	// Setup command with platform-specific isolation
 	cmd := r.setupCommand(job, taskDir, portEnvVars)
+	if cgroupFD >= 0 {
+		r.attachCgroup(cmd, cgroupFD)
+	}
 
 	// Setup log broadcasting
 	stdoutBroadcaster := NewLogBroadcaster()
@@ -85,20 +99,35 @@ func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 
 	stdoutPipe, err := cmd.StdoutPipe()
 	if err != nil {
+		if cgroupFD >= 0 {
+			_ = syscall.Close(cgroupFD)
+			r.removeCgroup(taskID)
+		}
 		r.cleanupTaskDir(taskID)
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
+		if cgroupFD >= 0 {
+			_ = syscall.Close(cgroupFD)
+			r.removeCgroup(taskID)
+		}
 		r.cleanupTaskDir(taskID)
 		return fmt.Errorf("failed to create stderr pipe: %w", err)
 	}
 
 	// Start the process
-	if err := cmd.Start(); err != nil {
+	startErr := cmd.Start()
+	if cgroupFD >= 0 {
+		_ = syscall.Close(cgroupFD)
+	}
+	if startErr != nil {
+		if cgroupFD >= 0 {
+			r.removeCgroup(taskID)
+		}
 		r.cleanupTaskDir(taskID)
-		return fmt.Errorf("failed to start process: %w", err)
+		return fmt.Errorf("failed to start process: %w", startErr)
 	}
 
 	// Start log broadcasting
@@ -176,6 +205,7 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 	}
 
 	r.cleanupTaskDir(task.ID)
+	r.removeCgroup(task.ID)
 	return nil
 }
 
@@ -202,13 +232,12 @@ func (r *ExecRunner) Status(task *types.Task) (types.TaskState, error) {
 	return types.TaskFailed, nil
 }
 
-// applyLimits applies resource limits if set on the job
+// applyLimits applies post-exec resource limits (nice only — memory is set
+// pre-exec via the cgroup FD in Run so the child sees the right limit from
+// /proc/self/cgroup at startup).
 func (r *ExecRunner) applyLimits(pid int, job *types.Job) {
 	if job.CPUShares > 0 {
 		r.applyNice(pid, job.CPUShares)
-	}
-	if job.MemoryLimit > 0 {
-		r.applyMemoryLimit(pid, job.MemoryLimit)
 	}
 }
 

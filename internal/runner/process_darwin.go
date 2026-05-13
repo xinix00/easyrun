@@ -19,9 +19,16 @@ func (r *ExecRunner) wrapCommand(command string, memoryLimit uint64) string {
 	return command
 }
 
-// applyMemoryLimit on macOS is a no-op — no cgroups, no reliable memory limiting
-func (r *ExecRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
+// prepareCgroup on macOS is a no-op: returns -1 so callers skip cgroup wiring.
+func (r *ExecRunner) prepareCgroup(taskID string, memoryLimit uint64) (int, error) {
+	return -1, nil
 }
+
+// removeCgroup on macOS is a no-op.
+func (r *ExecRunner) removeCgroup(taskID string) {}
+
+// attachCgroup on macOS is a no-op (no clone3 / CgroupFD support).
+func (r *ExecRunner) attachCgroup(cmd *exec.Cmd, fd int) {}
 
 // mountVolume on macOS uses symlinks
 func (r *ExecRunner) mountVolume(hostPath, targetPath string) error {

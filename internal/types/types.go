@@ -84,7 +84,7 @@ type Job struct {
 	MemoryLimit  uint64            `json:"memory_limit,omitempty"`
 	Env          map[string]string `json:"env,omitempty"`
 	Tags         map[string]string `json:"tags,omitempty"`           // labels for discovery/grouping
-	Volumes      map[string]string `json:"volumes,omitempty"`        // host_path -> task_path (symlinked)
+	Volumes      map[string]string `json:"volumes,omitempty"`        // host_path -> task_path (bind-mounted on Linux, symlinked on macOS)
 	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
 	MaxRestarts    *int              `json:"max_restarts,omitempty"`    // nil = default (5), 0 = no restarts, -1 = unlimited
 	RestartWindow  time.Duration     `json:"restart_window,omitempty"`  // 0 = default (5m), reset restart count if last crash was longer ago

@@ -613,6 +613,8 @@ func TestHandleRunPortInUse(t *testing.T) {
 
 func TestHandleCapacity(t *testing.T) {
 	cfg := testConfig()
+	// testConfig sets Capacity = {CPUShares: 1000, Memory: 1GiB}. With the
+	// cap-aware capacity wiring those values are now reported back.
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 	agent.SetSysInfo(SystemInfo{CPUCores: 8, MemoryBytes: 16 * 1024 * 1024 * 1024})
@@ -636,11 +638,14 @@ func TestHandleCapacity(t *testing.T) {
 		t.Fatalf("Failed to decode response: %v", err)
 	}
 
+	// Config cap CPUShares=1000 < detected (8*1024) → CPUCores reports 1000/1024 = 0.
+	// Since we floor-divide and the cap isn't a multiple of 1024, the helper
+	// falls back to sysInfo.CPUCores rather than reporting 0.
 	if resp.CPUCores != 8 {
 		t.Errorf("CPUCores = %d, want 8", resp.CPUCores)
 	}
-	if resp.MemoryBytes != 16*1024*1024*1024 {
-		t.Errorf("MemoryBytes = %d, want %d", resp.MemoryBytes, 16*1024*1024*1024)
+	if resp.MemoryBytes != 1*1024*1024*1024 {
+		t.Errorf("MemoryBytes = %d, want %d (config cap)", resp.MemoryBytes, 1*1024*1024*1024)
 	}
 	if resp.TasksRunning != 0 {
 		t.Errorf("TasksRunning = %d, want 0", resp.TasksRunning)

@@ -32,7 +32,10 @@ type ClusterConfig struct {
 	RaftEndpoints []string `yaml:"raft_endpoints"` // HopRaft endpoints (e.g., ["http://10.0.0.1:8080", "http://10.0.0.2:8080"])
 }
 
-// CapacityConfig holds resource capacity configuration
+// CapacityConfig caps how much CPU/memory hop will commit on this node.
+// Both fields are optional: 0 means "use auto-detected hardware". Setting them
+// to a positive value lower than the hardware tells hop to schedule fewer/
+// smaller jobs — useful when the node is shared with non-hop workloads.
 type CapacityConfig struct {
 	CPUShares int    `yaml:"cpu_shares"`
 	Memory    uint64 `yaml:"memory"`
@@ -71,8 +74,9 @@ func DefaultConfig() *Config {
 			RaftEndpoints: nil, // Empty = standalone mode
 		},
 		Capacity: CapacityConfig{
-			CPUShares: 14000,
-			Memory:    8 * 1024 * 1024 * 1024, // 8GB
+			// 0 = auto-detect; operators override to cap below hardware.
+			CPUShares: 0,
+			Memory:    0,
 		},
 		Paths: PathsConfig{
 			StateFile:  "./data/state.json",

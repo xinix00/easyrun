@@ -118,6 +118,27 @@ func (a *Agent) SetSysInfo(info SystemInfo) {
 	a.sysInfo = info
 }
 
+// effectiveCPUShares returns the lower of (configured cap, detected hardware).
+// Operators set Capacity.CPUShares > 0 when the node is shared with other
+// workloads and hop should commit fewer resources than the box physically has.
+func (a *Agent) effectiveCPUShares() int {
+	detected := a.sysInfo.CPUCores * 1024
+	if cap := a.config.Capacity.CPUShares; cap > 0 && cap < detected {
+		return cap
+	}
+	return detected
+}
+
+// effectiveMemoryBytes mirrors effectiveCPUShares for memory: the configured
+// Capacity.Memory caps usage when set (and not larger than the host).
+func (a *Agent) effectiveMemoryBytes() uint64 {
+	detected := a.sysInfo.MemoryBytes
+	if cap := a.config.Capacity.Memory; cap > 0 && cap < detected {
+		return cap
+	}
+	return detected
+}
+
 // monitorInterval returns the task monitor interval from config (default 5s).
 func (a *Agent) monitorInterval() time.Duration {
 	if d := a.config.Timeouts.HealthCheckInterval; d > 0 {

@@ -18,6 +18,22 @@ import (
 	"github.com/google/uuid"
 )
 
+// setAPIKey adds X-API-Key to req. If incoming is non-nil and carries a key,
+// that one is forwarded (so the leader sees the original caller's key);
+// otherwise the agent's configured key is used. No header is set when no key
+// is available — empty-key mode keeps dev/standalone setups unauthenticated.
+func (a *Agent) setAPIKey(req, incoming *http.Request) {
+	if incoming != nil {
+		if key := incoming.Header.Get("X-API-Key"); key != "" {
+			req.Header.Set("X-API-Key", key)
+			return
+		}
+	}
+	if a.apiKey != "" {
+		req.Header.Set("X-API-Key", a.apiKey)
+	}
+}
+
 // proxyToLeader forwards requests to the current leader
 func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 	leaderAddr := a.getLeader()
@@ -34,11 +50,7 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-	if key := r.Header.Get("X-API-Key"); key != "" {
-		req.Header.Set("X-API-Key", key)
-	} else if a.apiKey != "" {
-		req.Header.Set("X-API-Key", a.apiKey)
-	}
+	a.setAPIKey(req, r)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -67,11 +79,7 @@ func (a *Agent) proxySSEToLeader(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, "failed to create request")
 		return
 	}
-	if key := r.Header.Get("X-API-Key"); key != "" {
-		req.Header.Set("X-API-Key", key)
-	} else if a.apiKey != "" {
-		req.Header.Set("X-API-Key", a.apiKey)
-	}
+	a.setAPIKey(req, r)
 
 	// No timeout — SSE is long-lived
 	resp, err := (&http.Client{}).Do(req)
@@ -109,9 +117,7 @@ func (a *Agent) notifyLeader(jobName, event string) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if a.apiKey != "" {
-		req.Header.Set("X-API-Key", a.apiKey)
-	}
+	a.setAPIKey(req, nil)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return
@@ -149,9 +155,15 @@ func (a *Agent) handleCapacity(w http.ResponseWriter, r *http.Request) {
 				running++
 			}
 		}
+		// Report the effective cap so callers (hopprom, hoplb scheduling) see
+		// what hop will actually schedule against, not raw hardware.
+		cores := a.effectiveCPUShares() / 1024
+		if cores == 0 {
+			cores = a.sysInfo.CPUCores
+		}
 		return CapacityResponse{
-			CPUCores:        a.sysInfo.CPUCores,
-			MemoryBytes:     a.sysInfo.MemoryBytes,
+			CPUCores:        cores,
+			MemoryBytes:     a.effectiveMemoryBytes(),
 			CPUUsedShares:   cpuUsed,
 			MemoryUsedBytes: memUsed,
 			TasksRunning:    running,
@@ -204,10 +216,10 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	// The task in state IS the capacity reservation — no separate reservation needed.
 	added := query(a, func(s *agentState) bool {
 		usedCPU, usedMem := s.resourceUsage()
-		if job.CPUShares > 0 && usedCPU+job.CPUShares > a.sysInfo.CPUCores*1024 {
+		if job.CPUShares > 0 && usedCPU+job.CPUShares > a.effectiveCPUShares() {
 			return false
 		}
-		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.sysInfo.MemoryBytes {
+		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.effectiveMemoryBytes() {
 			return false
 		}
 		s.jobs[job.Name] = &job

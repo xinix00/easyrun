@@ -21,25 +21,52 @@ func (r *ExecRunner) wrapCommand(command string, memoryLimit uint64) string {
 	return command
 }
 
-// applyMemoryLimit applies memory limits using cgroups v2
-func (r *ExecRunner) applyMemoryLimit(pid int, memoryLimit uint64) {
-	cgroupPath := fmt.Sprintf("%s/%d", cgroupBase, pid)
+// taskCgroupPath returns the cgroup v2 directory for a task. Keyed by taskID
+// (not PID) so we can create and configure it before the process is born.
+func taskCgroupPath(taskID string) string {
+	return filepath.Join(cgroupBase, taskID)
+}
 
-	if err := os.MkdirAll(cgroupPath, 0755); err != nil {
-		fmt.Printf("Warning: failed to create cgroup: %v\n", err)
-		return
+// prepareCgroup creates the per-task cgroup, writes memory.max, and returns
+// a directory FD suitable for SysProcAttr.CgroupFD. The kernel then puts the
+// child into this cgroup via clone3(CLONE_INTO_CGROUP) at fork time, so
+// /proc/self/cgroup is correct from the very first read inside the task.
+// Returns -1, nil when memoryLimit == 0 (no cgroup needed).
+// Requires Linux ≥ 5.7 and cgroup v2 with the memory controller delegated to cgroupBase.
+func (r *ExecRunner) prepareCgroup(taskID string, memoryLimit uint64) (int, error) {
+	if memoryLimit == 0 {
+		return -1, nil
 	}
+	path := taskCgroupPath(taskID)
+	if err := os.MkdirAll(path, 0755); err != nil {
+		return -1, fmt.Errorf("create cgroup: %w", err)
+	}
+	memMax := filepath.Join(path, "memory.max")
+	if err := os.WriteFile(memMax, []byte(fmt.Sprintf("%d", memoryLimit)), 0644); err != nil {
+		// Don't abort start over a missing controller — log and continue without enforcement.
+		log.Printf("Warning: failed to set memory.max on %s: %v", path, err)
+	}
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return -1, fmt.Errorf("open cgroup dir: %w", err)
+	}
+	return fd, nil
+}
 
-	memMaxPath := filepath.Join(cgroupPath, "memory.max")
-	if err := os.WriteFile(memMaxPath, []byte(fmt.Sprintf("%d", memoryLimit)), 0644); err != nil {
-		fmt.Printf("Warning: failed to set memory.max: %v\n", err)
-		return
-	}
+// removeCgroup unlinks the per-task cgroup dir. Safe to call when the task
+// never had one (no-op on ENOENT).
+func (r *ExecRunner) removeCgroup(taskID string) {
+	_ = os.Remove(taskCgroupPath(taskID))
+}
 
-	procsPath := filepath.Join(cgroupPath, "cgroup.procs")
-	if err := os.WriteFile(procsPath, []byte(fmt.Sprintf("%d", pid)), 0644); err != nil {
-		fmt.Printf("Warning: failed to add process to cgroup: %v\n", err)
+// attachCgroup wires a pre-opened cgroup directory FD into the command's
+// SysProcAttr so cmd.Start uses clone3(CLONE_INTO_CGROUP).
+func (r *ExecRunner) attachCgroup(cmd *exec.Cmd, fd int) {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
 	}
+	cmd.SysProcAttr.UseCgroupFD = true
+	cmd.SysProcAttr.CgroupFD = fd
 }
 
 // mountVolume bind-mounts a host path into the task directory.
@@ -150,6 +177,7 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) {
 		{"/lib64", true},
 		{"/dev", false},
 		{"/proc", true},
+		{"/sys", true},
 	}
 	for _, b := range binds {
 		if _, err := os.Stat(b.src); err != nil {
