@@ -3,15 +3,73 @@
 package runner
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strings"
 	"syscall"
 
 	"hop/internal/types"
 )
+
+// mountsUnder returns mount points (field 5 of /proc/self/mountinfo) equal to
+// prefix or nested under it. Used by safeRemoveAll to find every bind/sub-mount
+// we need to detach before removing a task directory.
+func mountsUnder(prefix string) ([]string, error) {
+	f, err := os.Open("/proc/self/mountinfo")
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+
+	var mounts []string
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		// Format: ID parent major:minor root mountpoint options ...
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 5 {
+			continue
+		}
+		mp := fields[4]
+		if mp == prefix || strings.HasPrefix(mp, prefix+"/") {
+			mounts = append(mounts, mp)
+		}
+	}
+	return mounts, scanner.Err()
+}
+
+// safeRemoveAll detaches every mount under dir (deepest first) and only then
+// removes the tree. If any mount remains after the unmount pass we BAIL —
+// os.RemoveAll into a still-bound /dev would delete /dev/null from the host,
+// because devtmpfs is a single shared instance and a bind mount exposes the
+// same inodes. Leaking a taskdir is strictly better than nuking /dev.
+func safeRemoveAll(dir string) error {
+	mounts, err := mountsUnder(dir)
+	if err != nil {
+		return fmt.Errorf("read mountinfo: %w", err)
+	}
+	// Deepest first so /sys/fs/cgroup detaches before /sys, etc.
+	sort.Slice(mounts, func(i, j int) bool { return len(mounts[i]) > len(mounts[j]) })
+	for _, mp := range mounts {
+		if err := syscall.Unmount(mp, syscall.MNT_DETACH); err != nil {
+			log.Printf("safeRemoveAll: unmount %s: %v", mp, err)
+		}
+	}
+	remaining, err := mountsUnder(dir)
+	if err != nil {
+		return fmt.Errorf("re-read mountinfo: %w", err)
+	}
+	if len(remaining) > 0 {
+		return fmt.Errorf("refusing to RemoveAll(%s): %d mount(s) still active (e.g. %s) — leaking dir to keep host /dev intact",
+			dir, len(remaining), remaining[0])
+	}
+	return os.RemoveAll(dir)
+}
 
 const cgroupBase = "/sys/fs/cgroup/hop"
 

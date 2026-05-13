@@ -344,14 +344,13 @@ func (r *ExecRunner) cleanupTaskDir(taskID string) {
 	r.mu.Unlock()
 
 	if taskDir != "" {
-		// Unmount any volumes before removing
-		_ = filepath.Walk(taskDir, func(path string, info os.FileInfo, err error) error {
-			if err == nil && info.IsDir() && path != taskDir {
-				_ = r.unmountVolume(path) // ignore errors, may not be a mount
-			}
-			return nil
-		})
-		os.RemoveAll(taskDir)
+		// safeRemoveAll consults /proc/self/mountinfo on Linux and refuses to
+		// RemoveAll if any mount is still under taskDir. This prevents the
+		// devtmpfs disaster: a bind mount of /dev shares inodes with the host,
+		// so an unlink during RemoveAll would delete /dev/null system-wide.
+		if err := safeRemoveAll(taskDir); err != nil {
+			log.Printf("cleanupTaskDir: %v (leaking %s)", err, taskDir)
+		}
 	}
 }
 
@@ -369,15 +368,25 @@ func (r *ExecRunner) GetStderr(taskID string) *LogBroadcaster {
 	return r.stderrLog[taskID]
 }
 
-// Cleanup removes all task directories (called at startup)
+// Cleanup removes all task directories (called at startup).
+// Each child of base is removed via safeRemoveAll so a stale bind mount left
+// by a crashed predecessor can't trick os.RemoveAll into walking into the
+// shared devtmpfs at /tmp/hop/<id>/dev and unlinking host /dev/null. We
+// deliberately skip RemoveAll on base itself for the same reason.
 func (r *ExecRunner) Cleanup() error {
 	base := r.config.RootfsBase
 	if base == "" {
 		base = "/tmp/hop"
 	}
 
-	// Remove everything and recreate
-	os.RemoveAll(base)
+	if entries, err := os.ReadDir(base); err == nil {
+		for _, e := range entries {
+			child := filepath.Join(base, e.Name())
+			if err := safeRemoveAll(child); err != nil {
+				log.Printf("Cleanup: %v", err)
+			}
+		}
+	}
 	if err := os.MkdirAll(base, 0777); err != nil {
 		return err
 	}
