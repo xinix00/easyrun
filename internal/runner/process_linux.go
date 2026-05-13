@@ -73,6 +73,54 @@ func (r *ExecRunner) attachCgroup(cmd *exec.Cmd, fd int) {
 	cmd.SysProcAttr.CgroupFD = fd
 }
 
+// fakeMeminfo writes a regular file with /proc/meminfo content (in the same
+// key order as the kernel produces) and bind-mounts it over the chroot's
+// /proc/meminfo.
+//
+// Why: Sparrow (RavenDB's runtime library) parses /proc/meminfo with a
+// forward-only buffered reader and has a re-seek fallback for short reads.
+// That fallback breaks on procfs files inside a chroot — read(2) may return
+// short, and the re-scan returns 0 for MemTotal/MemFree/MemAvailable. End
+// result: RavenDB's low-memory guard logs "the system has 0 Bytes/0 Bytes
+// free RAM" and refuses to proceed even though the host has 28 GB free.
+// Reguliere bestanden hebben geen short-read gedrag → parser werkt wel.
+//
+// The cgroup-derived MemTotal stays consistent with /sys/fs/cgroup/.../memory.max
+// (RavenDB reads both and would log inconsistencies otherwise).
+//
+// Returns the mount target (for cleanup tracking) or "" on any failure.
+func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
+	if memoryLimit == 0 {
+		return ""
+	}
+	target := filepath.Join(taskDir, "proc/meminfo")
+	if _, err := os.Stat(target); err != nil {
+		return ""
+	}
+	kb := memoryLimit / 1024
+	content := fmt.Sprintf(
+		"MemTotal:       %d kB\n"+
+			"MemFree:        %d kB\n"+
+			"MemAvailable:   %d kB\n"+
+			"Buffers:        0 kB\n"+
+			"Cached:         0 kB\n"+
+			"SwapTotal:      0 kB\n"+
+			"SwapFree:       0 kB\n"+
+			"Committed_AS:   0 kB\n",
+		kb, kb, kb,
+	)
+	src := filepath.Join(taskDir, ".hop-meminfo")
+	if err := os.WriteFile(src, []byte(content), 0644); err != nil {
+		log.Printf("Warning: meminfo fake write: %v", err)
+		return ""
+	}
+	if err := syscall.Mount(src, target, "", syscall.MS_BIND, ""); err != nil {
+		log.Printf("Warning: meminfo overmount: %v", err)
+		return ""
+	}
+	return target
+}
+
 // ensureCgroupControllers enables +memory in the subtree_control chain so
 // per-task cgroups created later actually expose memory.max / memory.current.
 // Without this, our writes to memory.max silently no-op and Sparrow-based
