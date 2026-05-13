@@ -361,15 +361,9 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 	}
 
 	// Resolve platform-specific artifact (runtime only — don't modify stored job)
-	runJob := job
-	if len(job.Artifacts) > 0 {
-		resolved := a.resolveArtifact(job.Artifacts)
-		if resolved == nil {
-			return fmt.Errorf("no matching artifact for this node's attributes")
-		}
-		copy := *job
-		copy.Artifacts = []types.Artifact{*resolved}
-		runJob = &copy
+	runJob, err := a.resolveJobForRun(job)
+	if err != nil {
+		return err
 	}
 
 	ports, err := a.allocatePortsForJob(runJob)
@@ -494,7 +488,19 @@ func (a *Agent) restartTask(task *types.Task) {
 	// Clean up old runner entries (process already dead)
 	_ = a.runnerFor(task.Driver).Stop(task)
 
-	ports, err := a.allocatePortsForJob(job)
+	// Resolve platform-specific artifact (same invariant as startJob)
+	runJob, err := a.resolveJobForRun(job)
+	if err != nil {
+		log.Printf("Cannot restart task %s: %v", task.ID, err)
+		a.do(func(s *agentState) {
+			if t := s.tasks[task.ID]; t != nil {
+				t.State = types.TaskFailed
+			}
+		})
+		return
+	}
+
+	ports, err := a.allocatePortsForJob(runJob)
 	if err != nil {
 		log.Printf("Failed to allocate ports for restart: %v", err)
 		a.restartTask(task)
@@ -520,7 +526,7 @@ func (a *Agent) restartTask(task *types.Task) {
 		return
 	}
 
-	if err := a.runnerFor(job.Driver).Run(job, replacement); err != nil {
+	if err := a.runnerFor(runJob.Driver).Run(runJob, replacement); err != nil {
 		log.Printf("Failed to restart task %s: %v", task.ID, err)
 		// Retry via restartTask (maxRestarts check prevents infinite recursion)
 		a.do(func(s *agentState) {

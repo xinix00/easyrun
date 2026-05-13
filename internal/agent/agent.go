@@ -170,6 +170,22 @@ func (a *Agent) resolveArtifact(artifacts []types.Artifact) *types.Artifact {
 	return nil
 }
 
+// resolveJobForRun returns a job copy with platform-specific artifact selected.
+// Runners expect job.Artifacts to contain at most one entry (the matched one);
+// every code path that calls runner.Run must funnel through this first.
+func (a *Agent) resolveJobForRun(job *types.Job) (*types.Job, error) {
+	if len(job.Artifacts) == 0 {
+		return job, nil
+	}
+	resolved := a.resolveArtifact(job.Artifacts)
+	if resolved == nil {
+		return nil, fmt.Errorf("no matching artifact for this node's attributes")
+	}
+	copy := *job
+	copy.Artifacts = []types.Artifact{*resolved}
+	return &copy, nil
+}
+
 // Init performs startup cleanup (removes old task directories and containers)
 func (a *Agent) Init() error {
 	if err := a.execRunner.Cleanup(); err != nil {
