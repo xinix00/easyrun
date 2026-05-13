@@ -226,21 +226,22 @@ func (a *Agent) runnerFor(driver string) runner.Runner {
 	return a.execRunner
 }
 
-// stateLoop is the single goroutine that owns all mutable state
+// stateLoop is the single goroutine that owns all mutable state.
+//
+// ctx is intentionally NOT honoured — exiting on shutdown would deadlock
+// the shutdown path itself, which calls query(...) for the task snapshot.
+// stateLoop dies with the process; goroutines using do/query block until
+// then, which is fine because main waits for shutdownDone before returning.
 func (a *Agent) stateLoop(ctx context.Context) {
 	state := &agentState{
 		jobs:  make(map[string]*types.Job),
 		tasks: make(map[string]*types.Task),
 	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case op := <-a.ops:
-			op(state)
-		}
+	for op := range a.ops {
+		op(state)
 	}
+	_ = ctx
 }
 
 // do executes an operation on state (fire-and-forget)

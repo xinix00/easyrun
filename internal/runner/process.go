@@ -329,14 +329,11 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 
 	if r.config.Isolate {
 		mounts = append(mounts, r.setupIsolationEnv(taskDir)...)
-		// Workaround for RavenDB/Sparrow bug: procfs short reads inside the
-		// chroot make its /proc/meminfo parser return 0 for MemTotal/Free/
-		// Available, then the low-memory guard panics about "0 Bytes free
-		// RAM". Bind a regular file with the right content over it — regular
-		// files read atomically, parser is happy.
-		if mp := r.fakeMeminfo(taskDir, job.MemoryLimit); mp != "" {
-			mounts = append(mounts, mp)
-		}
+		// Stage the fake /proc/meminfo at /.hop-meminfo inside taskDir. The
+		// in-namespace wrapper script (procWrapperScript) bind-mounts it over
+		// /proc/meminfo after mounting a fresh procfs. Just a regular file —
+		// no mount tracking needed, RemoveAll cleans it up with taskDir.
+		_ = r.fakeMeminfo(taskDir, job.MemoryLimit)
 	}
 
 	r.mu.Lock()

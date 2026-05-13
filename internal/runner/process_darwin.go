@@ -129,7 +129,7 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) []string {
 	return nil
 }
 
-// fakeMeminfo is a no-op on macOS: there's no /proc to overmount.
+// fakeMeminfo is a no-op on macOS (no /proc to overmount).
 func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
 	return ""
 }
