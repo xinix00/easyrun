@@ -129,17 +129,6 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) []string {
 	return nil
 }
 
-// fakeMeminfo is a no-op on macOS: there's no /proc to overmount and macOS
-// tools don't read /proc/meminfo anyway.
-func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
-	return ""
-}
-
-// fakeCpuinfo is a no-op on macOS.
-func (r *ExecRunner) fakeCpuinfo(taskDir string, cpuShares int) string {
-	return ""
-}
-
 // ensureCgroupControllers is a no-op on macOS (no cgroups).
 func ensureCgroupControllers() {}
 

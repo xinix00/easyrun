@@ -73,75 +73,6 @@ func (r *ExecRunner) attachCgroup(cmd *exec.Cmd, fd int) {
 	cmd.SysProcAttr.CgroupFD = fd
 }
 
-// fakeMeminfo writes a synthetic /proc/meminfo into the chroot. /proc as a
-// whole is NOT bound from the host; this file (and fakeCpuinfo) is all the
-// task gets. Static snapshot — enough for tools that read MemTotal at startup
-// for heap sizing.
-func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
-	if memoryLimit == 0 {
-		return ""
-	}
-	procDir := filepath.Join(taskDir, "proc")
-	if err := os.MkdirAll(procDir, 0755); err != nil {
-		log.Printf("Warning: failed to create %s: %v", procDir, err)
-		return ""
-	}
-	target := filepath.Join(procDir, "meminfo")
-	kb := memoryLimit / 1024
-	content := fmt.Sprintf(
-		"MemTotal:       %d kB\n"+
-			"MemFree:        %d kB\n"+
-			"MemAvailable:   %d kB\n"+
-			"Buffers:        0 kB\n"+
-			"Cached:         0 kB\n"+
-			"SwapTotal:      0 kB\n"+
-			"SwapFree:       0 kB\n",
-		kb, kb, kb,
-	)
-	if err := os.WriteFile(target, []byte(content), 0644); err != nil {
-		log.Printf("Warning: meminfo write: %v", err)
-		return ""
-	}
-	return target
-}
-
-// fakeCpuinfo writes a synthetic /proc/cpuinfo with N processor blocks where
-// N is derived from CPUShares (1024 shares = 1 core, Docker convention).
-// Static. Some tools read it for heuristics — .NET ignores it in favor of
-// sched_getaffinity, so it doesn't affect Environment.ProcessorCount.
-func (r *ExecRunner) fakeCpuinfo(taskDir string, cpuShares int) string {
-	if cpuShares <= 0 {
-		return ""
-	}
-	procDir := filepath.Join(taskDir, "proc")
-	if err := os.MkdirAll(procDir, 0755); err != nil {
-		return ""
-	}
-	cores := (cpuShares + 512) / 1024
-	if cores < 1 {
-		cores = 1
-	}
-	var buf []byte
-	for i := 0; i < cores; i++ {
-		buf = append(buf, []byte(fmt.Sprintf(
-			"processor\t: %d\n"+
-				"vendor_id\t: HopVirtualCPU\n"+
-				"model name\t: hop virtual cpu\n"+
-				"cpu MHz\t\t: 1000.000\n"+
-				"cache size\t: 0 KB\n"+
-				"siblings\t: %d\n"+
-				"cpu cores\t: %d\n\n",
-			i, cores, cores,
-		))...)
-	}
-	target := filepath.Join(procDir, "cpuinfo")
-	if err := os.WriteFile(target, buf, 0644); err != nil {
-		log.Printf("Warning: cpuinfo write: %v", err)
-		return ""
-	}
-	return target
-}
-
 // ensureCgroupControllers enables +memory in the subtree_control chain so
 // per-task cgroups created later actually expose memory.max / memory.current.
 // Without this, our writes to memory.max silently no-op and Sparrow-based
@@ -272,6 +203,8 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) []string {
 		{"/lib", true},
 		{"/lib64", true},
 		{"/dev", false},
+		{"/proc", true},
+		{"/sys", true},
 	}
 	var mounted []string
 	for _, b := range binds {
