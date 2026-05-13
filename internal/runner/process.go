@@ -336,6 +336,9 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 		if mp := r.fakeMeminfo(taskDir, job.MemoryLimit); mp != "" {
 			mounts = append(mounts, mp)
 		}
+		if cp := r.fakeCpuinfo(taskDir, job.CPUShares); cp != "" {
+			mounts = append(mounts, cp)
+		}
 	}
 
 	r.mu.Lock()

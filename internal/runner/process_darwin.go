@@ -135,3 +135,8 @@ func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
 	return ""
 }
 
+// fakeCpuinfo is a no-op on macOS for the same reason.
+func (r *ExecRunner) fakeCpuinfo(taskDir string, cpuShares int) string {
+	return ""
+}
+

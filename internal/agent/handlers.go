@@ -486,14 +486,21 @@ func (a *Agent) restartTask(task *types.Task) {
 		return
 	}
 
-	// Exponential backoff: 1s, 2s, 4s, 8s, 16s, ...
+	// Exponential backoff: 1s, 2s, 4s, 8s, 16s, ... capped at 30s.
+	// Cancellable so agent shutdown isn't stalled by a goroutine napping
+	// for half a minute. On cancel we just exit — the task entry is dropped
+	// by shutdown's stopTasks pass.
 	if restartCount > 0 {
 		backoff := time.Second << uint(restartCount-1)
 		if backoff > 30*time.Second {
 			backoff = 30 * time.Second
 		}
 		log.Printf("Task %s restart #%d, waiting %s before retry", task.ID, restartCount, backoff)
-		time.Sleep(backoff)
+		select {
+		case <-a.shutdownCh:
+			return
+		case <-time.After(backoff):
+		}
 	}
 
 	// Clean up old runner entries (process already dead)
@@ -525,6 +532,15 @@ func (a *Agent) restartTask(task *types.Task) {
 		})
 		a.restartTask(task)
 		return
+	}
+
+	// Don't sneak a replacement past shutdown's snapshot — if shutdownCh is
+	// closed, stopTasks has already decided what to clean up. A late add
+	// would orphan the new process.
+	select {
+	case <-a.shutdownCh:
+		return
+	default:
 	}
 
 	// Atomic swap: new task via newTask(), preserve RestartCount, no capacity gap

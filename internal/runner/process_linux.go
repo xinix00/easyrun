@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"hop/internal/types"
@@ -27,10 +28,15 @@ func taskCgroupPath(taskID string) string {
 	return filepath.Join(cgroupBase, taskID)
 }
 
-// prepareCgroup creates the per-task cgroup, writes memory.max, and returns
-// a directory FD suitable for SysProcAttr.CgroupFD. The kernel then puts the
-// child into this cgroup via clone3(CLONE_INTO_CGROUP) at fork time, so
-// /proc/self/cgroup is correct from the very first read inside the task.
+// prepareCgroup creates the per-task cgroup, sets memory.max, and returns
+// a directory FD suitable for SysProcAttr.CgroupFD. The kernel then puts
+// the child into this cgroup via clone3(CLONE_INTO_CGROUP) at fork time,
+// so /proc/self/cgroup is correct from the very first read.
+//
+// memory.max provides the hard OOM cap. fakeMeminfo (separately) overrides
+// /proc/meminfo so apps that don't grok cgroups still see the right
+// total — both fire together: cgroup enforces, /proc/meminfo advertises.
+//
 // Returns -1, nil when memoryLimit == 0 (no cgroup needed).
 // Requires Linux ≥ 5.7 and cgroup v2 with the memory controller delegated to cgroupBase.
 func (r *ExecRunner) prepareCgroup(taskID string, memoryLimit uint64) (int, error) {
@@ -43,7 +49,6 @@ func (r *ExecRunner) prepareCgroup(taskID string, memoryLimit uint64) (int, erro
 	}
 	memMax := filepath.Join(path, "memory.max")
 	if err := os.WriteFile(memMax, []byte(fmt.Sprintf("%d", memoryLimit)), 0644); err != nil {
-		// Don't abort start over a missing controller — log and continue without enforcement.
 		log.Printf("Warning: failed to set memory.max on %s: %v", path, err)
 	}
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
@@ -104,6 +109,49 @@ func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
 	}
 	if err := syscall.Mount(src, target, "", syscall.MS_BIND, ""); err != nil {
 		log.Printf("Warning: meminfo overmount: %v", err)
+		return ""
+	}
+	return target
+}
+
+// fakeCpuinfo writes a synthetic /proc/cpuinfo with N processor blocks where
+// N is derived from CPUShares (1024 shares = 1 core, Docker convention) and
+// bind-mounts it over the chroot's /proc/cpuinfo. Static — anything that
+// re-counts cores at runtime is rare; init-time reads are what matter
+// (CoreCLR thread pool, Go runtime.NumCPU, etc.).
+func (r *ExecRunner) fakeCpuinfo(taskDir string, cpuShares int) string {
+	if cpuShares <= 0 {
+		return ""
+	}
+	target := filepath.Join(taskDir, "proc/cpuinfo")
+	if _, err := os.Stat(target); err != nil {
+		return ""
+	}
+	cores := (cpuShares + 512) / 1024
+	if cores < 1 {
+		cores = 1
+	}
+	var sb strings.Builder
+	for i := 0; i < cores; i++ {
+		fmt.Fprintf(&sb,
+			"processor\t: %d\n"+
+				"vendor_id\t: HopVirtualCPU\n"+
+				"model name\t: hop virtual cpu\n"+
+				"cpu MHz\t\t: 1000.000\n"+
+				"cache size\t: 0 KB\n"+
+				"siblings\t: %d\n"+
+				"cpu cores\t: %d\n"+
+				"\n",
+			i, cores, cores,
+		)
+	}
+	src := filepath.Join(taskDir, ".hop-cpuinfo")
+	if err := os.WriteFile(src, []byte(sb.String()), 0644); err != nil {
+		log.Printf("Warning: cpuinfo fake write: %v", err)
+		return ""
+	}
+	if err := syscall.Mount(src, target, "", syscall.MS_BIND, ""); err != nil {
+		log.Printf("Warning: cpuinfo overmount: %v", err)
 		return ""
 	}
 	return target

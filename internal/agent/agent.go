@@ -58,6 +58,7 @@ type Agent struct {
 	getLeader  func() string // returns current leader address (for proxying)
 	httpClient *http.Client
 	apiKey     string // API key for authenticating with leader and protecting local endpoints
+	shutdownCh chan struct{} // closed by shutdown() — long-running goroutines select on this
 
 	needsSave   atomic.Bool              // flag for debounced persistence
 	checkStates map[string]*checkState   // health check state per task (monitor goroutine only)
@@ -105,6 +106,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		apiKey:       cfg.APIKey,
 		checkStates:  make(map[string]*checkState),
 		getLeader:    func() string { return "" }, // overridden by SetLeaderFunc; default = "no leader"
+		shutdownCh:   make(chan struct{}),
 	}
 }
 
@@ -329,11 +331,15 @@ func (a *Agent) stopTasks(tasks []*types.Task) {
 	a.scheduleSave()
 }
 
-// markRunningAsStopping returns all running tasks after marking them as stopping.
+// markRunningAsStopping returns every task that needs stopping. Already-
+// Stopping ones get included too: monitor flags a crashed task Stopping
+// before restartTask runs, and shutdown firing mid-restart must still
+// clean up that old task entry — otherwise its taskDir/cgroup leak and
+// the goroutine bumping a swap eventually finds nothing.
 func markRunningAsStopping(s *agentState) []*types.Task {
 	var tasks []*types.Task
 	for _, task := range s.tasks {
-		if task.State == types.TaskRunning {
+		if task.State == types.TaskRunning || task.State == types.TaskStopping {
 			task.State = types.TaskStopping
 			tasks = append(tasks, task)
 		}
@@ -355,6 +361,7 @@ func (a *Agent) StopAllTasks() {
 // 5s HTTP drain) — sequentially it would just stack and risk hitting
 // systemd's TimeoutStopSec.
 func (a *Agent) shutdown() {
+	close(a.shutdownCh) // signal restart goroutines: stop sleeping, don't spawn
 	log.Println("Agent shutting down...")
 
 	var wg sync.WaitGroup
