@@ -32,6 +32,7 @@ type ExecRunner struct {
 	config    *Config
 	processes map[string]*exec.Cmd
 	taskDirs  map[string]string // taskID -> work directory
+	mounts    map[string][]string // taskID -> bind mount targets we created, in setup order
 	stdoutLog map[string]*LogBroadcaster
 	stderrLog map[string]*LogBroadcaster
 	mu        sync.RWMutex
@@ -43,6 +44,7 @@ func NewExecRunner(config *Config) *ExecRunner {
 		config:    config,
 		processes: make(map[string]*exec.Cmd),
 		taskDirs:  make(map[string]string),
+		mounts:    make(map[string][]string),
 		stdoutLog: make(map[string]*LogBroadcaster),
 		stderrLog: make(map[string]*LogBroadcaster),
 	}
@@ -304,9 +306,13 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 		}
 	}
 
-	// Setup volume mounts (symlinks from host to task dir)
+	// Track every bind mount we create so cleanupTaskDir can unmount exactly
+	// what was mounted — no /proc parsing needed. Job-script mounts live in
+	// the child's mount namespace (CLONE_NEWNS) and die with the process, so
+	// they're not our problem.
+	var mounts []string
+
 	for hostPath, taskPath := range job.Volumes {
-		// Ensure host path exists (create if needed)
 		if err := os.MkdirAll(hostPath, 0755); err != nil {
 			return "", fmt.Errorf("failed to create volume host path %s: %w", hostPath, err)
 		}
@@ -318,39 +324,42 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 			return "", fmt.Errorf("failed to create volume target dir %s: %w", targetDir, err)
 		}
 
-		// Mount host path to task path
 		if err := r.mountVolume(hostPath, target); err != nil {
 			return "", fmt.Errorf("failed to mount volume %s -> %s: %w", hostPath, target, err)
 		}
+		mounts = append(mounts, target)
 	}
 
-	// Setup environment for isolation (platform-specific)
 	if r.config.Isolate {
-		r.setupIsolationEnv(taskDir)
+		mounts = append(mounts, r.setupIsolationEnv(taskDir)...)
 	}
+
+	r.mu.Lock()
+	r.mounts[taskID] = mounts
+	r.mu.Unlock()
 
 	return taskDir, nil
 }
 
-// cleanupTaskDir removes the task directory
+// cleanupTaskDir removes the task directory. Unmounts exactly what we
+// tracked in setupTaskDir — reverse order so nested binds drop before
+// their parents. With every bind explicitly detached, RemoveAll can no
+// longer descend into a bound /dev and unlink host /dev/null.
 func (r *ExecRunner) cleanupTaskDir(taskID string) {
 	r.mu.Lock()
-	taskDir, ok := r.taskDirs[taskID]
-	if ok {
-		delete(r.taskDirs, taskID)
-	}
+	taskDir := r.taskDirs[taskID]
+	mounts := r.mounts[taskID]
+	delete(r.taskDirs, taskID)
+	delete(r.mounts, taskID)
 	delete(r.stdoutLog, taskID)
 	delete(r.stderrLog, taskID)
 	r.mu.Unlock()
 
+	for i := len(mounts) - 1; i >= 0; i-- {
+		_ = r.unmountVolume(mounts[i])
+	}
 	if taskDir != "" {
-		// safeRemoveAll consults /proc/self/mountinfo on Linux and refuses to
-		// RemoveAll if any mount is still under taskDir. This prevents the
-		// devtmpfs disaster: a bind mount of /dev shares inodes with the host,
-		// so an unlink during RemoveAll would delete /dev/null system-wide.
-		if err := safeRemoveAll(taskDir); err != nil {
-			log.Printf("cleanupTaskDir: %v (leaking %s)", err, taskDir)
-		}
+		_ = os.RemoveAll(taskDir)
 	}
 }
 
@@ -368,24 +377,14 @@ func (r *ExecRunner) GetStderr(taskID string) *LogBroadcaster {
 	return r.stderrLog[taskID]
 }
 
-// Cleanup removes all task directories (called at startup).
-// Each child of base is removed via safeRemoveAll so a stale bind mount left
-// by a crashed predecessor can't trick os.RemoveAll into walking into the
-// shared devtmpfs at /tmp/hop/<id>/dev and unlinking host /dev/null. We
-// deliberately skip RemoveAll on base itself for the same reason.
+// Cleanup ensures the rootfs base exists and is writable. Stale taskdirs
+// from a crashed predecessor (with bind mounts still attached) are NOT
+// touched — RemoveAll into a bound /dev would nuke host /dev/null. After
+// a hard crash, reboot or clean /tmp/hop manually with the agent stopped.
 func (r *ExecRunner) Cleanup() error {
 	base := r.config.RootfsBase
 	if base == "" {
 		base = "/tmp/hop"
-	}
-
-	if entries, err := os.ReadDir(base); err == nil {
-		for _, e := range entries {
-			child := filepath.Join(base, e.Name())
-			if err := safeRemoveAll(child); err != nil {
-				log.Printf("Cleanup: %v", err)
-			}
-		}
 	}
 	if err := os.MkdirAll(base, 0777); err != nil {
 		return err

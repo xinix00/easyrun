@@ -124,12 +124,8 @@ func (r *ExecRunner) generateSandboxProfile(taskDir string, job *types.Job) stri
 
 // setupIsolationEnv is a no-op on macOS: sandbox-exec runs against the host
 // filesystem (no chroot), so the task directory needs no special preparation.
-func (r *ExecRunner) setupIsolationEnv(taskDir string) {
+// Returns nil — no bind mounts created.
+func (r *ExecRunner) setupIsolationEnv(taskDir string) []string {
+	return nil
 }
 
-// safeRemoveAll on macOS is just os.RemoveAll. Volumes here are symlinks
-// (os.Symlink in mountVolume) and unlink removes the link, not the target —
-// no risk of walking into host data, no mount table to worry about.
-func safeRemoveAll(dir string) error {
-	return os.RemoveAll(dir)
-}
