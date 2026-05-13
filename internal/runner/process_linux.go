@@ -127,29 +127,47 @@ func (r *ExecRunner) setupCommand(job *types.Job, taskDir string, portEnvVars []
 	return cmd
 }
 
-// setupIsolationEnv prepares the chroot with read-only bind mounts of system
-// paths so /bin/sh and shared libraries resolve correctly inside the jail.
-// Absolute symlinks would break here: once chroot is applied, a target like
-// "/bin/sh" resolves back to taskDir/bin/sh — the link itself — and the kernel
-// returns ELOOP. Bind mounts work because they propagate into the child's
-// mount namespace via CLONE_NEWNS.
+// setupIsolationEnv prepares the chroot with bind mounts of system paths so
+// /bin/sh, shared libraries, /dev/null, /dev/urandom and /proc all resolve
+// correctly inside the jail. Absolute symlinks would break here: once chroot
+// is applied, a target like "/bin/sh" resolves back to taskDir/bin/sh — the
+// link itself — and the kernel returns ELOOP. Bind mounts work because they
+// propagate into the child's mount namespace via CLONE_NEWNS.
+//
+// /dev must stay writable so writes to char devices (/dev/null, /dev/random,
+// /dev/shm) keep working — runtimes like CoreCLR fail without that.
+// /proc is bind-mounted from the host: the new PID namespace would ideally
+// get a fresh procfs after unshare, but mounting in the parent is enough for
+// /proc/self and most introspection .NET / glibc rely on.
 func (r *ExecRunner) setupIsolationEnv(taskDir string) {
-	binds := []string{"/bin", "/usr", "/lib", "/lib64"}
-	for _, src := range binds {
-		if _, err := os.Stat(src); err != nil {
+	binds := []struct {
+		src      string
+		readonly bool
+	}{
+		{"/bin", true},
+		{"/usr", true},
+		{"/lib", true},
+		{"/lib64", true},
+		{"/dev", false},
+		{"/proc", true},
+	}
+	for _, b := range binds {
+		if _, err := os.Stat(b.src); err != nil {
 			continue
 		}
-		target := filepath.Join(taskDir, src)
+		target := filepath.Join(taskDir, b.src)
 		if err := os.MkdirAll(target, 0755); err != nil {
 			log.Printf("Warning: failed to create bind target %s: %v", target, err)
 			continue
 		}
-		if err := syscall.Mount(src, target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
-			log.Printf("Warning: failed to bind-mount %s into chroot: %v", src, err)
+		if err := syscall.Mount(b.src, target, "", syscall.MS_BIND|syscall.MS_REC, ""); err != nil {
+			log.Printf("Warning: failed to bind-mount %s into chroot: %v", b.src, err)
 			continue
 		}
-		if err := syscall.Mount("", target, "", syscall.MS_REMOUNT|syscall.MS_BIND|syscall.MS_RDONLY, ""); err != nil {
-			log.Printf("Warning: failed to remount %s read-only: %v", target, err)
+		if b.readonly {
+			if err := syscall.Mount("", target, "", syscall.MS_REMOUNT|syscall.MS_BIND|syscall.MS_RDONLY, ""); err != nil {
+				log.Printf("Warning: failed to remount %s read-only: %v", target, err)
+			}
 		}
 	}
 
