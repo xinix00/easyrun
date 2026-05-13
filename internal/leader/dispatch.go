@@ -216,6 +216,10 @@ func (l *Leader) DeleteJobByName(name string) {
 
 	l.jobStore.DeleteJob(name)
 
+	// Clear any stuck dispatching flag (defense against future leaks).
+	// Must happen before reconcile so a recreated job under the same name is not skipped.
+	l.do(func(s *leaderState) { delete(s.dispatching, name) })
+
 	// Reconcile immediately — frees capacity and renormalizes priorities (0..N-1)
 	go l.reconcileJobs()
 }

@@ -1,6 +1,7 @@
 package leader
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -11,6 +12,10 @@ import (
 var (
 	// RollingUpdateDelay can be overridden in tests for faster execution
 	RollingUpdateDelay = 2 * time.Second
+
+	// ErrJobLocked is returned when an update or dispatch is already in progress
+	// for the given job. Callers can use errors.Is to map this to 409 Conflict.
+	ErrJobLocked = errors.New("job is already being updated or dispatched")
 )
 
 // lockJob atomically sets the dispatching flag for a job.
@@ -50,7 +55,7 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 	}
 
 	if !l.lockJob(newJob.Name) {
-		return fmt.Errorf("job %s is already being updated or dispatched", newJob.Name)
+		return fmt.Errorf("%w: %s", ErrJobLocked, newJob.Name)
 	}
 
 	log.Printf("Updating job %s with policy=%s", newJob.Name, policy)
@@ -82,11 +87,13 @@ func (l *Leader) updateRolling(job *types.Job) error {
 	oldTasks := l.snapshotJobTasks(job.Name)
 	l.jobStore.StoreJob(job)
 
+	var loopErr error
 	for i, oldTask := range oldTasks {
 		if i < count {
 			// Replace: dispatch new version before stopping old (zero downtime)
 			if err := l.dispatchToAvailableAgent(job); err != nil {
-				return fmt.Errorf("rolling update failed at instance %d: %w", i+1, err)
+				loopErr = fmt.Errorf("rolling update failed at instance %d: %w", i+1, err)
+				break
 			}
 		}
 
@@ -108,10 +115,15 @@ func (l *Leader) updateRolling(job *types.Job) error {
 		}
 	}
 
-	log.Printf("Rolling update for job %s complete (%d old, %d desired)", job.Name, len(oldTasks), count)
-
-	// Reconcile handles scale-up (placed < desired → dispatch extra).
+	// Unlock before reconcile so the post-update reconcile actually sees the job unlocked.
+	// Using defer would race with `go reconcileJobs()` via the shared ops channel.
 	l.unlockJob(job.Name)
+
+	if loopErr != nil {
+		return loopErr
+	}
+
+	log.Printf("Rolling update for job %s complete (%d old, %d desired)", job.Name, len(oldTasks), count)
 	go l.reconcileJobs()
 	return nil
 }

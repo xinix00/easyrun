@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -184,20 +185,24 @@ func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// UPDATE — job already exists
+	// UPDATE — job already exists. Run synchronously so callers get real status codes:
+	// 200 OK on success, 409 Conflict if another update is in flight, 500 on dispatch failure.
 	if s.leader.GetJob(job.Name) != nil {
 		policy := job.UpdatePolicy
 		if policy == "" {
 			policy = "rolling"
 		}
-		go func() {
-			if err := s.leader.UpdateJob(&job); err != nil {
-				log.Printf("Update job %s failed: %v", job.Name, err)
+		if err := s.leader.UpdateJob(&job); err != nil {
+			if errors.Is(err, leader.ErrJobLocked) {
+				httputil.WriteError(w, http.StatusConflict, err.Error())
+				return
 			}
-		}()
-		httputil.WriteJSON(w, http.StatusAccepted, map[string]string{
+			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		httputil.WriteJSON(w, http.StatusOK, map[string]string{
 			"name":   job.Name,
-			"status": "updating",
+			"status": "updated",
 			"policy": string(policy),
 		})
 		return

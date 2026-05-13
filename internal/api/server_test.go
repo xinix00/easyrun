@@ -397,14 +397,14 @@ func TestRunJobUpdateExisting(t *testing.T) {
 		Count:   1,
 	})
 
-	if w.Code != 202 {
-		t.Errorf("Update status = %d, want 202 (body: %s)", w.Code, w.Body.String())
+	if w.Code != 200 {
+		t.Errorf("Update status = %d, want 200 (body: %s)", w.Code, w.Body.String())
 	}
 
 	var resp map[string]string
 	decodeJSON(t, w, &resp)
-	if resp["status"] != "updating" {
-		t.Errorf("status = %q, want %q", resp["status"], "updating")
+	if resp["status"] != "updated" {
+		t.Errorf("status = %q, want %q", resp["status"], "updated")
 	}
 }
 
