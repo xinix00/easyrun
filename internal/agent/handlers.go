@@ -514,6 +514,15 @@ func (a *Agent) restartTask(task *types.Task) {
 	ports, err := a.allocatePortsForJob(runJob)
 	if err != nil {
 		log.Printf("Failed to allocate ports for restart: %v", err)
+		// Bump RestartCount manually — the swap below normally does this, but
+		// we never reach it on port-alloc failure. Without the bump, restartCount
+		// never grows, maxRestarts never trips, and the recursive call stack-
+		// overflows the agent (894k frames in v0.19.10).
+		a.do(func(s *agentState) {
+			if t := s.tasks[task.ID]; t != nil {
+				t.RestartCount++
+			}
+		})
 		a.restartTask(task)
 		return
 	}
