@@ -182,6 +182,10 @@ func (a *Agent) measureTaskUsage(task *types.Task) {
 		if allocMem > 0 {
 			memPercent = float64(memBytes) / allocMem * 100
 		}
+		// Refresh the synthetic /proc/meminfo (Linux + Isolate + MemoryLimit).
+		// Bind mount surfaces the new content to readers inside the chroot
+		// — no-op when the file doesn't exist (macOS, no MemoryLimit, etc).
+		a.refreshMeminfo(task, memBytes)
 	}
 
 	a.do(func(s *agentState) {
