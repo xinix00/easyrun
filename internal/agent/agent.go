@@ -290,15 +290,20 @@ func (a *Agent) Run(ctx context.Context) error {
 
 	go a.monitorTasks(ctx)
 
+	// shutdown runs in a goroutine but Run must NOT return until it finishes,
+	// otherwise main exits and our tasks orphan to PID 1 while still mid-SIGTERM.
+	shutdownDone := make(chan struct{})
 	go func() {
 		<-ctx.Done()
 		a.shutdown()
+		close(shutdownDone)
 	}()
 
 	log.Printf("Agent listening on %s", addr)
 	if err := a.server.ListenAndServe(); err != http.ErrServerClosed {
 		return err
 	}
+	<-shutdownDone
 	return nil
 }
 
@@ -345,16 +350,30 @@ func (a *Agent) StopAllTasks() {
 	}
 }
 
-// shutdown gracefully stops all tasks
+// shutdown gracefully stops all tasks. HTTP drain and task stop run in
+// parallel so the slower one bounds total time (~11s task SIGTERM+SIGKILL,
+// 5s HTTP drain) — sequentially it would just stack and risk hitting
+// systemd's TimeoutStopSec.
 func (a *Agent) shutdown() {
 	log.Println("Agent shutting down...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-	defer cancel()
-	_ = a.server.Shutdown(ctx)
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	tasks := query(a, func(s *agentState) []*types.Task { return markRunningAsStopping(s) })
-	a.stopTasks(tasks)
+	go func() {
+		defer wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = a.server.Shutdown(ctx)
+	}()
+
+	go func() {
+		defer wg.Done()
+		tasks := query(a, func(s *agentState) []*types.Task { return markRunningAsStopping(s) })
+		a.stopTasks(tasks)
+	}()
+
+	wg.Wait()
 }
 
 // corsMiddleware adds CORS headers for browser access

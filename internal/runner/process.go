@@ -21,9 +21,8 @@ import (
 
 const (
 	gracefulShutdownTimeout = 10 * time.Second
-	killTimeout             = 5 * time.Second
+	killTimeout             = 1 * time.Second // SIGKILL is enforced by the kernel; 1s is generous for reaping
 	processExitPollInterval = 100 * time.Millisecond
-	processExitPollAttempts = 50
 	maxNiceValue            = 19
 )
 
@@ -175,41 +174,39 @@ func (r *ExecRunner) Stop(task *types.Task) error {
 		return nil
 	}
 
-	// Kill process group
+	// SIGTERM the whole process group, wait up to gracefulShutdownTimeout
+	// for it to die, then SIGKILL if it didn't. Polling Kill(-pid, 0) is
+	// safe; cmd.Wait() runs in Run's background goroutine and calling it
+	// twice would be a data race.
 	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
-		fmt.Printf("Warning: failed to send SIGTERM to process group %d: %v\n", pid, err)
+		log.Printf("Warning: failed to send SIGTERM to process group %d: %v", pid, err)
 	}
-
-	// Wait for graceful shutdown by polling PID.
-	// Don't call cmd.Wait() here — Run's background goroutine already does that,
-	// and calling it twice on the same exec.Cmd is a data race.
-	done := make(chan struct{})
-	go func() {
-		for i := 0; i < processExitPollAttempts; i++ {
-			if err := syscall.Kill(-pid, 0); err != nil {
-				break // entire process group dead
-			}
-			time.Sleep(processExitPollInterval)
-		}
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(gracefulShutdownTimeout):
+	if !waitForPgroupExit(pid, gracefulShutdownTimeout) {
+		log.Printf("Process group %d did not exit within %s, sending SIGKILL", pid, gracefulShutdownTimeout)
 		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-			fmt.Printf("Warning: failed to send SIGKILL to process group %d: %v\n", pid, err)
+			log.Printf("Warning: failed to send SIGKILL to process group %d: %v", pid, err)
 		}
-		select {
-		case <-done:
-		case <-time.After(killTimeout):
-			log.Printf("Process group %d did not exit after SIGKILL, giving up", pid)
+		if !waitForPgroupExit(pid, killTimeout) {
+			log.Printf("Process group %d still alive after SIGKILL, giving up", pid)
 		}
 	}
 
 	r.cleanupTaskDir(task.ID)
 	r.removeCgroup(task.ID)
 	return nil
+}
+
+// waitForPgroupExit polls Kill(-pid, 0) until the process group is gone or
+// budget elapses. Returns true if the group exited in time.
+func waitForPgroupExit(pid int, budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for time.Now().Before(deadline) {
+		if err := syscall.Kill(-pid, 0); err != nil {
+			return true // ESRCH = pgroup gone
+		}
+		time.Sleep(processExitPollInterval)
+	}
+	return false
 }
 
 // Status returns the current state of a task.
