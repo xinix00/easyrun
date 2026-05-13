@@ -332,6 +332,13 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 
 	if r.config.Isolate {
 		mounts = append(mounts, r.setupIsolationEnv(taskDir)...)
+		// Container-naive tools read /proc/meminfo to size heaps. Overmount
+		// just that one file with the task's effective memory so they don't
+		// see the host's 64GB and OOM at 1GB. /proc otherwise stays host —
+		// CoreCLR/glibc need /proc/self/auxv, /proc/self/cgroup etc.
+		if mp := r.fakeMeminfo(taskDir, job.MemoryLimit); mp != "" {
+			mounts = append(mounts, mp)
+		}
 	}
 
 	r.mu.Lock()

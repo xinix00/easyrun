@@ -69,6 +69,46 @@ func (r *ExecRunner) attachCgroup(cmd *exec.Cmd, fd int) {
 	cmd.SysProcAttr.CgroupFD = fd
 }
 
+// fakeMeminfo writes a synthetic /proc/meminfo for the task and bind-mounts
+// it over the chroot's /proc/meminfo. Returns the mount target (for cleanup
+// tracking) or "" if no fake was created — when MemoryLimit is unset the
+// host total is honest, and when /proc isn't mounted there's nothing to
+// overmount.
+//
+// Static snapshot at start: MemFree/MemAvailable seed at full limit. We
+// don't track allocations live (that's lxcfs territory). Enough for tools
+// that read MemTotal for heap sizing.
+func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
+	if memoryLimit == 0 {
+		return ""
+	}
+	target := filepath.Join(taskDir, "proc/meminfo")
+	if _, err := os.Stat(target); err != nil {
+		return ""
+	}
+	src := filepath.Join(taskDir, ".hop-meminfo")
+	kb := memoryLimit / 1024
+	content := fmt.Sprintf(
+		"MemTotal:       %d kB\n"+
+			"MemFree:        %d kB\n"+
+			"MemAvailable:   %d kB\n"+
+			"Buffers:               0 kB\n"+
+			"Cached:                0 kB\n"+
+			"SwapTotal:             0 kB\n"+
+			"SwapFree:              0 kB\n",
+		kb, kb, kb,
+	)
+	if err := os.WriteFile(src, []byte(content), 0644); err != nil {
+		log.Printf("Warning: meminfo fake write: %v", err)
+		return ""
+	}
+	if err := syscall.Mount(src, target, "", syscall.MS_BIND, ""); err != nil {
+		log.Printf("Warning: meminfo overmount: %v", err)
+		return ""
+	}
+	return target
+}
+
 // mountVolume bind-mounts a host path into the task directory.
 // The target must exist before mount(2) — directory for dir sources, file for file sources.
 func (r *ExecRunner) mountVolume(hostPath, targetPath string) error {
