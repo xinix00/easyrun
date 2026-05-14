@@ -80,20 +80,20 @@ func (s *agentLoop) leaderFailed(format string, args ...any) {
 }
 
 func (s *agentLoop) tick() {
-	// Use cached leader, only ask raft when unknown
+	// Use cached leader, only ask the lock backend when unknown.
 	leaderAddr := s.lastLeaderAddr
 	if leaderAddr == "" {
 		leaderAddr = s.disc.GetLeader()
 	}
 
 	if s.stopLeader != nil {
-		// We are leader — renew raft lease
+		// We are leader — renew the lock lease.
 		if !s.disc.RenewLease() {
 			agents := s.l.GetAgents()
 			if len(agents) > 0 {
-				log.Printf("Raft unreachable but %d agents still connected, staying leader", len(agents))
+				log.Printf("Lock backend renew failed but %d agents still connected, staying leader", len(agents))
 			} else {
-				log.Println("Lost leadership (raft unreachable + no agents)")
+				log.Println("Lost leadership (lock renew failed + no agents)")
 				s.registered = false
 				s.lastLeaderAddr = ""
 				s.stopLeader()

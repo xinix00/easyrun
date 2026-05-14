@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -171,6 +172,9 @@ func (d *Discovery) refresh(ctx context.Context, prevHandle string, gen int64) b
 	}
 	newHandle, err := d.backend.Write(ctx, prevHandle, state)
 	if err != nil {
+		// Surface the backend error so operators can tell a transient
+		// network blip from a real ErrLeaseHeld / 412 PreconditionFailed.
+		log.Printf("lock refresh failed (prevHandle=%q, gen=%d): %v", prevHandle, gen, err)
 		return false
 	}
 	d.mu.Lock()
