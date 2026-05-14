@@ -264,6 +264,10 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) []string {
 		{"/lib", true},
 		{"/lib64", true},
 		{"/dev", false},
+		// Host CA bundle so TLS clients (.NET, openssl, curl) trust the same
+		// certs the host does. Only /etc/ssl/certs — no private keys, no other
+		// /etc files (passwd, shadow, …) leak in.
+		{"/etc/ssl/certs", true},
 	}
 	var mounted []string
 	for _, b := range binds {
