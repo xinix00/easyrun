@@ -1,192 +1,156 @@
 package discovery
 
 import (
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/xinix00/hoplock"
+	"github.com/xinix00/hoplock/mem"
 )
 
 func TestDiscoveryNew(t *testing.T) {
-	d := New("test-cluster", "192.168.1.10", 8080, []string{"http://raft:8080"}, 30*time.Second)
-
-	if d.clusterName != "test-cluster" {
-		t.Errorf("clusterName = %q, want %q", d.clusterName, "test-cluster")
-	}
-	if d.nodeAddr != "192.168.1.10:8080" {
-		t.Errorf("nodeAddr = %q, want %q", d.nodeAddr, "192.168.1.10:8080")
-	}
-	if d.raftEndpoint != "http://raft:8080" {
-		t.Errorf("raftEndpoint = %q, want %q", d.raftEndpoint, "http://raft:8080")
+	d := New(mem.New(), "192.168.1.10", 8080, 30*time.Second)
+	if got := d.NodeAddr(); got != "192.168.1.10:8080" {
+		t.Errorf("NodeAddr() = %q, want %q", got, "192.168.1.10:8080")
 	}
 }
 
-func TestDiscoveryNewEmptyEndpoints(t *testing.T) {
-	d := New("test-cluster", "192.168.1.10", 8080, []string{}, 30*time.Second)
-
-	if d.raftEndpoint != "" {
-		t.Errorf("raftEndpoint = %q, want empty", d.raftEndpoint)
+func TestNilBackendIsHarmless(t *testing.T) {
+	d := New(nil, "10.0.0.1", 9080, time.Second)
+	if d.GetLeader() != "" {
+		t.Error("GetLeader() with nil backend should return empty")
 	}
+	if d.TryBecomeLeader() {
+		t.Error("TryBecomeLeader() with nil backend should return false")
+	}
+	d.ReleaseLeadership() // must not panic
 }
 
-func TestDiscoveryNodeAddr(t *testing.T) {
-	d := New("test-cluster", "192.168.1.10", 8080, nil, 30*time.Second)
-
-	if d.NodeAddr() != "192.168.1.10:8080" {
-		t.Errorf("NodeAddr() = %q, want %q", d.NodeAddr(), "192.168.1.10:8080")
-	}
-}
-
-func TestDiscoveryGetLeader(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/leader/test-cluster" && r.Method == http.MethodGet {
-			_ = json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.20:8080"})
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	d := New("test-cluster", "192.168.1.10", 8080, []string{server.URL}, 30*time.Second)
-
-	leader := d.GetLeader()
-	if leader != "192.168.1.20:8080" {
-		t.Errorf("GetLeader() = %q, want %q", leader, "192.168.1.20:8080")
-	}
-}
-
-func TestDiscoveryGetLeaderNoEndpoint(t *testing.T) {
-	d := New("test-cluster", "192.168.1.10", 8080, []string{}, 30*time.Second)
-
-	leader := d.GetLeader()
-	if leader != "" {
-		t.Errorf("GetLeader() = %q, want empty", leader)
-	}
-}
-
-func TestDiscoveryGetLeaderNotFound(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	d := New("test-cluster", "192.168.1.10", 8080, []string{server.URL}, 30*time.Second)
-
-	leader := d.GetLeader()
-	if leader != "" {
-		t.Errorf("GetLeader() = %q, want empty", leader)
-	}
-}
-
-func TestDiscoveryTryBecomeLeader(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/leader/test-cluster" && r.Method == http.MethodPost {
-			var req map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&req)
-
-			if req["ip"] == "192.168.1.10:8080" {
-				_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
-				return
-			}
-		}
-		_ = json.NewEncoder(w).Encode(map[string]bool{"success": false})
-	}))
-	defer server.Close()
-
-	d := New("test-cluster", "192.168.1.10", 8080, []string{server.URL}, 30*time.Second)
-
+func TestTryBecomeLeaderCreates(t *testing.T) {
+	d := New(mem.New(), "192.168.1.10", 8080, 30*time.Second)
 	if !d.TryBecomeLeader() {
-		t.Error("TryBecomeLeader() should return true")
+		t.Fatal("expected to claim empty lease")
 	}
-}
-
-func TestDiscoveryTryBecomeLeaderNoEndpoint(t *testing.T) {
-	d := New("test-cluster", "192.168.1.10", 8080, []string{}, 30*time.Second)
-
-	if d.TryBecomeLeader() {
-		t.Error("TryBecomeLeader() should return false without endpoint")
+	if got := d.GetLeader(); got != "192.168.1.10:8080" {
+		t.Errorf("GetLeader() = %q, want %q", got, "192.168.1.10:8080")
 	}
-}
-
-func TestDiscoveryTryBecomeLeaderDenied(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]bool{"success": false})
-	}))
-	defer server.Close()
-
-	d := New("test-cluster", "192.168.1.10", 8080, []string{server.URL}, 30*time.Second)
-
-	if d.TryBecomeLeader() {
-		t.Error("TryBecomeLeader() should return false when denied")
-	}
-}
-
-func TestDiscoveryReleaseLeadership(t *testing.T) {
-	released := false
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/leader/test-cluster" && r.Method == http.MethodDelete {
-			released = true
-			_ = json.NewEncoder(w).Encode(map[string]bool{"released": true})
-			return
-		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	d := New("test-cluster", "192.168.1.10", 8080, []string{server.URL}, 30*time.Second)
-	d.ReleaseLeadership()
-
-	if !released {
-		t.Error("ReleaseLeadership() should call DELETE /leader/{cluster}")
-	}
-}
-
-func TestDiscoveryReleaseLeadershipNoEndpoint(t *testing.T) {
-	d := New("test-cluster", "192.168.1.10", 8080, []string{}, 30*time.Second)
-	// Should not panic
-	d.ReleaseLeadership()
-}
-
-func TestDiscoveryIsLeader(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.10:8080"})
-	}))
-	defer server.Close()
-
-	d := New("test-cluster", "192.168.1.10", 8080, []string{server.URL}, 30*time.Second)
-
 	if !d.IsLeader() {
-		t.Error("IsLeader() should return true when we are leader")
+		t.Error("IsLeader() should be true")
 	}
 }
 
-func TestDiscoveryIsLeaderFalse(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"leader": "192.168.1.20:8080"})
-	}))
-	defer server.Close()
+func TestTryBecomeLeaderDeniedWhenHeldByOther(t *testing.T) {
+	backend := mem.New()
+	other := New(backend, "192.168.1.20", 8080, 30*time.Second)
+	if !other.TryBecomeLeader() {
+		t.Fatal("other node failed to acquire")
+	}
 
-	d := New("test-cluster", "192.168.1.10", 8080, []string{server.URL}, 30*time.Second)
-
-	if d.IsLeader() {
-		t.Error("IsLeader() should return false when someone else is leader")
+	mine := New(backend, "192.168.1.10", 8080, 30*time.Second)
+	if mine.TryBecomeLeader() {
+		t.Error("should not be able to take over a non-expired lease")
+	}
+	if mine.GetLeader() != "192.168.1.20:8080" {
+		t.Errorf("expected leader to be other node, got %q", mine.GetLeader())
 	}
 }
 
-func TestDiscoveryRenewLease(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			_ = json.NewEncoder(w).Encode(map[string]bool{"success": true})
-			return
+func TestTryBecomeLeaderTakesOverExpired(t *testing.T) {
+	backend := mem.New()
+	now := time.Unix(1_000_000, 0)
+	clock := &fakeClock{now: now}
+
+	other := New(backend, "192.168.1.20", 8080, 10*time.Second)
+	other.now = clock.Now
+	if !other.TryBecomeLeader() {
+		t.Fatal("other node failed to acquire")
+	}
+
+	// Past expiry from another candidate's perspective.
+	clock.now = now.Add(time.Hour)
+
+	mine := New(backend, "192.168.1.10", 8080, 10*time.Second)
+	mine.now = clock.Now
+	if !mine.TryBecomeLeader() {
+		t.Fatal("expected to take over expired lease")
+	}
+	if got := mine.GetLeader(); got != "192.168.1.10:8080" {
+		t.Errorf("after takeover GetLeader() = %q, want %q", got, "192.168.1.10:8080")
+	}
+}
+
+func TestRenewKeepsHandle(t *testing.T) {
+	d := New(mem.New(), "192.168.1.10", 8080, 30*time.Second)
+	if !d.TryBecomeLeader() {
+		t.Fatal("acquire")
+	}
+	for i := 0; i < 3; i++ {
+		if !d.RenewLease() {
+			t.Fatalf("renew %d failed", i)
 		}
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer server.Close()
-
-	d := New("test-cluster", "192.168.1.10", 8080, []string{server.URL}, 30*time.Second)
-
-	if !d.RenewLease() {
-		t.Error("RenewLease() should return true")
 	}
 }
+
+func TestReleaseAllowsTakeover(t *testing.T) {
+	backend := mem.New()
+	a := New(backend, "192.168.1.10", 8080, 30*time.Second)
+	if !a.TryBecomeLeader() {
+		t.Fatal("a acquire")
+	}
+	a.ReleaseLeadership()
+
+	b := New(backend, "192.168.1.20", 8080, 30*time.Second)
+	if !b.TryBecomeLeader() {
+		t.Fatal("b should be able to acquire immediately after release")
+	}
+	if b.GetLeader() != "192.168.1.20:8080" {
+		t.Errorf("after takeover GetLeader() = %q", b.GetLeader())
+	}
+}
+
+func TestGenerationMonotonic(t *testing.T) {
+	backend := mem.New()
+	now := time.Unix(1_000_000, 0)
+	clock := &fakeClock{now: now}
+
+	a := New(backend, "a:1", 0, 10*time.Second)
+	a.now = clock.Now
+	if !a.TryBecomeLeader() {
+		t.Fatal("a acquire")
+	}
+	state, _, err := backend.Read(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state.Generation != 1 {
+		t.Errorf("first generation = %d, want 1", state.Generation)
+	}
+
+	// a renews — generation stays the same.
+	if !a.RenewLease() {
+		t.Fatal("renew")
+	}
+	state, _, _ = backend.Read(t.Context())
+	if state.Generation != 1 {
+		t.Errorf("after renew generation = %d, want 1", state.Generation)
+	}
+
+	// b takes over after expiry — generation bumps.
+	clock.now = now.Add(time.Hour)
+	b := New(backend, "b:1", 0, 10*time.Second)
+	b.now = clock.Now
+	if !b.TryBecomeLeader() {
+		t.Fatal("b takeover")
+	}
+	state, _, _ = backend.Read(t.Context())
+	if state.Generation != 2 {
+		t.Errorf("after takeover generation = %d, want 2", state.Generation)
+	}
+}
+
+type fakeClock struct{ now time.Time }
+
+func (c *fakeClock) Now() time.Time { return c.now }
+
+// Ensure compile-time that hoplock errors are still in scope.
+var _ = hoplock.ErrNoLease

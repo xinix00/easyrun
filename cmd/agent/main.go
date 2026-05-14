@@ -24,6 +24,7 @@ import (
 	"hop/pkg/config"
 
 	"github.com/google/uuid"
+	"github.com/xinix00/hoplock"
 )
 
 // version is set at build time via -ldflags "-X main.version=v1.0.0"
@@ -34,8 +35,8 @@ func main() {
 	configPath := flag.String("config", "", "Path to config file")
 	nodeName := flag.String("node", "", "Node name/ID (overrides config file)")
 	clusterName := flag.String("cluster", "", "Cluster name (e.g., haas-prod)")
-	raftEndpoint := flag.String("raft", "", "HopRaft endpoint (overrides config file)")
-	standalone := flag.Bool("standalone", false, "Run without hopraft (single-node mode)")
+	lockURL := flag.String("lock", "", "hoplockserver URL (overrides config file)")
+	standalone := flag.Bool("standalone", false, "Run without a lock backend (single-node mode)")
 	apiKey := flag.String("api-key", "", "API key for authentication (overrides config file)")
 	flag.Parse()
 
@@ -49,8 +50,9 @@ func main() {
 	if *clusterName != "" {
 		cfg.Cluster.Name = *clusterName
 	}
-	if *raftEndpoint != "" && !*standalone {
-		cfg.Cluster.RaftEndpoints = []string{*raftEndpoint}
+	if *lockURL != "" && !*standalone {
+		cfg.Cluster.Lock.Type = "hoplockserver"
+		cfg.Cluster.Lock.URL = *lockURL
 	}
 	if *apiKey != "" {
 		cfg.APIKey = *apiKey
@@ -59,9 +61,10 @@ func main() {
 		cfg.Node.ID = *nodeName
 	}
 
-	// Validate
-	if !*standalone && len(cfg.Cluster.RaftEndpoints) == 0 {
-		log.Fatal("No raft endpoint configured.\n  Use --raft <url> or set raft_endpoints in config file.\n  For single-node mode: --standalone")
+	// No lock backend configured → run standalone (in-memory). Allows
+	// hop to be useful with zero config beyond the cluster name.
+	if !*standalone && !lockConfigured(cfg.Cluster.Lock) {
+		*standalone = true
 	}
 	if cfg.Cluster.Name == "" {
 		log.Fatal("cluster name required (use --cluster or config file)")
@@ -84,9 +87,9 @@ func main() {
 	log.Printf("Node %s on %s:%d", nodeID, cfg.Node.IP, cfg.Node.Port)
 	log.Printf("Cluster: %s", cfg.Cluster.Name)
 	if *standalone {
-		log.Println("Running in standalone mode (no raft)")
+		log.Println("Running in standalone mode (in-memory lock backend, single-node)")
 	} else {
-		log.Printf("Using hopraft: %v", cfg.Cluster.RaftEndpoints)
+		log.Printf("Lock backend: %s", lockLabel(cfg.Cluster.Lock))
 	}
 
 	// Create context for graceful shutdown
@@ -102,19 +105,23 @@ func main() {
 		cancel()
 	}()
 
-	run(ctx, cfg, nodeID)
+	run(ctx, cfg, nodeID, *standalone)
 }
 
 // httpClient is reused for all heartbeat/register calls (connection pooling)
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
-func run(ctx context.Context, cfg *config.Config, nodeID string) {
+func run(ctx context.Context, cfg *config.Config, nodeID string, standalone bool) {
+	backend, err := buildBackend(cfg, standalone)
+	if err != nil {
+		log.Fatalf("Lock backend: %v", err)
+	}
+
 	// Create discovery client for leader election
 	disc := discovery.New(
-		cfg.Cluster.Name,
+		backend,
 		cfg.Node.IP,
 		cfg.Node.Port+1000, // Leader API port
-		cfg.Cluster.RaftEndpoints,
 		cfg.Timeouts.LeaderLease,
 	)
 
@@ -171,6 +178,59 @@ func run(ctx context.Context, cfg *config.Config, nodeID string) {
 	// Run agent HTTP server
 	if err := ag.Run(ctx); err != nil {
 		log.Printf("Agent error: %v", err)
+	}
+}
+
+// lockConfigured reports whether cluster.lock has enough information to
+// construct a working backend.
+func lockConfigured(c config.LockConfig) bool {
+	switch c.Type {
+	case "s3":
+		return c.S3.Endpoint != "" && c.S3.Bucket != ""
+	case "mem":
+		return true
+	default:
+		return c.URL != ""
+	}
+}
+
+// lockLabel returns a short human-readable description of the configured
+// backend for startup logging.
+func lockLabel(c config.LockConfig) string {
+	switch c.Type {
+	case "s3":
+		return fmt.Sprintf("s3 (%s/%s)", c.S3.Endpoint, c.S3.Bucket)
+	case "mem":
+		return "mem (in-process)"
+	default:
+		return fmt.Sprintf("hoplockserver (%s)", c.URL)
+	}
+}
+
+// buildBackend translates config into a hoplock.Backend. Standalone mode
+// short-circuits to an in-memory backend regardless of what is configured.
+func buildBackend(cfg *config.Config, standalone bool) (hoplock.Backend, error) {
+	if standalone {
+		return discovery.InMemoryBackend(), nil
+	}
+	c := cfg.Cluster.Lock
+	switch c.Type {
+	case "mem":
+		return discovery.InMemoryBackend(), nil
+	case "s3":
+		return discovery.S3Backend(discovery.S3BackendConfig{
+			Endpoint:        c.S3.Endpoint,
+			Bucket:          c.S3.Bucket,
+			Region:          c.S3.Region,
+			AccessKeyID:     c.S3.AccessKeyID,
+			SecretAccessKey: c.S3.SecretAccessKey,
+			SessionToken:    c.S3.SessionToken,
+			UsePathStyle:    c.S3.UsePathStyle,
+		}, cfg.Cluster.Name), nil
+	case "", "hoplockserver":
+		return discovery.HoplockServerBackend(c.URL, c.APIKey, cfg.Cluster.Name), nil
+	default:
+		return nil, fmt.Errorf("unknown lock type %q (want one of: hoplockserver, s3, mem)", c.Type)
 	}
 }
 

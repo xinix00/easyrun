@@ -26,10 +26,46 @@ type NodeConfig struct {
 	Attributes map[string]string `yaml:"attributes"` // user-defined node attributes (merged with auto-detected)
 }
 
-// ClusterConfig holds cluster-wide configuration
+// ClusterConfig holds cluster-wide configuration.
 type ClusterConfig struct {
-	Name         string   `yaml:"name"`
-	RaftEndpoints []string `yaml:"raft_endpoints"` // HopRaft endpoints (e.g., ["http://10.0.0.1:8080", "http://10.0.0.2:8080"])
+	Name string     `yaml:"name"`
+	Lock LockConfig `yaml:"lock"`
+}
+
+// LockConfig configures the hoplock backend used for leader election. The
+// zero value means "no backend" (standalone mode); an in-memory backend is
+// substituted at startup.
+type LockConfig struct {
+	// Type selects the backend implementation. Supported values:
+	//   - "" or "hoplockserver": talk to a hoplockserver over HTTP.
+	//   - "s3": talk to an S3-compatible object store via sigv4.
+	//   - "mem": in-process memory (standalone / test).
+	Type string `yaml:"type"`
+
+	// URL is the hoplockserver base URL (e.g. http://lock:8090). Used
+	// when Type is "hoplockserver".
+	URL string `yaml:"url"`
+
+	// Key is the lease object key. Defaults to "clusters/<cluster_name>/lease.json".
+	Key string `yaml:"key"`
+
+	// APIKey is the X-API-Key header for hoplockserver. Optional.
+	APIKey string `yaml:"api_key"`
+
+	// S3 holds the S3-backend configuration when Type is "s3".
+	S3 S3LockConfig `yaml:"s3"`
+}
+
+// S3LockConfig configures hoplock/s3 for callers who already operate an
+// S3-compatible object store and prefer not to run hoplockserver.
+type S3LockConfig struct {
+	Endpoint        string `yaml:"endpoint"`
+	Bucket          string `yaml:"bucket"`
+	Region          string `yaml:"region"`
+	AccessKeyID     string `yaml:"access_key_id"`
+	SecretAccessKey string `yaml:"secret_access_key"`
+	SessionToken    string `yaml:"session_token"`
+	UsePathStyle    bool   `yaml:"use_path_style"`
 }
 
 // CapacityConfig caps how much CPU/memory hop will commit on this node.
@@ -70,8 +106,8 @@ func DefaultConfig() *Config {
 			Port: 8080,
 		},
 		Cluster: ClusterConfig{
-			Name:          "default",
-			RaftEndpoints: nil, // Empty = standalone mode
+			Name: "default",
+			Lock: LockConfig{}, // empty = standalone
 		},
 		Capacity: CapacityConfig{
 			// 0 = auto-detect; operators override to cap below hardware.
