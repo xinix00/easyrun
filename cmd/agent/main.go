@@ -78,9 +78,21 @@ func main() {
 	// Get or create stable node ID
 	nodeID := getOrCreateNodeID(cfg)
 
-	// Auto-detect IP if not set
+	// Auto-detect IP if not set. If node.network is set, pick the first
+	// interface IP inside that CIDR (useful for multi-homed hosts that need
+	// to advertise on a specific LAN/VPN instead of the default-route
+	// interface). Otherwise fall back to default-route detection.
 	if cfg.Node.IP == "" {
-		cfg.Node.IP = getOutboundIP()
+		if cfg.Node.Network != "" {
+			ip, err := pickIPInNetwork(cfg.Node.Network)
+			if err != nil {
+				log.Fatalf("node.network %q: %v", cfg.Node.Network, err)
+			}
+			cfg.Node.IP = ip
+			log.Printf("Picked %s from node.network %s", ip, cfg.Node.Network)
+		} else {
+			cfg.Node.IP = getOutboundIP()
+		}
 	}
 
 	log.Printf("Starting hop agent %s", version)
@@ -372,5 +384,38 @@ func getOutboundIP() string {
 		localAddr := conn.LocalAddr().(*net.UDPAddr)
 		conn.Close()
 		return localAddr.IP.String()
+	}
+}
+
+// pickIPInNetwork enumerates local interfaces and returns the first IPv4
+// address that falls inside the given CIDR. Retries on transient failures so
+// boot ordering against a not-yet-configured NIC doesn't crash the agent.
+func pickIPInNetwork(cidr string) (string, error) {
+	_, ipnet, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return "", fmt.Errorf("invalid CIDR: %w", err)
+	}
+	for attempt := 0; ; attempt++ {
+		addrs, err := net.InterfaceAddrs()
+		if err == nil {
+			for _, a := range addrs {
+				ipNet, ok := a.(*net.IPNet)
+				if !ok {
+					continue
+				}
+				ip4 := ipNet.IP.To4()
+				if ip4 == nil {
+					continue
+				}
+				if ipnet.Contains(ip4) {
+					return ip4.String(), nil
+				}
+			}
+		}
+		if attempt >= 15 {
+			return "", fmt.Errorf("no interface IP found in %s", cidr)
+		}
+		log.Printf("Waiting for interface with IP in %s...", cidr)
+		time.Sleep(2 * time.Second)
 	}
 }

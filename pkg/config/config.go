@@ -20,9 +20,14 @@ type Config struct {
 
 // NodeConfig holds node-specific configuration
 type NodeConfig struct {
-	ID         string            `yaml:"id"`
-	IP         string            `yaml:"ip"`
-	Port       int               `yaml:"port"`
+	ID   string `yaml:"id"`
+	IP   string `yaml:"ip"`
+	Port int    `yaml:"port"`
+	// Network, when set, makes hop auto-pick the interface IP within this
+	// CIDR (e.g. "10.0.0.0/24"). Used when IP is empty. Useful for clusters
+	// that need to advertise on a specific LAN/VPN instead of the default
+	// route. Ignored if IP is set explicitly.
+	Network    string            `yaml:"network"`
 	Attributes map[string]string `yaml:"attributes"` // user-defined node attributes (merged with auto-detected)
 }
 

@@ -5,7 +5,12 @@
 ```yaml
 node:
   id: ""                    # Auto-generate UUID als leeg
-  ip: ""                    # Auto-detect als leeg
+  ip: ""                    # Auto-detect als leeg (advertised IP voor cluster comms)
+  network: ""               # Optioneel CIDR (bv. "10.0.0.0/24") — als `ip` leeg is
+                            # pakt hop het eerste interface-IP binnen deze range.
+                            # Handig voor multi-homed nodes: HTTP luistert nog
+                            # steeds op 0.0.0.0, alleen de advertised IP wordt
+                            # vastgepind op de LAN/VPN.
   port: 8080                # Agent port (leader draait op port+1000)
   attributes:               # Custom node attributes (merged with auto-detected)
     # region: eu-west-1
