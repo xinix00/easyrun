@@ -155,7 +155,12 @@ func (r *ExecRunner) mountVolume(hostPath, targetPath string) error {
 		}
 		_ = f.Close()
 	}
-	return syscall.Mount(hostPath, targetPath, "", syscall.MS_BIND, "")
+	if err := syscall.Mount(hostPath, targetPath, "", syscall.MS_BIND, ""); err != nil {
+		return err
+	}
+	// Make the bind mount private to prevent unmount propagation back to the host
+	_ = syscall.Mount("", targetPath, "", syscall.MS_PRIVATE|syscall.MS_REC, "")
+	return nil
 }
 
 // unmountVolume cleans up a mounted volume. MNT_DETACH (lazy unmount) keeps
@@ -283,6 +288,8 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) []string {
 			log.Printf("Warning: failed to bind-mount %s into chroot: %v", b.src, err)
 			continue
 		}
+		// Make the mount private recursively to prevent unmount propagation back to the host
+		_ = syscall.Mount("", target, "", syscall.MS_PRIVATE|syscall.MS_REC, "")
 		mounted = append(mounted, target)
 		if b.readonly {
 			if err := syscall.Mount("", target, "", syscall.MS_REMOUNT|syscall.MS_BIND|syscall.MS_RDONLY, ""); err != nil {
@@ -300,6 +307,8 @@ func (r *ExecRunner) setupIsolationEnv(taskDir string) []string {
 			if f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, 0644); err == nil {
 				_ = f.Close()
 				if err := syscall.Mount("/etc/resolv.conf", target, "", syscall.MS_BIND, ""); err == nil {
+					// Make the bind mount private to prevent unmount propagation back to the host
+					_ = syscall.Mount("", target, "", syscall.MS_PRIVATE, "")
 					mounted = append(mounted, target)
 				}
 			}
