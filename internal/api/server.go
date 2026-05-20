@@ -1,10 +1,12 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -20,6 +22,7 @@ type Server struct {
 	leader      *leader.Leader
 	server      *http.Server
 	clusterName string
+	apiKey      string
 }
 
 // NewServer creates a new API server
@@ -27,6 +30,7 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 	s := &Server{
 		leader:      l,
 		clusterName: clusterName,
+		apiKey:      apiKey,
 	}
 
 	auth := func(h http.HandlerFunc) http.HandlerFunc {
@@ -43,6 +47,8 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 	mux.HandleFunc("POST /v1/agents", auth(s.handleRegisterAgent))
 	mux.HandleFunc("POST /v1/heartbeat", auth(s.handleHeartbeat))
 	mux.HandleFunc("DELETE /v1/agents/", auth(s.handleUnregisterAgent))
+	mux.HandleFunc("GET /v1/agents/{agent_id}/capacity", auth(s.handleAgentCapacity))
+	mux.HandleFunc("GET /v1/agents/{agent_id}/logs/{task_id}/{stream}", auth(s.handleAgentLogs))
 
 	// Jobs (authenticated)
 	mux.HandleFunc("GET /v1/jobs", auth(s.handleGetJobs))
@@ -354,4 +360,94 @@ func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
 		"agents":         agents,
 		"tasks_by_agent": tasks,
 	})
+}
+
+// handleAgentCapacity proxies capacity query to specific agent
+func (s *Server) handleAgentCapacity(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	if agentID == "" {
+		httputil.WriteError(w, http.StatusBadRequest, "agent id required")
+		return
+	}
+
+	resp := s.proxyToAgent(w, r, agentID, "/capacity")
+	if resp == nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// handleAgentLogs proxies SSE log streaming from specific agent
+func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
+	agentID := r.PathValue("agent_id")
+	taskID := r.PathValue("task_id")
+	stream := r.PathValue("stream")
+
+	if agentID == "" || taskID == "" || (stream != "stdout" && stream != "stderr") {
+		httputil.WriteError(w, http.StatusBadRequest, "invalid request parameters")
+		return
+	}
+
+	path := fmt.Sprintf("/logs/%s/%s", taskID, stream)
+	resp := s.proxyToAgent(w, r, agentID, path)
+	if resp == nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	sse := httputil.SSEWriter(w)
+	if sse == nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		fmt.Fprintf(w, "%s\n", scanner.Text())
+		if scanner.Text() == "" {
+			sse.Flush()
+		}
+	}
+}
+
+// proxyToAgent forwards an HTTP request to an agent, checking existence and setting API headers
+func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request, agentID string, path string) *http.Response {
+	agent := s.leader.GetAgent(agentID)
+	if agent == nil {
+		httputil.WriteError(w, http.StatusNotFound, "agent not found")
+		return nil
+	}
+
+	url := agent.Endpoint + path
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, url, nil)
+	if err != nil {
+		httputil.WriteError(w, http.StatusInternalServerError, "failed to create proxy request")
+		return nil
+	}
+
+	if accept := r.Header.Get("Accept"); accept != "" {
+		req.Header.Set("Accept", accept)
+	}
+
+	if s.apiKey != "" {
+		req.Header.Set("X-API-Key", s.apiKey)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		httputil.WriteError(w, http.StatusBadGateway, "failed to contact agent")
+		return nil
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		resp.Body.Close()
+		return nil
+	}
+
+	return resp
 }

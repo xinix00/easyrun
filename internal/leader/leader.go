@@ -245,6 +245,21 @@ func (l *Leader) GetAgents() []*types.Agent {
 	})
 }
 
+// GetAgent returns a registered agent by ID
+func (l *Leader) GetAgent(id string) *types.Agent {
+	return query(l, func(s *leaderState) *types.Agent {
+		if a, ok := s.agents[id]; ok {
+			return &types.Agent{
+				ID:       a.ID,
+				Endpoint: a.Endpoint,
+				Version:  a.Version,
+				LastSeen: a.LastSeen,
+			}
+		}
+		return nil
+	})
+}
+
 // GetJobs returns all jobs
 func (l *Leader) GetJobs() []*types.Job {
 	return l.jobStore.GetJobs()
