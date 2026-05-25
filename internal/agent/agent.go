@@ -278,12 +278,18 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/logs/", auth(a.handleLogs))
 	mux.HandleFunc("/leader", a.handleLeader)
 
-	// Proxy endpoints - forward to leader for cluster-wide operations
+	// Proxy endpoints - forward to leader for cluster-wide operations.
+	// Streaming endpoints (SSE, log tailing) route to proxyStreamToLeader
+	// so the response is flushed chunk-by-chunk; everything else uses the
+	// buffered proxy. ServeMux picks the most-specific pattern, so the
+	// logs route wins over the generic /v1/agents/ prefix.
 	mux.HandleFunc("/v1/agents", auth(a.proxyToLeader))
+	mux.HandleFunc("/v1/agents/", auth(a.proxyToLeader))
+	mux.HandleFunc("/v1/agents/{id}/logs/", auth(a.proxyStreamToLeader))
 	mux.HandleFunc("/v1/jobs", auth(a.proxyToLeader))
 	mux.HandleFunc("/v1/jobs/", auth(a.proxyToLeader))
 	mux.HandleFunc("/v1/status", auth(a.proxyToLeader))
-	mux.HandleFunc("/v1/events", auth(a.proxySSEToLeader))
+	mux.HandleFunc("/v1/events", auth(a.proxyStreamToLeader))
 
 	addr := fmt.Sprintf(":%d", a.config.Node.Port)
 	a.server = &http.Server{

@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -34,7 +33,9 @@ func (a *Agent) setAPIKey(req, incoming *http.Request) {
 	}
 }
 
-// proxyToLeader forwards requests to the current leader
+// proxyToLeader forwards requests to the current leader.
+// For long-lived endpoints (SSE events, log tailing) use proxyStreamToLeader
+// instead — io.Copy's buffering would delay chunk delivery here.
 func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 	leaderAddr := a.getLeader()
 	if leaderAddr == "" {
@@ -42,7 +43,6 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Forward request to leader (preserve method and body)
 	url := fmt.Sprintf("http://%s%s", leaderAddr, r.URL.Path)
 	req, err := http.NewRequest(r.Method, url, r.Body)
 	if err != nil {
@@ -59,29 +59,36 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	// Copy response headers and status
 	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// proxySSEToLeader forwards the SSE event stream from the leader.
-// Uses a dedicated client without timeout and flushes after each SSE event.
-func (a *Agent) proxySSEToLeader(w http.ResponseWriter, r *http.Request) {
+// proxyStreamToLeader forwards a request to the leader and streams the
+// response back chunk-by-chunk, flushing as data arrives. Used for SSE
+// (/v1/events) and live log tailing where buffering would delay output.
+func (a *Agent) proxyStreamToLeader(w http.ResponseWriter, r *http.Request) {
 	leaderAddr := a.getLeader()
 	if leaderAddr == "" {
 		httputil.WriteError(w, http.StatusServiceUnavailable, "no leader available")
 		return
 	}
 
-	req, err := http.NewRequestWithContext(r.Context(), "GET", fmt.Sprintf("http://%s/v1/events", leaderAddr), nil)
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	url := fmt.Sprintf("http://%s%s", leaderAddr, r.URL.Path)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, url, r.Body)
 	if err != nil {
 		httputil.WriteError(w, http.StatusInternalServerError, "failed to create request")
 		return
 	}
 	a.setAPIKey(req, r)
 
-	// No timeout — SSE is long-lived
+	// No timeout — these are long-lived streams.
 	resp, err := (&http.Client{}).Do(req)
 	if err != nil {
 		httputil.WriteError(w, http.StatusBadGateway, "failed to contact leader")
@@ -89,17 +96,22 @@ func (a *Agent) proxySSEToLeader(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	sse := httputil.SSEWriter(w)
-	if sse == nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
-		return
+	if ct := resp.Header.Get("Content-Type"); ct != "" {
+		w.Header().Set("Content-Type", ct)
 	}
+	w.WriteHeader(resp.StatusCode)
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		fmt.Fprintf(w, "%s\n", scanner.Text())
-		if scanner.Text() == "" { // empty line = SSE event boundary
-			sse.Flush()
+	buf := make([]byte, 4096)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			flusher.Flush()
+		}
+		if err != nil {
+			return
 		}
 	}
 }
