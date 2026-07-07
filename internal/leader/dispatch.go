@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"hop/internal/types"
+	"hop/pkg/httputil"
 )
 
 // Sentinel errors returned by sendJobToAgent — lets callers distinguish why an agent rejected.
@@ -250,9 +251,7 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if l.apiKey != "" {
-		req.Header.Set("X-API-Key", l.apiKey)
-	}
+	httputil.SignRequest(req, l.apiKey, body)
 
 	resp, err := l.httpClient.Do(req)
 	if err != nil {
@@ -284,9 +283,7 @@ func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobName string) bool {
 		log.Printf("Failed to create stop request for %s on %s: %v", jobName, agent.ID, err)
 		return false
 	}
-	if l.apiKey != "" {
-		req.Header.Set("X-API-Key", l.apiKey)
-	}
+	httputil.SignRequest(req, l.apiKey, nil)
 	resp, err := l.deleteClient.Do(req)
 	if err != nil {
 		log.Printf("Failed to stop %s on %s: %v", jobName, agent.ID, err)
@@ -305,9 +302,7 @@ func (l *Leader) stopTaskByID(agent *types.Agent, taskID string) {
 		log.Printf("Failed to create stop-task request for %s on %s: %v", taskID, agent.ID, err)
 		return
 	}
-	if l.apiKey != "" {
-		req.Header.Set("X-API-Key", l.apiKey)
-	}
+	httputil.SignRequest(req, l.apiKey, nil)
 	resp, err := l.deleteClient.Do(req)
 	if err != nil {
 		log.Printf("Failed to stop task %s on %s: %v", taskID, agent.ID, err)
@@ -324,9 +319,7 @@ func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobName string) {
 		log.Printf("Failed to create delete request for %s on %s: %v", jobName, agent.ID, err)
 		return
 	}
-	if l.apiKey != "" {
-		req.Header.Set("X-API-Key", l.apiKey)
-	}
+	httputil.SignRequest(req, l.apiKey, nil)
 	resp, err := l.deleteClient.Do(req)
 	if err != nil {
 		log.Printf("Failed to delete %s on %s: %v", jobName, agent.ID, err)

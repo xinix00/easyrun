@@ -492,6 +492,11 @@ func TestTaskInStateImmediatelyAfterAccept(t *testing.T) {
 		return nil
 	}
 
+	// testConfig caps Capacity.CPUShares at 1000; clear it so SetSysInfo drives
+	// the effective capacity (effectiveCPUShares takes the min of cap and detected).
+	cfg.Capacity.CPUShares = 0
+	cfg.Capacity.Memory = 0
+
 	agent := New(cfg, "test-agent", mockRunner)
 	agent.SetSysInfo(SystemInfo{CPUCores: 2, MemoryBytes: 1024 * 1024 * 1024}) // 2 cores = 2048 shares
 

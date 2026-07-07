@@ -15,6 +15,7 @@ import (
 	"text/tabwriter"
 
 	"hop/internal/types"
+	"hop/pkg/httputil"
 )
 
 var (
@@ -437,11 +438,13 @@ func doRequest(method, path string, body any) ([]byte, error) {
 	url := fmt.Sprintf("http://%s%s", leaderAddr, path)
 
 	var reqBody io.Reader
+	var bodyBytes []byte
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
+		bodyBytes = data
 		reqBody = bytes.NewReader(data)
 	}
 
@@ -450,9 +453,7 @@ func doRequest(method, path string, body any) ([]byte, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
-	}
+	httputil.SignRequest(req, apiKey, bodyBytes)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

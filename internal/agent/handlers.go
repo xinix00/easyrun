@@ -17,19 +17,17 @@ import (
 	"github.com/google/uuid"
 )
 
-// setAPIKey adds X-API-Key to req. If incoming is non-nil and carries a key,
-// that one is forwarded (so the leader sees the original caller's key);
-// otherwise the agent's configured key is used. No header is set when no key
-// is available — empty-key mode keeps dev/standalone setups unauthenticated.
-func (a *Agent) setAPIKey(req, incoming *http.Request) {
-	if incoming != nil {
-		if key := incoming.Header.Get("X-API-Key"); key != "" {
-			req.Header.Set("X-API-Key", key)
-			return
-		}
+// setAuth forwards the caller's X-Hop-Auth signature to the leader. The proxy
+// relays the same method, path and body, so the caller's signature stays valid
+// against the leader (the whole cluster shares one key). Nothing is forwarded
+// when the caller didn't sign — the proxy endpoints sit behind RequireHMAC, so
+// a missing signature only happens in empty-key (auth-off) mode.
+func (a *Agent) setAuth(req, incoming *http.Request) {
+	if incoming == nil {
+		return
 	}
-	if a.apiKey != "" {
-		req.Header.Set("X-API-Key", a.apiKey)
+	if sig := incoming.Header.Get(httputil.AuthHeader); sig != "" {
+		req.Header.Set(httputil.AuthHeader, sig)
 	}
 }
 
@@ -50,7 +48,7 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-	a.setAPIKey(req, r)
+	a.setAuth(req, r)
 
 	resp, err := a.httpClient.Do(req)
 	if err != nil {
@@ -86,7 +84,7 @@ func (a *Agent) proxyStreamToLeader(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusInternalServerError, "failed to create request")
 		return
 	}
-	a.setAPIKey(req, r)
+	a.setAuth(req, r)
 
 	// No timeout — these are long-lived streams.
 	resp, err := (&http.Client{}).Do(req)
@@ -123,13 +121,13 @@ func (a *Agent) notifyLeader(jobName, event string) {
 	if addr == "" {
 		return
 	}
-	body := strings.NewReader(fmt.Sprintf(`{"job":%q,"event":%q}`, jobName, event))
-	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/v1/notify", addr), body)
+	payload := fmt.Sprintf(`{"job":%q,"event":%q}`, jobName, event)
+	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/v1/notify", addr), strings.NewReader(payload))
 	if err != nil {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
-	a.setAPIKey(req, nil)
+	httputil.SignRequest(req, a.apiKey, []byte(payload))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return
@@ -640,6 +638,9 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 	broadcaster := get(a.execRunner)
 	if broadcaster == nil {
 		broadcaster = get(a.dockerRunner)
+	}
+	if broadcaster == nil && a.hopRunner != nil {
+		broadcaster = get(a.hopRunner)
 	}
 
 	if broadcaster == nil {

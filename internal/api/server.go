@@ -34,7 +34,7 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 	}
 
 	auth := func(h http.HandlerFunc) http.HandlerFunc {
-		return httputil.RequireAPIKey(apiKey, h)
+		return httputil.RequireHMAC(apiKey, h)
 	}
 
 	mux := http.NewServeMux()
@@ -186,8 +186,11 @@ func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 		httputil.WriteError(w, http.StatusBadRequest, "name required")
 		return
 	}
-	if job.Command == "" && job.Image == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "command or image required")
+	// hop driver: the artifact IS the program (a native app image); there is
+	// no command (exec) or container image (docker).
+	hopImage := job.Driver == types.DriverHop && len(job.Artifacts) == 1
+	if job.Command == "" && job.Image == "" && !hopImage {
+		httputil.WriteError(w, http.StatusBadRequest, "command or image required (or driver \"hop\" with one artifact)")
 		return
 	}
 
@@ -432,9 +435,7 @@ func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request, agentID st
 		req.Header.Set("Accept", accept)
 	}
 
-	if s.apiKey != "" {
-		req.Header.Set("X-API-Key", s.apiKey)
-	}
+	httputil.SignRequest(req, s.apiKey, nil)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

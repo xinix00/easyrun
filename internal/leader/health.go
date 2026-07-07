@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"hop/internal/types"
+	"hop/pkg/httputil"
 )
 
 // Run starts the leader's state loop and dead agent checker
@@ -291,9 +292,7 @@ func (l *Leader) fetchAgentTasks(ctx context.Context, agent *types.Agent) ([]*ty
 	if err != nil {
 		return nil, err
 	}
-	if l.apiKey != "" {
-		req.Header.Set("X-API-Key", l.apiKey)
-	}
+	httputil.SignRequest(req, l.apiKey, nil)
 
 	resp, err := l.httpClient.Do(req)
 	if err != nil {

@@ -240,17 +240,21 @@ func TestHandleRunRunnerError(t *testing.T) {
 	// Wait for async job attempt
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify no task was created (runner failed)
-	tasks := query(agent, func(s *agentState) []*types.Task {
-		var result []*types.Task
+	// A failed start now lingers in state (marked failed, then retried with
+	// backoff — see restartTask), so we no longer expect zero tasks. What must
+	// hold is that a failed runner never produces a RUNNING task.
+	running := query(agent, func(s *agentState) int {
+		n := 0
 		for _, t := range s.tasks {
-			result = append(result, t)
+			if t.State == types.TaskRunning {
+				n++
+			}
 		}
-		return result
+		return n
 	})
 
-	if len(tasks) != 0 {
-		t.Errorf("Got %d tasks, want 0 (runner should have failed)", len(tasks))
+	if running != 0 {
+		t.Errorf("Got %d running tasks, want 0 (runner should have failed)", running)
 	}
 }
 
@@ -432,17 +436,20 @@ func TestHandleRunEmptyJSON(t *testing.T) {
 	// Wait for async job attempt
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify no task was created (command validation failed)
-	tasks := query(agent, func(s *agentState) []*types.Task {
-		var result []*types.Task
+	// A failed start now lingers in state (marked failed, then retried), so we
+	// no longer expect zero tasks — only that no task ends up RUNNING.
+	running := query(agent, func(s *agentState) int {
+		n := 0
 		for _, t := range s.tasks {
-			result = append(result, t)
+			if t.State == types.TaskRunning {
+				n++
+			}
 		}
-		return result
+		return n
 	})
 
-	if len(tasks) != 0 {
-		t.Errorf("Got %d tasks, want 0 (empty command should fail)", len(tasks))
+	if running != 0 {
+		t.Errorf("Got %d running tasks, want 0 (empty command should fail)", running)
 	}
 }
 
@@ -516,7 +523,7 @@ func TestHandleRunWithFixedPorts(t *testing.T) {
 	job := types.Job{
 		Name:    "test",
 		Command: "echo",
-		Ports:   map[string]int{"http": 8080, "grpc": 0}, // http fixed, grpc dynamic
+		Ports:   map[string]int{"http": 18083, "grpc": 0}, // http fixed (unique high port), grpc dynamic
 	}
 
 	body, _ := json.Marshal(job)
@@ -546,9 +553,9 @@ func TestHandleRunWithFixedPorts(t *testing.T) {
 	}
 
 	task := tasks[0]
-	// http should be fixed at 8080
-	if task.Ports["http"] != 8080 {
-		t.Errorf("http port = %d, want 8080", task.Ports["http"])
+	// http should be fixed at the requested port
+	if task.Ports["http"] != 18083 {
+		t.Errorf("http port = %d, want 18083", task.Ports["http"])
 	}
 
 	// grpc should be dynamic (non-zero)
@@ -595,17 +602,20 @@ func TestHandleRunPortInUse(t *testing.T) {
 	// Wait for async job attempt
 	time.Sleep(50 * time.Millisecond)
 
-	// Verify no task was created (port in use)
-	tasks := query(agent, func(s *agentState) []*types.Task {
-		var result []*types.Task
+	// Port stays occupied, so the start keeps failing — the task lingers (failed
+	// + retried) rather than being removed. The invariant is that it never runs.
+	running := query(agent, func(s *agentState) int {
+		n := 0
 		for _, t := range s.tasks {
-			result = append(result, t)
+			if t.State == types.TaskRunning {
+				n++
+			}
 		}
-		return result
+		return n
 	})
 
-	if len(tasks) != 0 {
-		t.Errorf("Got %d tasks, want 0 (port in use should fail)", len(tasks))
+	if running != 0 {
+		t.Errorf("Got %d running tasks, want 0 (port in use should fail)", running)
 	}
 }
 

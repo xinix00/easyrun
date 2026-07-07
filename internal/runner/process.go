@@ -1,3 +1,9 @@
+// ExecRunner is POSIX-only: it needs a process model (fork/exec, signals,
+// nice, chroot/cgroups). On other targets (HopOS/tamago) process_other.go
+// provides a stub that fails with a clear error; tasks run via HopRunner.
+
+//go:build darwin || linux
+
 package runner
 
 import (

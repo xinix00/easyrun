@@ -40,14 +40,21 @@ func NewMockRunner() *MockRunner {
 
 // Run implements runner.Runner
 func (m *MockRunner) Run(job *types.Job, task *types.Task) error {
+	// Snapshot the hook under the lock, then invoke it WITHOUT holding the lock.
+	// Tests use onRun to block a start mid-flight (e.g. on a channel); holding
+	// m.mu across that block would deadlock a concurrent Stop() waiting on m.mu.
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	onRun := m.onRun
+	m.mu.Unlock()
 
-	if m.onRun != nil {
-		if err := m.onRun(job); err != nil {
+	if onRun != nil {
+		if err := onRun(job); err != nil {
 			return err
 		}
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if m.runErr != nil {
 		return m.runErr
@@ -65,14 +72,20 @@ func (m *MockRunner) Run(job *types.Job, task *types.Task) error {
 
 // Stop implements runner.Runner
 func (m *MockRunner) Stop(task *types.Task) error {
+	// Same as Run: invoke the hook without holding m.mu so a Stop concurrent
+	// with a blocked Run doesn't deadlock on the mutex.
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	onStop := m.onStop
+	m.mu.Unlock()
 
-	if m.onStop != nil {
-		if err := m.onStop(task); err != nil {
+	if onStop != nil {
+		if err := onStop(task); err != nil {
 			return err
 		}
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if m.stopErr != nil {
 		return m.stopErr

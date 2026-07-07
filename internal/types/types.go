@@ -14,11 +14,11 @@ const (
 
 // Artifact describes where to download the application binary/assets
 type Artifact struct {
-	URL      string            `json:"url"`               // http://, https://, s3://
-	Match    map[string]string `json:"match,omitempty"`   // node attribute constraints (agent picks first matching artifact)
-	Headers  map[string]string `json:"headers,omitempty"` // HTTP headers (Authorization, X-API-Key, etc.)
-	Auth     map[string]string `json:"auth,omitempty"`    // other credentials (S3: access_key/secret_key/region)
-	Extract  string            `json:"extract,omitempty"` // "tar.gz", "zip", "" (empty = raw file, chmod +x, no extraction)
+	URL      string            `json:"url"`                // http://, https://, s3://
+	Match    map[string]string `json:"match,omitempty"`    // node attribute constraints (agent picks first matching artifact)
+	Headers  map[string]string `json:"headers,omitempty"`  // HTTP headers (Authorization, X-API-Key, etc.)
+	Auth     map[string]string `json:"auth,omitempty"`     // other credentials (S3: access_key/secret_key/region)
+	Extract  string            `json:"extract,omitempty"`  // "tar.gz", "zip", "" (empty = raw file, chmod +x, no extraction)
 	Filename string            `json:"filename,omitempty"` // override filename for raw downloads (default: basename from URL)
 }
 
@@ -58,6 +58,7 @@ const (
 const (
 	DriverExec   = "exec"
 	DriverDocker = "docker"
+	DriverHop    = "hop" // native app image on a HopOS core slot
 )
 
 // DriverFor returns the driver for a given image (empty = exec, non-empty = docker)
@@ -71,25 +72,25 @@ func DriverFor(image string) string {
 // Job defines what the user wants to run.
 // Name is the unique key — no separate UUID.
 type Job struct {
-	Name         string            `json:"name"`                     // unique identifier
-	Affinity     map[string]string `json:"affinity,omitempty"`       // node attribute constraints (AND logic, equality)
-	Driver       string            `json:"driver,omitempty"`         // "exec" (default) or "docker"
-	Image        string            `json:"image,omitempty"`          // Docker image (only for driver=docker)
-	Artifacts    []Artifact        `json:"artifacts,omitempty"`      // binary/assets to download (agent picks first matching)
-	User         string            `json:"user,omitempty"`           // run as this user (default: inherit from agent)
-	Command      string            `json:"command,omitempty"`
-	Count        int               `json:"count,omitempty"`          // number of instances (default 1)
-	Ports        map[string]int    `json:"ports,omitempty"`          // process: port name -> host port (0 = dynamic), docker: port name -> container port
-	CPUShares    int               `json:"cpu_shares,omitempty"`
-	MemoryLimit  uint64            `json:"memory_limit,omitempty"`
-	Env          map[string]string `json:"env,omitempty"`
-	Tags         map[string]string `json:"tags,omitempty"`           // labels for discovery/grouping
-	Volumes      map[string]string `json:"volumes,omitempty"`        // host_path -> task_path (bind-mounted on Linux, symlinked on macOS)
-	HealthCheck  *HealthCheck      `json:"health_check,omitempty"`
-	MaxRestarts    *int              `json:"max_restarts,omitempty"`    // nil = default (5), 0 = no restarts, -1 = unlimited
-	RestartWindow  time.Duration     `json:"restart_window,omitempty"`  // 0 = default (5m), reset restart count if last crash was longer ago
-	UpdatePolicy   UpdatePolicy      `json:"update_policy,omitempty"`   // rolling (default) | recreate | blue-green
-	Priority     *int              `json:"priority,omitempty"`       // nil=auto(end), 0=top, N=Nth position
+	Name          string            `json:"name"`                // unique identifier
+	Affinity      map[string]string `json:"affinity,omitempty"`  // node attribute constraints (AND logic, equality)
+	Driver        string            `json:"driver,omitempty"`    // "exec" (default) or "docker"
+	Image         string            `json:"image,omitempty"`     // Docker image (only for driver=docker)
+	Artifacts     []Artifact        `json:"artifacts,omitempty"` // binary/assets to download (agent picks first matching)
+	User          string            `json:"user,omitempty"`      // run as this user (default: inherit from agent)
+	Command       string            `json:"command,omitempty"`
+	Count         int               `json:"count,omitempty"` // number of instances (default 1)
+	Ports         map[string]int    `json:"ports,omitempty"` // process: port name -> host port (0 = dynamic), docker: port name -> container port
+	CPUShares     int               `json:"cpu_shares,omitempty"`
+	MemoryLimit   uint64            `json:"memory_limit,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	Tags          map[string]string `json:"tags,omitempty"`    // labels for discovery/grouping
+	Volumes       map[string]string `json:"volumes,omitempty"` // host_path -> task_path (bind-mounted on Linux, symlinked on macOS)
+	HealthCheck   *HealthCheck      `json:"health_check,omitempty"`
+	MaxRestarts   *int              `json:"max_restarts,omitempty"`   // nil = default (5), 0 = no restarts, -1 = unlimited
+	RestartWindow time.Duration     `json:"restart_window,omitempty"` // 0 = default (5m), reset restart count if last crash was longer ago
+	UpdatePolicy  UpdatePolicy      `json:"update_policy,omitempty"`  // rolling (default) | recreate | blue-green
+	Priority      *int              `json:"priority,omitempty"`       // nil=auto(end), 0=top, N=Nth position
 }
 
 // Task represents a running instance of a Job

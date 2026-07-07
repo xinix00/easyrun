@@ -41,11 +41,13 @@ func TestAllocatePortsForProcessJob(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	// Process job: fixed port should be preserved
+	// Process job: fixed port should be preserved. Uses a unique high port
+	// (not the shared 8080) so a stray port bind from another test can't race
+	// this availability check.
 	job := &types.Job{
 		Name:    "process-job",
 		Command: "echo",
-		Ports:   map[string]int{"http": 8080, "grpc": 0},
+		Ports:   map[string]int{"http": 18082, "grpc": 0},
 	}
 
 	ports, err := agent.allocatePortsForJob(job)
@@ -53,8 +55,8 @@ func TestAllocatePortsForProcessJob(t *testing.T) {
 		t.Fatalf("allocatePortsForJob failed: %v", err)
 	}
 
-	if ports["http"] != 8080 {
-		t.Errorf("http port = %d, want 8080 (fixed)", ports["http"])
+	if ports["http"] != 18082 {
+		t.Errorf("http port = %d, want 18082 (fixed)", ports["http"])
 	}
 	if ports["grpc"] == 0 {
 		t.Error("grpc port should be dynamically allocated (non-zero)")
@@ -66,12 +68,14 @@ func TestAllocatePortsForDockerJob(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	// Docker job: all ports should be dynamically allocated (values are container ports)
+	// Docker ports follow the same rule as process jobs (commit e6bf2fd:
+	// "container port = host port"): a fixed value (>0) is used as-is, 0 is
+	// dynamically allocated. Unprivileged ports so the check passes without root.
 	job := &types.Job{
 		Name:   "docker-job",
 		Driver: types.DriverDocker,
 		Image:  "nginx:latest",
-		Ports:  map[string]int{"http": 80, "metrics": 9090},
+		Ports:  map[string]int{"http": 18080, "grpc": 0},
 	}
 
 	ports, err := agent.allocatePortsForJob(job)
@@ -79,18 +83,13 @@ func TestAllocatePortsForDockerJob(t *testing.T) {
 		t.Fatalf("allocatePortsForJob failed: %v", err)
 	}
 
-	// Host ports should NOT be the container ports (80, 9090) — they should be random
-	if ports["http"] == 80 {
-		t.Error("Docker http host port should not be container port 80")
+	// Fixed port is preserved (host == container).
+	if ports["http"] != 18080 {
+		t.Errorf("Docker http host port = %d, want 18080 (fixed)", ports["http"])
 	}
-	if ports["metrics"] == 9090 {
-		t.Error("Docker metrics host port should not be container port 9090")
-	}
-	if ports["http"] == 0 {
-		t.Error("Docker http host port should be allocated (non-zero)")
-	}
-	if ports["metrics"] == 0 {
-		t.Error("Docker metrics host port should be allocated (non-zero)")
+	// Zero port is dynamically allocated.
+	if ports["grpc"] == 0 {
+		t.Error("Docker grpc host port should be dynamically allocated (non-zero)")
 	}
 }
 
@@ -134,7 +133,7 @@ func TestStartDockerJob(t *testing.T) {
 	job := &types.Job{
 		Name:  "docker-test",
 		Image: "nginx:latest",
-		Ports: map[string]int{"http": 80},
+		Ports: map[string]int{"http": 18081}, // unprivileged: bindable without root
 	}
 
 	task := newTask(job)

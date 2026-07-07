@@ -22,6 +22,7 @@ import (
 	"hop/internal/leader"
 	"hop/internal/types"
 	"hop/pkg/config"
+	"hop/pkg/httputil"
 
 	"github.com/google/uuid"
 	"github.com/xinix00/hoplock"
@@ -298,9 +299,7 @@ func postJSON(path string, payload any, apiKey string) (*http.Response, error) {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if apiKey != "" {
-		req.Header.Set("X-API-Key", apiKey)
-	}
+	httputil.SignRequest(req, apiKey, body)
 	return httpClient.Do(req)
 }
 

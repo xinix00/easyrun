@@ -49,6 +49,7 @@ type Agent struct {
 	config       *config.Config
 	execRunner   runner.Runner
 	dockerRunner runner.Runner
+	hopRunner    runner.Runner     // set via WithHopRunner on HopOS nodes
 	sysInfo      SystemInfo        // detected once at startup
 	attributes   map[string]string // node attributes for affinity matching
 
@@ -57,11 +58,11 @@ type Agent struct {
 	server     *http.Server
 	getLeader  func() string // returns current leader address (for proxying)
 	httpClient *http.Client
-	apiKey     string // API key for authenticating with leader and protecting local endpoints
+	apiKey     string        // API key for authenticating with leader and protecting local endpoints
 	shutdownCh chan struct{} // closed by shutdown() — long-running goroutines select on this
 
-	needsSave   atomic.Bool              // flag for debounced persistence
-	checkStates map[string]*checkState   // health check state per task (monitor goroutine only)
+	needsSave   atomic.Bool            // flag for debounced persistence
+	checkStates map[string]*checkState // health check state per task (monitor goroutine only)
 }
 
 // New creates a new agent with optional runner (nil uses default ExecRunner)
@@ -108,6 +109,13 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		getLeader:    func() string { return "" }, // overridden by SetLeaderFunc; default = "no leader"
 		shutdownCh:   make(chan struct{}),
 	}
+}
+
+// WithHopRunner registers the HopOS slot runner; jobs with driver "hop" are
+// dispatched to it. Only meaningful on HopOS nodes (node.os == "hopos").
+func (a *Agent) WithHopRunner(r runner.Runner) *Agent {
+	a.hopRunner = r
+	return a
 }
 
 // SetLeaderFunc sets the function to get the current leader address (for proxying cluster requests)
@@ -220,8 +228,15 @@ func (a *Agent) Init() error {
 
 // runnerFor returns the appropriate runner based on driver
 func (a *Agent) runnerFor(driver string) runner.Runner {
-	if driver == types.DriverDocker {
+	switch driver {
+	case types.DriverDocker:
 		return a.dockerRunner
+	case types.DriverHop:
+		if a.hopRunner != nil {
+			return a.hopRunner
+		}
+		// Not a HopOS node: fall through to exec so the task fails with a
+		// clear "command is required"-style error instead of a nil panic.
 	}
 	return a.execRunner
 }
@@ -264,7 +279,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	go a.stateLoop(ctx)
 
 	auth := func(h http.HandlerFunc) http.HandlerFunc {
-		return httputil.RequireAPIKey(a.apiKey, h)
+		return httputil.RequireHMAC(a.apiKey, h)
 	}
 
 	mux := http.NewServeMux()
@@ -395,7 +410,7 @@ func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-Key")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Hop-Auth")
 
 		// Handle preflight
 		if r.Method == "OPTIONS" {

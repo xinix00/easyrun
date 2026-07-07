@@ -51,7 +51,7 @@ timeouts:
 | `--cluster` | Cluster name | (from config) |
 | `--raft` | HopRaft endpoint | (from config) |
 | `--standalone` | Run without hopraft (single-node mode) | false |
-| `--api-key` | API key for authentication (overrides config) | (from config) |
+| `--api-key` | Shared secret for HMAC request auth (X-Hop-Auth); overrides config | (from config) |
 
 ## Development Config
 
