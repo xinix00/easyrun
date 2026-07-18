@@ -566,7 +566,7 @@ func TestHandleRunWithFixedPorts(t *testing.T) {
 
 func TestHandleRunPortInUse(t *testing.T) {
 	// Occupy a port
-	listener, err := net.Listen("tcp", "127.0.0.1:19876")
+	listener, err := net.Listen("tcp", ":19876")
 	if err != nil {
 		t.Fatalf("Failed to occupy port: %v", err)
 	}

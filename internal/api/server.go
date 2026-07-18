@@ -103,14 +103,15 @@ func (s *Server) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, s.leader.GetAgents())
 }
 
+// handleHeartbeat is puur liveness: id/endpoint/version in, "ok" uit. De
+// job-lijsten die hier vroeger heen en weer reisden zijn gesloopt (16-07):
+// gewenste staat heeft één auteur (de leader, gecommit naar S3) en agents
+// zijn uitvoerders. Onbekende velden in oudere agents worden genegeerd.
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID        string         `json:"id"`
-		Endpoint  string         `json:"endpoint"`
-		Version   string         `json:"version,omitempty"`
-		Jobs      []*types.Job   `json:"jobs,omitempty"`
-		Placed    map[string]int `json:"placed,omitempty"`
-		StateTime time.Time      `json:"state_time,omitempty"`
+		ID       string `json:"id"`
+		Endpoint string `json:"endpoint"`
+		Version  string `json:"version,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
@@ -121,16 +122,11 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jobs, known := s.leader.Heartbeat(req.ID, req.Endpoint, req.Jobs, req.StateTime, req.Version)
-	if !known {
+	if !s.leader.Heartbeat(req.ID, req.Version) {
 		httputil.WriteError(w, http.StatusNotFound, "not registered")
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
-		"status":     "ok",
-		"jobs":       jobs,
-		"state_time": s.leader.GetStateTime(),
-	})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
 func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {

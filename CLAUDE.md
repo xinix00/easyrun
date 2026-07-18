@@ -42,11 +42,12 @@ go build -o bin/run ./cmd/cli
 ## Key Architecture Details
 
 - **Agent port**: 8080 (configurable), **Leader port**: agent port + 1000
-- **Heartbeat**: 10s interval, agents send jobs + state_time
-- **Registration**: POST /v1/agents with placed counts (jobID -> count)
+- **Heartbeat**: 10s interval, pure liveness (id/endpoint/version only — no job exchange; desired state has a single author: the leader)
+- **Registration**: POST /v1/agents with placed counts (jobName -> count)
 - **Heartbeat**: POST /v1/heartbeat, returns 404 for unknown agents (triggers re-register)
 - **Settle period**: 30s after becoming leader, no reconciliation during this time
-- **State persistence**: ./data/state-{cluster}.json (debounced save, 5s)
+- **Committed state**: leader snapshots desired state to S3 object `state/<cluster>` (next to the election lease, debounced ~1s); a new leader loads it at takeover — the snapshot is the ONLY truth (deletion is absence). See internal/leader/persist.go
+- **State persistence (local)**: ./data/state-{cluster}.json (debounced save, 5s)
 - **Node ID**: persisted in data/node-id, survives restarts
 - **MaxRestarts**: 0 = default 5, -1 = unlimited
 - **Version**: injected at build time via `-ldflags "-X main.version=..."` (default: "dev")

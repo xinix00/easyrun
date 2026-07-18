@@ -3,8 +3,7 @@ package runner
 import (
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
+	"log"
 	"sync"
 	"time"
 
@@ -18,46 +17,30 @@ import (
 // ExecRunner — this runner only passes image + env + limits along and does no
 // isolation plumbing of its own.
 //
-// Ports are not supported yet (per-slot networking is a HopOS fase-4 design);
-// jobs with ports are rejected explicitly rather than half-working.
+// Ports: every task gets its own network stack on HopOS' internal net; the
+// node publishes each allocated port (name -> port) via stateless DNAT to
+// the task's stack. The task binds the same port number it is published on
+// (read from ER_PORT_<NAME>, injected below), matching the other runners.
+//
+// Volumes (shared path -> local path) pass through to HopOS: the task gets
+// its own empty root plus exactly the mounted shared dirs, served by HOP's
+// NVMe-backed storage layer over the hop-ABI. No memory is ever shared.
 
-// SlotAppStatus values mirror hop-os/metal/layout control-page states.
+// hopStopTimeout is the cooperative window before Stop escalates to the
+// stage-2 revoke. A healthy app parks within ~100ms of the kill-flag (the
+// watch loop polls every 50ms), so 3s is generous; the old 10s made every
+// uncooperative stop in a delete-storm burn 10 serialized seconds (measured
+// 15-07: 127 deletes took tens of minutes).
+const hopStopTimeout = 3 * time.Second
+
+// hopStageTimeout is the NO-PROGRESS window while the apploader downloads the
+// real image: it resets on every heartbeat tick (awaitStaged), so a slow shared
+// link never false-fails a living loader. hopStageHardTimeout is the absolute
+// cap for a loader that is alive but will never finish (stuck stream).
 const (
-	SlotEmpty   = 0
-	SlotBooting = 1
-	SlotReady   = 2
-	SlotExited  = 3
+	hopStageTimeout     = 120 * time.Second
+	hopStageHardTimeout = 10 * time.Minute
 )
-
-// SlotStatus is a point-in-time view of one slot.
-type SlotStatus struct {
-	CoreOn    bool
-	App       uint64 // Slot* constants
-	ExitCode  uint64
-	Heartbeat uint64
-	RAMSize   uint64
-}
-
-// SlotManager abstracts HopOS' slot primitives (hop-os/metal/slots). The
-// bare-metal implementation calls that package directly; tests use a fake.
-type SlotManager interface {
-	// NumSlots returns the number of app slots (cores) on this node.
-	NumSlots() int
-	// CoreClass returns the core class of a slot ("big", "mid" or "small").
-	CoreClass(slot int) string
-	// Start loads a signed app image into the slot's partition, applies the
-	// memory limit (0 = whole partition) and env, and wakes the core.
-	Start(slot int, image []byte, memLimit uint64, env map[string]string) error
-	// Stop asks the app to exit (kill flag) and waits until the core is off.
-	Stop(slot int, timeout time.Duration) error
-	// Status reports the slot's current state.
-	Status(slot int) SlotStatus
-	// Logs returns the slot's log stream (hop-ABI outbox). The channel is
-	// closed when the slot stops.
-	Logs(slot int) <-chan string
-}
-
-const hopStopTimeout = 10 * time.Second
 
 // HopRunner implements Runner against a SlotManager.
 type HopRunner struct {
@@ -69,18 +52,29 @@ type HopRunner struct {
 	inUse     map[int]string // slot -> taskID
 	stdoutLog map[string]*LogBroadcaster
 	stderrLog map[string]*LogBroadcaster
+	// faultLogged guards the once-per-task failure diagnostic in Status:
+	// Status is polled continuously, the WHY of a failure should be logged
+	// exactly once. Cleared in release alongside the other task maps.
+	faultLogged map[string]bool
+	// stopping markeert tasks waarvoor Stop is begonnen. awaitStaged leest
+	// dit (onder r.mu) i.p.v. task.State: dat veld muteert in de
+	// agent-state-loop en hier raw pollen was een data race. Gewist in
+	// release, samen met de andere task-maps.
+	stopping map[string]bool
 }
 
 // NewHopRunner creates a runner on top of a SlotManager. nodeAttrs are
 // injected as ER_ATTR_* env vars, matching the other runners.
 func NewHopRunner(sm hopos.SlotManager, nodeAttrs map[string]string) *HopRunner {
 	return &HopRunner{
-		sm:        sm,
-		nodeAttrs: nodeAttrs,
-		slots:     make(map[string]int),
-		inUse:     make(map[int]string),
-		stdoutLog: make(map[string]*LogBroadcaster),
-		stderrLog: make(map[string]*LogBroadcaster),
+		sm:          sm,
+		nodeAttrs:   nodeAttrs,
+		slots:       make(map[string]int),
+		inUse:       make(map[int]string),
+		stdoutLog:   make(map[string]*LogBroadcaster),
+		stderrLog:   make(map[string]*LogBroadcaster),
+		faultLogged: make(map[string]bool),
+		stopping:    make(map[string]bool),
 	}
 }
 
@@ -90,9 +84,6 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 	if job.Image != "" {
 		return errors.New("hop driver: containers are not supported on HopOS")
 	}
-	if len(job.Ports) > 0 {
-		return errors.New("hop driver: ports are not supported yet (HopOS per-slot networking is pending)")
-	}
 	if len(job.Artifacts) != 1 {
 		return errors.New("hop driver: exactly one artifact (the app image) is required")
 	}
@@ -100,12 +91,7 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 		return errors.New("hop driver: artifact must be a raw app image (no extract)")
 	}
 
-	image, err := r.fetchImage(&job.Artifacts[0])
-	if err != nil {
-		return fmt.Errorf("hop driver: fetch image: %w", err)
-	}
-
-	env := make(map[string]string, len(job.Env)+len(r.nodeAttrs))
+	env := make(map[string]string, len(job.Env)+len(r.nodeAttrs)+len(task.Ports))
 	for k, v := range job.Env {
 		env[k] = v
 	}
@@ -114,20 +100,55 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 			env[kv[:i]] = kv[i+1:]
 		}
 	}
+	for _, kv := range PortEnvVars(task.Ports) {
+		if i := indexByte(kv, '='); i > 0 {
+			env[kv[:i]] = kv[i+1:]
+		}
+	}
 
+	// cores = CPUShares/1024 (Docker/Nomad-conventie: 1024 shares = 1 core),
+	// minimaal 1. Met cores > 1 draait de app SMP op één primair slot plus de
+	// volgende cores-1 cores (gedeelde heap); HopOS brengt die transparant op.
+	cores := job.CPUShares / 1024
+	if cores < 1 {
+		cores = 1
+	}
+
+	// Slot EERST alloceren, dán pas downloaden: op een volle node reject dit
+	// meteen (geen vrije slot) zonder één byte te trekken. Zo kan een storm
+	// van jobs nooit meer images tegelijk laten downloaden dan er slots zijn
+	// — en met StartStream landt elke download rechtstreeks in de eigen
+	// partitie i.p.v. de HOP-kern (geen core-0-OOM meer, gemeten 14-07).
 	r.mu.Lock()
-	slot, err := r.allocateSlotLocked(job.Tags["core-class"])
+	slot, err := r.allocateSlotLocked(job.Tags["core-class"], cores)
 	if err != nil {
 		r.mu.Unlock()
 		return err
 	}
-	r.inUse[slot] = task.ID
+	// Alle cores van de app (primair + secundairen) als bezet vastleggen.
+	for c := slot; c < slot+cores; c++ {
+		r.inUse[c] = task.ID
+	}
 	r.slots[task.ID] = slot
 	r.mu.Unlock()
 
-	if err := r.sm.Start(slot, image, job.MemoryLimit, env); err != nil {
-		r.release(task.ID)
-		return fmt.Errorf("hop driver: start slot %d: %w", slot, err)
+	// De app downloadt zijn EIGEN image: HOP laadt eerst de universele apploader
+	// in de slot (lokaal, uit de cache), die op zijn eigen core+netstack de echte
+	// image fetcht en HOP "staged" seint; HOP plaatst 'm (StartStaged) en
+	// her-dispatcht de core. Zo draagt de node-netstack nooit alle downloads
+	// tegelijk (geen core-0-OOM bij een storm) en raakt een kapotte image hooguit
+	// dat ene slot. runViaLoader geeft de slot bij een fout al vrij.
+	started, err := r.runViaLoader(job, task, slot, cores, env)
+	if err != nil {
+		return err
+	}
+	if !started {
+		// Task tijdens staging gestopt; Stop() ruimt de slot op (of deed
+		// dat al). HIER stoppen: broadcasters registreren of task.Pid
+		// zetten zou naar een vrijgegeven (en mogelijk hergebruikte) slot
+		// wijzen — de ghost-guard's Stop(task) killde daarmee via de
+		// task.Pid-fallback de task van een ANDER die de slot al had.
+		return nil
 	}
 
 	stdout := NewLogBroadcaster()
@@ -147,11 +168,117 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 	return nil
 }
 
+// runViaLoader realiseert "de app downloadt zijn eigen image": HOP laadt de
+// universele apploader (ingebakken in de node) in de slot met de echte URL in de
+// env; de loader fetcht op zíjn eigen core+netstack, seint "staged", en HOP
+// plaatst de echte app (StartStaged) over de loader heen en her-dispatcht de core.
+// started=false (zonder fout) betekent: task tijdens staging verwijderd — de
+// slot is dan al vrijgegeven en de aanroeper mag NIETS meer aan de slot koppelen.
+func (r *HopRunner) runViaLoader(job *types.Job, task *types.Task, slot, cores int, env map[string]string) (started bool, err error) {
+	// Fase 1: de apploader (1 core, geen mounts) met de echte image-URL in de
+	// env. Hij deelt de partitie die straks de echte app krijgt (op MemoryLimit
+	// gealloceerd — de echte app-parameters volgen in fase 2).
+	lenv := make(map[string]string, len(env)+1)
+	for k, v := range env {
+		lenv[k] = v
+	}
+	lenv["HOP_IMAGE_URL"] = job.Artifacts[0].URL
+	if err := r.sm.StartLoader(slot, job.MemoryLimit, lenv); err != nil {
+		r.release(task.ID)
+		return false, fmt.Errorf("hop driver: start apploader slot %d: %w", slot, err)
+	}
+	// Fase 2: wachten tot de loader de echte image gestaged heeft (of de task
+	// mid-download verwijderd is), dan de echte app plaatsen — met de ÉCHTE
+	// cores/volumes/ports.
+	staged, err := r.awaitStaged(task, slot, hopStageTimeout)
+	if err != nil {
+		_ = r.sm.Stop(slot, hopStopTimeout)
+		r.release(task.ID)
+		return false, fmt.Errorf("hop driver: slot %d: %w", slot, err)
+	}
+	if !staged {
+		// Task tijdens staging gestopt (delete/preemptie). Stop() is de
+		// eigenaar van de opruiming (kill + release) — hier NIET nogmaals
+		// stoppen of releasen: de slot kan al aan een andere task zijn.
+		log.Printf("hop driver: task %.8s stopped during staging — skipping start", task.ID)
+		return false, nil
+	}
+	if err := r.sm.StartStaged(slot, job.MemoryLimit, cores, env, job.Volumes, task.Ports); err != nil {
+		_ = r.sm.Stop(slot, hopStopTimeout)
+		r.release(task.ID)
+		return false, fmt.Errorf("hop driver: place staged slot %d (%d cores): %w", slot, cores, err)
+	}
+	return true, nil
+}
+
+// awaitStaged waits until the apploader has staged the real image (SlotStaged);
+// (false, nil) means the task was stopped mid-download (Stop owns the cleanup
+// then — detected via stagingCancelled, NOT via task.State: that field is
+// mutated by the agent state loop and reading it raw here was a data race).
+//
+// Its patience follows LIFE, not the clock: `timeout` is a
+// no-progress window that RESETS as long as the loader's heartbeat advances.
+// A slow download is not a failure — 127 loaders sharing one uplink (measured
+// 15-07: the fixed 2m window produced false timeouts whose retries re-downloaded
+// and starved the still-running transfers, a self-amplifying churn). A loader
+// whose core DIED (cage fault) fails fast instead — with the why — rather than
+// burning the full window. hopStageHardTimeout caps a live-but-stuck loader
+// (e.g. a TCP stream that will never finish; http.Get has no own deadline).
+func (r *HopRunner) awaitStaged(task *types.Task, slot int, timeout time.Duration) (bool, error) {
+	deadline := time.Now().Add(timeout)
+	hard := time.Now().Add(hopStageHardTimeout)
+	var lastHB uint64
+	for {
+		if r.stagingCancelled(task.ID, slot) {
+			return false, nil
+		}
+		s := r.sm.Status(slot)
+		switch s.App {
+		case hopos.SlotStaged:
+			return true, nil
+		case hopos.SlotExited:
+			if r.stagingCancelled(task.ID, slot) {
+				return false, nil // Stop killde de loader — geen echte fout
+			}
+			return false, fmt.Errorf("apploader exited before staging the image")
+		}
+		if !s.CoreOn {
+			if r.stagingCancelled(task.ID, slot) {
+				return false, nil // Stop parkeerde de core — geen echte fout
+			}
+			// Dead before staging: the cage parked it (fault) — no point
+			// waiting out any window. Surface the why (ESR/FAR) right here.
+			if s.FaultVec != 0 {
+				return false, fmt.Errorf("apploader died before staging: stage-2 fault (vec %d, ESR %#x, FAR %#x)",
+					s.FaultVec-1, s.FaultESR, s.FaultFAR)
+			}
+			return false, fmt.Errorf("apploader died before staging (core off, no fault recorded)")
+		}
+		if s.Heartbeat != lastHB {
+			lastHB = s.Heartbeat
+			deadline = time.Now().Add(timeout) // leven gezien: geduld verlengd
+		}
+		now := time.Now()
+		if now.After(hard) {
+			return false, fmt.Errorf("apploader alive but did not stage within the hard cap %s", hopStageHardTimeout)
+		}
+		if now.After(deadline) {
+			return false, fmt.Errorf("apploader did not stage the image within %s (no heartbeat progress)", timeout)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // Stop asks the slot to shut down and frees it.
 func (r *HopRunner) Stop(task *types.Task) error {
-	r.mu.RLock()
+	r.mu.Lock()
 	slot, ok := r.slots[task.ID]
-	r.mu.RUnlock()
+	if ok {
+		// Vlag vóór de (blokkerende) sm.Stop: een awaitStaged die nog op
+		// deze task pollt ziet 'm en stapt er graceful uit — Stop ruimt op.
+		r.stopping[task.ID] = true
+	}
+	r.mu.Unlock()
 	if !ok {
 		if task.Pid > 0 {
 			slot = task.Pid
@@ -167,13 +294,18 @@ func (r *HopRunner) Stop(task *types.Task) error {
 
 // Status maps slot state onto task state.
 func (r *HopRunner) Status(task *types.Task) (types.TaskState, error) {
+	// task.Pid wordt pas gezet als Run VOLLEDIG klaar is: apploader laden →
+	// image downloaden (app-kant) → stagen → de echte app plaatsen. Zolang het 0
+	// is, is de task nog aan het starten — rapporteer Running. Anders ziet de
+	// monitor de kort geparkeerde apploader (SlotStaged: CoreOn=false) als een
+	// crash en killt 'm mid-start (gemeten 14-07: 3/5 taken sneuvelden zo).
+	if task.Pid == 0 {
+		return types.TaskRunning, nil
+	}
 	r.mu.RLock()
 	slot, ok := r.slots[task.ID]
 	r.mu.RUnlock()
 	if !ok {
-		if task.Pid == 0 {
-			return types.TaskRunning, nil // still starting (image download)
-		}
 		slot = task.Pid
 	}
 
@@ -184,8 +316,48 @@ func (r *HopRunner) Status(task *types.Task) (types.TaskState, error) {
 	case s.App == hopos.SlotExited && s.ExitCode == 0:
 		return types.TaskStopped, nil
 	default:
+		// The WHY, once: a stage-2 fault (cage violation / hard-kill, with
+		// ESR/FAR from the EL2 vectors) or a nonzero exit. Without this the
+		// reason lives only on the node's console — invisible on a headless
+		// Altra. Diagnostics only; the state machine stays CoreOn/Exited.
+		r.mu.Lock()
+		if !r.faultLogged[task.ID] {
+			r.faultLogged[task.ID] = true
+			switch {
+			case s.FaultVec != 0:
+				log.Printf("hop task %s failed: stage-2 fault on slot %d (vec %d, ESR %#x, FAR %#x)",
+					task.ID, slot, s.FaultVec-1, s.FaultESR, s.FaultFAR)
+			case s.ExitCode != 0:
+				log.Printf("hop task %s failed: exit code %d (slot %d)", task.ID, s.ExitCode, slot)
+			}
+		}
+		r.mu.Unlock()
 		return types.TaskFailed, nil
 	}
+}
+
+// Usage returns the task's CPU usage and actual memory draw, both reported
+// by the node/app themselves: cpuPct is the percentage of the task's OWN
+// cores (0-100, from the slot's idle-tick counter — an idle core ticks at
+// event-stream tempo, a computing core doesn't; negative while no sample
+// window has completed yet), memBytes is Go MemStats.Sys (refreshed ~2s over
+// the control page next to the heartbeat). ok is false while no memory has
+// been reported yet (task still starting, or a pre-MemSys image). The agent
+// monitor feeds this into the same CPUPercent/MemPercent pipeline the
+// exec/docker drivers use — so HOP knows what a task USES, not just what it
+// was allotted.
+func (r *HopRunner) Usage(task *types.Task) (cpuPct float64, memBytes uint64, ok bool) {
+	if task.Pid == 0 {
+		return -1, 0, false // still starting (loader/staging phase)
+	}
+	r.mu.RLock()
+	slot, found := r.slots[task.ID]
+	r.mu.RUnlock()
+	if !found {
+		slot = task.Pid
+	}
+	s := r.sm.Status(slot)
+	return float64(s.CPUPct), s.MemSys, s.MemSys != 0
 }
 
 // GetStdout returns the log broadcaster fed by the slot's hop-ABI log ring.
@@ -206,55 +378,63 @@ func (r *HopRunner) GetStderr(taskID string) *LogBroadcaster {
 // partition, and after a node reboot all cores are off by construction.
 func (r *HopRunner) Cleanup() error { return nil }
 
-// allocateSlotLocked picks a free slot, honoring an optional core-class tag.
-// Caller holds r.mu.
-func (r *HopRunner) allocateSlotLocked(coreClass string) (int, error) {
-	for slot := 1; slot <= r.sm.NumSlots(); slot++ {
-		if _, busy := r.inUse[slot]; busy {
-			continue
+// allocateSlotLocked finds a run of `cores` contiguous free slots (each
+// honoring an optional core-class tag) and returns the first (the primary).
+// For cores == 1 this is just the first free slot; for an SMP app the run is
+// the primary plus its secondary cores. Caller holds r.mu.
+func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error) {
+	n := r.sm.NumSlots()
+	for slot := 1; slot+cores-1 <= n; slot++ {
+		ok := true
+		for c := slot; c < slot+cores; c++ {
+			if _, busy := r.inUse[c]; busy {
+				ok = false
+				break
+			}
+			if coreClass != "" && r.sm.CoreClass(c) != coreClass {
+				ok = false
+				break
+			}
 		}
-		if coreClass != "" && r.sm.CoreClass(slot) != coreClass {
-			continue
+		if ok {
+			return slot, nil
 		}
-		return slot, nil
 	}
 	if coreClass != "" {
-		return 0, fmt.Errorf("hop driver: no free %q slot", coreClass)
+		return 0, fmt.Errorf("hop driver: no %d contiguous free %q slots", cores, coreClass)
 	}
-	return 0, errors.New("hop driver: no free slot")
+	return 0, fmt.Errorf("hop driver: no %d contiguous free slots", cores)
 }
 
 func (r *HopRunner) release(taskID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if slot, ok := r.slots[taskID]; ok {
-		delete(r.inUse, slot)
-		delete(r.slots, taskID)
+	// Free every core held by this task (an SMP app holds several).
+	for slot, id := range r.inUse {
+		if id == taskID {
+			delete(r.inUse, slot)
+		}
 	}
+	delete(r.slots, taskID)
 	delete(r.stdoutLog, taskID)
 	delete(r.stderrLog, taskID)
+	delete(r.faultLogged, taskID)
+	delete(r.stopping, taskID)
 }
 
-// fetchImage downloads the artifact and returns the raw image bytes fully
-// in memory — HopOS has no filesystem, and images are small (a few MB).
-// http/https only for now; s3 support moves here when needed (see download_s3).
-func (r *HopRunner) fetchImage(artifact *types.Artifact) ([]byte, error) {
-	req, err := http.NewRequest(http.MethodGet, artifact.URL, nil)
-	if err != nil {
-		return nil, err
+// stagingCancelled meldt of de task tijdens staging is gestopt: de stop-vlag
+// staat (Stop is bezig) óf de slot-claim is al weg (Stop is klaar en heeft
+// released). In beide gevallen is Stop de eigenaar van de opruiming — de
+// staging-flow mag de slot dan niet meer aanraken (hij kan al van een
+// ANDERE task zijn).
+func (r *HopRunner) stagingCancelled(taskID string, slot int) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.stopping[taskID] {
+		return true
 	}
-	for k, v := range artifact.Headers {
-		req.Header.Set(k, v)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GET %s: status %d", artifact.URL, resp.StatusCode)
-	}
-	return io.ReadAll(resp.Body)
+	s, ok := r.slots[taskID]
+	return !ok || s != slot
 }
 
 func indexByte(s string, c byte) int {

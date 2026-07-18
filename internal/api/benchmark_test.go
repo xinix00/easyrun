@@ -50,7 +50,7 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.Heartbeat(agentID, "")
 	}
 
 	req := httptest.NewRequest("GET", "/v1/agents", nil)
@@ -117,7 +117,7 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
-		l.Heartbeat(agentID, agentEndpoint(ts), nil, time.Time{}, "")
+		l.Heartbeat(agentID, "")
 	}
 
 	b.ResetTimer()
@@ -195,7 +195,7 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
-		l.Heartbeat(agentID, agentEndpoint(ts), nil, time.Time{}, "")
+		l.Heartbeat(agentID, "")
 	}
 
 	req := httptest.NewRequest("GET", "/v1/status", nil)
@@ -229,7 +229,7 @@ func BenchmarkConcurrentRequests(b *testing.B) {
 	for i := 0; i < 10; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		l.RegisterAgent(agentID, agentEndpoint(ts), "", nil)
-		l.Heartbeat(agentID, agentEndpoint(ts), nil, time.Time{}, "")
+		l.Heartbeat(agentID, "")
 	}
 
 	b.ResetTimer()
@@ -334,6 +334,16 @@ func (m *mockJobStore) StoreJob(job *types.Job) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.jobs[job.Name] = job
+}
+
+func (m *mockJobStore) UpdateJob(job *types.Job) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.jobs[job.Name]; !ok {
+		return false
+	}
+	m.jobs[job.Name] = job
+	return true
 }
 
 func (m *mockJobStore) DeleteJob(name string) {

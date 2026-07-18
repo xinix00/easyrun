@@ -35,7 +35,7 @@ func TestChaos_CascadingFailure(t *testing.T) {
 	for i, agent := range agents {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, agent.URL(), "", nil)
-		leader.Heartbeat(agentID, agent.URL(), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, "")
 	}
 	time.Sleep(20 * time.Millisecond)
 
@@ -48,8 +48,8 @@ func TestChaos_CascadingFailure(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		time.Sleep(100 * time.Millisecond)
 		// Only agents 1 and 3 are still alive
-		leader.Heartbeat("agent-1", agents[1].URL(), nil, time.Time{}, "")
-		leader.Heartbeat("agent-3", agents[3].URL(), nil, time.Time{}, "")
+		leader.Heartbeat("agent-1", "")
+		leader.Heartbeat("agent-3", "")
 	}
 
 	// Trigger dead agent check
@@ -63,89 +63,6 @@ func TestChaos_CascadingFailure(t *testing.T) {
 	}
 
 	t.Logf("Cascading failure: 3/5 agents down, %d remaining", len(aliveAgents))
-}
-
-// TestChaos_LeaderCrashDuringRollingUpdate tests leader failure mid-update
-func TestChaos_LeaderCrashDuringRollingUpdate(t *testing.T) {
-	// Simulate: leader crashes after replacing 1/3 instances during rolling update
-	// New leader should detect partial update and handle gracefully
-
-	oldLeaderStore := NewMockJobStore()
-	oldLeader := New("old-leader", oldLeaderStore, nil)
-
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	go oldLeader.stateLoop(ctx1)
-
-	// Old leader has job v1 with 3 instances
-	oldJob := &types.Job{
-		Name:    "app",
-		Command: "./app-v1",
-		Count:   3,
-	}
-	oldLeaderStore.StoreJob(oldJob)
-
-	// Simulate placed (3 instances across 3 agents)
-	oldLeader.do(func(s *leaderState) {
-		s.placed["agent-1"] = map[string]int{"app": 1}
-		s.placed["agent-2"] = map[string]int{"app": 1}
-		s.placed["agent-3"] = map[string]int{"app": 1}
-	})
-
-	// Start rolling update to v2 (same name = upsert)
-	newJob := &types.Job{
-		Name:    "app",
-		Command: "./app-v2",
-		Count:   3,
-	}
-
-	// Simulate partial update: store v2 (overwrites v1 since same name)
-	oldLeaderStore.StoreJob(newJob)
-	oldLeader.do(func(s *leaderState) {
-		s.placed["agent-1"] = map[string]int{"app": 1} // agent-1 updated
-		s.placed["agent-2"] = map[string]int{"app": 1} // still running
-		s.placed["agent-3"] = map[string]int{"app": 1} // still running
-	})
-
-	// OLD LEADER CRASHES
-	cancel1()
-	time.Sleep(10 * time.Millisecond)
-
-	// NEW leader takes over
-	newLeaderStore := NewMockJobStore()
-	newLeader := New("new-leader", newLeaderStore, nil)
-
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	go newLeader.stateLoop(ctx2)
-
-	// Agents report their current state. Since name is the unique key,
-	// the latest heartbeat to arrive wins for job "app".
-	// agent-1 has v2 (updated), agent-2 and agent-3 still have v1.
-	agent1Jobs := []*types.Job{newJob} // Has v2
-	agent2Jobs := []*types.Job{oldJob} // Still has v1
-	agent3Jobs := []*types.Job{oldJob} // Still has v1
-
-	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
-	newLeader.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", nil)
-	newLeader.RegisterAgent("agent-3", "http://10.0.0.3:8080", "", nil)
-	newLeader.Heartbeat("agent-1", "http://10.0.0.1:8080", agent1Jobs, time.Now(), "")
-	newLeader.Heartbeat("agent-2", "http://10.0.0.2:8080", agent2Jobs, time.Now(), "")
-	newLeader.Heartbeat("agent-3", "http://10.0.0.3:8080", agent3Jobs, time.Now(), "")
-	time.Sleep(30 * time.Millisecond)
-
-	// New leader should know about job "app" (name is unique key; latest version wins)
-	jobs := newLeaderStore.GetJobs()
-	t.Logf("Jobs after failover during update: %d jobs", len(jobs))
-
-	foundApp := false
-	for _, j := range jobs {
-		if j.Name == "app" {
-			foundApp = true
-		}
-	}
-	if !foundApp {
-		t.Errorf("Job 'app' should exist after mid-update crash, got %v", jobs)
-	}
 }
 
 // TestChaos_NetworkPartition tests agent isolation from leader
@@ -172,8 +89,8 @@ func TestChaos_NetworkPartition(t *testing.T) {
 	// Register both
 	leader.RegisterAgent("slow-agent", slowAgent.URL, "", nil)
 	leader.RegisterAgent("fast-agent", fastAgent.URL(), "", nil)
-	leader.Heartbeat("slow-agent", slowAgent.URL, nil, time.Time{}, "")
-	leader.Heartbeat("fast-agent", fastAgent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("slow-agent", "")
+	leader.Heartbeat("fast-agent", "")
 	time.Sleep(10 * time.Millisecond)
 
 	// Dispatch job
@@ -222,7 +139,7 @@ func TestChaos_AllAgentsDownExceptOne(t *testing.T) {
 		defer agents[i].Close()
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, agents[i].URL(), "", nil)
-		leader.Heartbeat(agentID, agents[i].URL(), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, "")
 	}
 	time.Sleep(20 * time.Millisecond)
 
@@ -234,7 +151,7 @@ func TestChaos_AllAgentsDownExceptOne(t *testing.T) {
 	// Keep the survivor (agent-4) sending heartbeats
 	for i := 0; i < 3; i++ {
 		time.Sleep(100 * time.Millisecond)
-		leader.Heartbeat("agent-4", agents[4].URL(), nil, time.Time{}, "")
+		leader.Heartbeat("agent-4", "")
 	}
 
 	// Trigger dead agent check
@@ -271,7 +188,7 @@ func TestChaos_RapidAgentChurn(t *testing.T) {
 
 		// Register
 		leader.RegisterAgent(agentID, agent.URL(), "", nil)
-		leader.Heartbeat(agentID, agent.URL(), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, "")
 		time.Sleep(5 * time.Millisecond)
 
 		// Kill
@@ -308,7 +225,7 @@ func TestChaos_JobDispatchToDeadAgent(t *testing.T) {
 
 	// Register
 	leader.RegisterAgent("dying-agent", agent.URL(), "", nil)
-	leader.Heartbeat("dying-agent", agent.URL(), nil, time.Time{}, "")
+	leader.Heartbeat("dying-agent", "")
 	time.Sleep(10 * time.Millisecond)
 
 	// Kill agent BEFORE dispatch
@@ -327,166 +244,6 @@ func TestChaos_JobDispatchToDeadAgent(t *testing.T) {
 	}
 
 	t.Logf("Graceful failure: %v", err)
-}
-
-// TestChaos_SplitBrainScenario tests behavior if two leaders exist temporarily
-func TestChaos_SplitBrainScenario(t *testing.T) {
-	// Simulate: network partition causes 2 leaders, they each accept jobs, then merge
-
-	leader1Store := NewMockJobStore()
-	leader1 := New("leader-1", leader1Store, nil)
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	defer cancel1()
-	go leader1.stateLoop(ctx1)
-
-	leader2Store := NewMockJobStore()
-	leader2 := New("leader-2", leader2Store, nil)
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	go leader2.stateLoop(ctx2)
-
-	// Each leader gets different jobs during partition
-	job1 := &types.Job{Name: "service-a", Command: "./a", Count: 1}
-	job2 := &types.Job{Name: "service-b", Command: "./b", Count: 1}
-
-	leader1Store.StoreJob(job1)
-	leader2Store.StoreJob(job2)
-
-	leader1.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
-	leader2.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", nil)
-	leader1.Heartbeat("agent-1", "http://10.0.0.1:8080", []*types.Job{job1}, time.Now(), "")
-	leader2.Heartbeat("agent-2", "http://10.0.0.2:8080", []*types.Job{job2}, time.Now(), "")
-	time.Sleep(20 * time.Millisecond)
-
-	// PARTITION HEALS: Leader1 wins, leader2's agents now report to leader1
-	// Leader1 learns about job2 through agent2's heartbeat
-	leader1.RegisterAgent("agent-2", "http://10.0.0.2:8080", "", nil)
-	leader1.Heartbeat("agent-2", "http://10.0.0.2:8080", []*types.Job{job2}, time.Now(), "")
-	time.Sleep(20 * time.Millisecond)
-
-	// Leader1 should now have BOTH jobs
-	mergedJobs := leader1Store.GetJobs()
-	if len(mergedJobs) != 2 {
-		t.Errorf("After split-brain merge, expected 2 jobs, got %d", len(mergedJobs))
-	}
-
-	foundA := false
-	foundB := false
-	for _, j := range mergedJobs {
-		if j.Name == "service-a" {
-			foundA = true
-		}
-		if j.Name == "service-b" {
-			foundB = true
-		}
-	}
-
-	if !foundA || !foundB {
-		t.Errorf("Both jobs should exist after merge (a=%v, b=%v)", foundA, foundB)
-	}
-
-	t.Log("Split-brain resolved: both leaders' jobs merged successfully")
-}
-
-// TestChaos_AgentReturnsAfterLongDowntime tests agent rejoining with stale state
-func TestChaos_AgentReturnsAfterLongDowntime(t *testing.T) {
-	store := NewMockJobStore()
-	leader := New("local-agent", store, &http.Client{Timeout: 100 * time.Millisecond})
-	leader.agentTimeout = 200 * time.Millisecond
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go leader.stateLoop(ctx)
-
-	// Leader has the NEWER job already (simulating leader knows about v2)
-	newJob := &types.Job{Name: "app", Command: "./app-v2", Count: 1}
-	store.StoreJob(newJob)
-	store.stateTime = time.Now()
-	time.Sleep(10 * time.Millisecond)
-
-	// Agent comes back with STALE state (running v1, same name but outdated)
-	// Must register first — heartbeat rejects unknown agents
-	leader.RegisterAgent("zombie-agent", "http://10.0.0.99:8080", "", nil)
-	oldJob := &types.Job{Name: "app", Command: "./app-v1", Count: 1}
-	staleTime := time.Now().Add(-1 * time.Hour) // Agent has OLD state time
-	jobs, _ := leader.Heartbeat("zombie-agent", "http://10.0.0.99:8080", []*types.Job{oldJob}, staleTime, "")
-
-	// Leader should return NEWER state in response (v2)
-	// The leader's state is newer, so it returns its jobs to the agent
-	foundV2 := false
-	for _, j := range jobs {
-		if j.Name == "app" && j.Command == "./app-v2" {
-			foundV2 = true
-			break
-		}
-	}
-	if !foundV2 {
-		t.Errorf("Leader should return v2 to agent with stale state, got %v", jobs)
-	}
-
-	t.Log("Zombie agent corrected with leader's newer state")
-}
-
-// TestChaos_MultipleJobUpdatesDuringFailover tests concurrent updates during failover
-func TestChaos_MultipleJobUpdatesDuringFailover(t *testing.T) {
-	oldStore := NewMockJobStore()
-	oldLeader := New("old-leader", oldStore, nil)
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	go oldLeader.stateLoop(ctx1)
-
-	// Old leader has 3 jobs
-	for i := 0; i < 3; i++ {
-		job := &types.Job{
-			Name:    fmt.Sprintf("job-%d", i),
-			Command: fmt.Sprintf("./app-%d-v1", i),
-			Count:   2,
-		}
-		oldStore.StoreJob(job)
-	}
-
-	// Register agents
-	oldLeader.RegisterAgent("agent-a", "http://10.0.0.1:8080", "", nil)
-	oldLeader.RegisterAgent("agent-b", "http://10.0.0.2:8080", "", nil)
-	oldLeader.Heartbeat("agent-a", "http://10.0.0.1:8080", oldStore.GetJobs(), time.Now(), "")
-	oldLeader.Heartbeat("agent-b", "http://10.0.0.2:8080", oldStore.GetJobs(), time.Now(), "")
-
-	// OLD LEADER CRASHES mid-update
-	cancel1()
-
-	// NEW LEADER
-	newStore := NewMockJobStore()
-	newLeader := New("new-leader", newStore, nil)
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	go newLeader.stateLoop(ctx2)
-
-	// Agents report with different versions (chaos)
-	agentAJobs := []*types.Job{
-		{Name: "job-0", Command: "./app-0-v2", Count: 2}, // Updated
-		{Name: "job-1", Command: "./app-1-v1", Count: 2}, // Old
-		{Name: "job-2", Command: "./app-2-v1", Count: 2}, // Old
-	}
-
-	agentBJobs := []*types.Job{
-		{Name: "job-0", Command: "./app-0-v1", Count: 2}, // Old
-		{Name: "job-1", Command: "./app-1-v2", Count: 2}, // Updated
-		{Name: "job-2", Command: "./app-2-v1", Count: 2}, // Old
-	}
-
-	newLeader.RegisterAgent("agent-a", "http://10.0.0.1:8080", "", nil)
-	newLeader.RegisterAgent("agent-b", "http://10.0.0.2:8080", "", nil)
-	newLeader.Heartbeat("agent-a", "http://10.0.0.1:8080", agentAJobs, time.Now(), "")
-	newLeader.Heartbeat("agent-b", "http://10.0.0.2:8080", agentBJobs, time.Now(), "")
-	time.Sleep(30 * time.Millisecond)
-
-	// Leader should have learned about mixed state
-	allJobs := newStore.GetJobs()
-	t.Logf("After chaotic failover: %d job versions learned", len(allJobs))
-
-	// Should have multiple versions of same jobs (agents diverged)
-	if len(allJobs) < 3 {
-		t.Errorf("Expected at least 3 jobs after merge, got %d", len(allJobs))
-	}
 }
 
 // TestChaos_LeaderMemoryPressure tests behavior under memory pressure
@@ -510,7 +267,7 @@ func TestChaos_LeaderMemoryPressure(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, "")
 	}
 
 	// Create 100k jobs
@@ -549,71 +306,6 @@ func TestChaos_LeaderMemoryPressure(t *testing.T) {
 	}
 }
 
-// TestChaos_SimultaneousLeaderAndAgentCrash tests double failure
-func TestChaos_SimultaneousLeaderAndAgentCrash(t *testing.T) {
-	oldStore := NewMockJobStore()
-	oldLeader := New("old-leader", oldStore, nil)
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	go oldLeader.stateLoop(ctx1)
-
-	// Register 3 agents
-	agent1 := newMockAgent()
-	defer agent1.Close()
-	agent2 := newMockAgent()
-	// agent2 will crash
-	agent3 := newMockAgent()
-	defer agent3.Close()
-
-	oldLeader.RegisterAgent("agent-1", agent1.URL(), "", nil)
-	oldLeader.RegisterAgent("agent-2", agent2.URL(), "", nil)
-	oldLeader.RegisterAgent("agent-3", agent3.URL(), "", nil)
-	oldLeader.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
-	oldLeader.Heartbeat("agent-2", agent2.URL(), nil, time.Time{}, "")
-	oldLeader.Heartbeat("agent-3", agent3.URL(), nil, time.Time{}, "")
-
-	// Create job
-	job := &types.Job{Name: "important", Command: "./app", Count: 3}
-	oldStore.StoreJob(job)
-
-	// CHAOS: Leader AND agent2 crash simultaneously
-	cancel1()
-	agent2.Close()
-	time.Sleep(10 * time.Millisecond)
-
-	// New leader takes over
-	newStore := NewMockJobStore()
-	newLeader := New("new-leader", newStore, &http.Client{Timeout: 100 * time.Millisecond})
-	newLeader.agentTimeout = 200 * time.Millisecond
-
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	go newLeader.Run(ctx2) // Run() starts stateLoop internally
-
-	// Surviving agents report
-	newLeader.RegisterAgent("agent-1", agent1.URL(), "", nil)
-	newLeader.RegisterAgent("agent-3", agent3.URL(), "", nil)
-	newLeader.Heartbeat("agent-1", agent1.URL(), []*types.Job{job}, time.Now(), "")
-	newLeader.Heartbeat("agent-3", agent3.URL(), []*types.Job{job}, time.Now(), "")
-	time.Sleep(50 * time.Millisecond)
-
-	// New leader should learn about job from survivors
-	jobs := newStore.GetJobs()
-	if len(jobs) != 1 || jobs[0].Name != "important" {
-		t.Errorf("New leader should have learned job from survivors, got %v", jobs)
-	}
-
-	// Verify 2 agents are registered (agent2 is dead)
-	agents := newLeader.GetAgents()
-	if len(agents) != 2 {
-		t.Errorf("Expected 2 agents registered, got %d", len(agents))
-	}
-
-	// Note: Placement is NOT tracked from heartbeats in KISS refactor.
-	// Reconciliation uses GetClusterStatus() to find actual running tasks.
-
-	t.Log("Double failure handled: leader failover + agent loss")
-}
-
 // TestChaos_HeartbeatStorm tests system under heartbeat flood
 func TestChaos_HeartbeatStorm(t *testing.T) {
 	store := NewMockJobStore()
@@ -638,10 +330,9 @@ func TestChaos_HeartbeatStorm(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		go func(id int) {
 			agentID := fmt.Sprintf("agent-%d", id)
-			endpoint := fmt.Sprintf("http://10.0.0.%d:8080", id)
 
 			for j := 0; j < 100; j++ {
-				leader.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+				leader.Heartbeat(agentID, "")
 				heartbeats.Add(1)
 			}
 			done <- true
@@ -713,7 +404,7 @@ func TestChaos_AgentFlapping(t *testing.T) {
 
 		// UP - register agent
 		leader.RegisterAgent(agentID, agent.URL(), "", nil)
-		leader.Heartbeat(agentID, agent.URL(), nil, time.Time{}, "")
+		leader.Heartbeat(agentID, "")
 		time.Sleep(30 * time.Millisecond) // Allow state to update
 
 		// Verify registered

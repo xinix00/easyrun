@@ -68,7 +68,7 @@ Called on agent startup and on leader change:
 }
 ```
 
-**placed:** Map of jobID → count, telling the leader what this agent is already running. This prevents duplicate dispatches during leader failover.
+**placed:** Map of jobName → count, telling the leader what this agent is already running. This prevents duplicate dispatches during leader failover.
 
 **Response:**
 ```json
@@ -90,24 +90,20 @@ Agents send this every 10s to stay registered:
 {
   "id": "agent-1",
   "endpoint": "http://10.0.0.5:8080",
-  "version": "dev",
-  "jobs": [...],
-  "state_time": "2025-01-31T12:00:00Z"
+  "version": "dev"
 }
 ```
 
 **Response (known agent):**
 ```json
 {
-  "status": "ok",
-  "jobs": [...],
-  "state_time": "2025-01-31T12:00:00Z"
+  "status": "ok"
 }
 ```
 
 **Response (unknown agent):** `404 Not Found` — agent should re-register via POST /v1/agents.
 
-**State sync:** If the agent's `state_time` is newer than the leader's, the leader syncs jobs from the agent. The response always includes the leader's current jobs for the agent to sync.
+**Pure liveness:** the heartbeat only refreshes the agent's `LastSeen` (and version). The old bidirectional job sync (`jobs` + `state_time` in request and response) was removed: desired state has a single author — the leader — which commits it as a snapshot to S3 next to the election lease (see `internal/leader/persist.go`). A new leader loads that committed state instead of learning jobs from agent heartbeats. Unknown fields sent by older agents are ignored.
 
 ### Jobs
 

@@ -10,6 +10,7 @@ import (
 	"math"
 	"net/http"
 	"sync"
+	"time"
 
 	"hop/internal/types"
 	"hop/pkg/httputil"
@@ -40,7 +41,16 @@ func (l *Leader) DispatchJob(job *types.Job) error {
 	}
 
 	// Always store the job first — even if no agents have capacity now,
-	// reconciliation will pick it up when capacity becomes available.
+	// reconciliation will pick it up when capacity becomes available. A
+	// legitimate re-submit under a deleted name lifts that name's tombstone.
+	// SYNCHROON (query, niet do): de lift moet verwerkt zijn vóór StoreJob,
+	// anders kan de naveeg-sweep van een lopende delete de grafsteen nog
+	// zien staan terwijl de nieuwe job al in de store ligt — en veegt hij
+	// de legitieme her-submit alsnog weg.
+	query(l, func(s *leaderState) struct{} {
+		delete(s.tombstones, job.Name)
+		return struct{}{}
+	})
 	l.jobStore.StoreJob(job)
 
 	// During settle period: reconcileJobs after settle will dispatch
@@ -187,6 +197,33 @@ func (l *Leader) DeleteJobByName(name string) {
 		return
 	}
 
+	// Tombstone FIRST: the job leaves the store before the placed bookkeeping
+	// is wiped and before the (blocking) agent stops. The old order let any
+	// concurrent reconcile see "job exists + not placed" mid-delete and
+	// re-dispatch it — a fresh task whose job then vanished in the final
+	// DeleteJob: the resurrection-during-delete-storm + orphaned "failed"
+	// task records measured on the Altra (15-07). The tombstone marker
+	// additionally blocks in-flight dispatches that already hold a COPY of
+	// the job (reconcile snapshots): those land via the agent's /run, which
+	// re-registers the job — the marker makes every dispatch path refuse
+	// first. Expired entries are pruned here (the only writer).
+	// Grafsteen SYNCHROON (query, niet do) en vóór de store-delete: elke
+	// dispatch-check die hierna draait ziet hem gegarandeerd. Met een
+	// asynchrone do gleed een concurrent reconcile-dispatch er nog vóór en
+	// her-registreerde de agent-/run de job mid-delete (gemeten in de
+	// QEMU-stall-regressie). Verlopen stenen worden hier geruimd (enige schrijver).
+	query(l, func(s *leaderState) struct{} {
+		now := time.Now()
+		for n, t := range s.tombstones {
+			if now.Sub(t) > tombstoneTTL {
+				delete(s.tombstones, n)
+			}
+		}
+		s.tombstones[name] = now
+		return struct{}{}
+	})
+	l.jobStore.DeleteJob(name)
+
 	agents := query(l, func(s *leaderState) []*types.Agent {
 		var result []*types.Agent
 		for agentID, jobs := range s.placed {
@@ -215,7 +252,28 @@ func (l *Leader) DeleteJobByName(name string) {
 		log.Printf("Deleted job %s from %d agents", name, len(agents))
 	}
 
-	l.jobStore.DeleteJob(name)
+	// Naveeg: een dispatch die de grafsteen nét miste kan tijdens de
+	// (blokkerende) agent-stop alsnog geland zijn — de /run-accept
+	// her-registreert de job dan. Begrensd hervegen tot het record weg is.
+	// MAAR alleen zolang de grafsteen nog staat: een legitieme her-submit
+	// (DispatchJob) licht hem, en dan is het record geen zombie maar de
+	// nieuwe job van de gebruiker — daar moet de sweep vanaf blijven
+	// (anders sloopte hij een deploy die al "dispatched" terugkreeg).
+	for try := 0; try < 3; try++ {
+		tombstoned := query(l, func(s *leaderState) bool {
+			_, ok := s.tombstones[name]
+			return ok
+		})
+		if !tombstoned || l.jobStore.GetJob(name) == nil {
+			break
+		}
+		log.Printf("Job %s re-appeared mid-delete (in-flight dispatch) — sweeping again", name)
+		l.jobStore.DeleteJob(name)
+		for _, agent := range l.GetAgents() {
+			l.deleteTaskOnAgent(agent, name)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 
 	// Clear any stuck dispatching flag (defense against future leaks).
 	// Must happen before reconcile so a recreated job under the same name is not skipped.
@@ -239,6 +297,18 @@ func (l *Leader) nextAgent() *types.Agent {
 
 // sendJobToAgent sends a job to a specific agent.
 func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
+	// Tombstone check at the single dispatch choke point: every reconcile
+	// snapshot and in-flight dispatch carries a job COPY, and the agent's
+	// /run re-registers whatever it receives — without this check a dispatch
+	// that raced a delete resurrects the job (15-07 delete-storm zombies).
+	dead := query(l, func(s *leaderState) bool {
+		t, ok := s.tombstones[job.Name]
+		return ok && time.Since(t) <= tombstoneTTL
+	})
+	if dead {
+		return fmt.Errorf("job %s was deleted — dispatch refused", job.Name)
+	}
+
 	url := fmt.Sprintf("%s/run", agent.Endpoint)
 
 	body, err := json.Marshal(job)

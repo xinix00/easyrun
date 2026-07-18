@@ -12,6 +12,7 @@ const (
 	SlotBooting = 1
 	SlotReady   = 2
 	SlotExited  = 3
+	SlotStaged  = 4 // apploader downloaded the real image and parked; awaiting StartStaged
 )
 
 // SlotStatus is a point-in-time view of one slot.
@@ -21,6 +22,23 @@ type SlotStatus struct {
 	ExitCode  uint64
 	Heartbeat uint64
 	RAMSize   uint64
+	MemSys    uint64 // actual memory draw reported by the app (Go MemStats.Sys); 0 = not reported yet
+
+	// CPUPct is the slot's CPU usage as a percentage of its OWN cores
+	// (0-100, SMP-normalized), derived from the idle-tick counter every app
+	// publishes on its control page: an idle core ticks at event-stream
+	// tempo, a computing core doesn't — usage = 1 - measured/expected.
+	// -1 = unknown (slot starting, first sample window, or no counter).
+	CPUPct int
+
+	// Diagnostics for an involuntary end, written by HopOS' EL2 vectors: a
+	// stage-2 fault (cage violation) or HOP's hard-kill. FaultVec 0 = no
+	// fault seen; nonzero = vector index + 1, with ESR/FAR then valid. Not
+	// state-machine input — the runner logs it so operators see WHY a task
+	// failed, which is otherwise invisible on a headless node.
+	FaultVec uint64
+	FaultESR uint64
+	FaultFAR uint64
 }
 
 // SlotManager abstracts HopOS' slot primitives (hop-os/metal/slots). The
@@ -30,9 +48,25 @@ type SlotManager interface {
 	NumSlots() int
 	// CoreClass returns the core class of a slot ("big", "mid" or "small").
 	CoreClass(slot int) string
-	// Start loads a signed app image into the slot's partition, applies the
-	// memory limit (0 = whole partition) and env, and wakes the core.
-	Start(slot int, image []byte, memLimit uint64, env map[string]string) error
+	// StartLoader is phase 1 of the two-phase load: it loads the universal
+	// apploader — a small image baked into the node — into the slot on one core,
+	// with env (including HOP_IMAGE_URL, the real app image). The apploader then
+	// downloads that image on its OWN core and network stack, straight into the
+	// top of its own partition, and signals SlotStaged. This is how the download
+	// moves off the node's single netstack: one connection per app core instead
+	// of every image funnelling through core 0 (which OOM'd the kernel heap).
+	// memLimit sizes the partition the real app reuses in phase 2.
+	StartLoader(slot int, memLimit uint64, env map[string]string) error
+	// StartStaged is phase 2: the apploader has staged the real image in the top
+	// of its own partition (SlotStaged). StartStaged places it over the loader
+	// and re-dispatches the parked core on the real app, with the real cores,
+	// volumes and ports. It reuses the partition allocated in phase 1, so no extra
+	// slot or pool memory is consumed. cores > 1 gives the app SMP on the primary
+	// slot plus the next cores-1 cores, sharing one heap (the app is oblivious and
+	// simply sees GOMAXPROCS=cores). mounts is the job's volume table (shared path
+	// -> local path); ports (name -> port) are published on the node IP via
+	// stateless DNAT to the task's per-slot stack.
+	StartStaged(slot int, memLimit uint64, cores int, env map[string]string, mounts map[string]string, ports map[string]int) error
 	// Stop asks the app to exit (kill flag) and waits until the core is off.
 	Stop(slot int, timeout time.Duration) error
 	// Status reports the slot's current state.

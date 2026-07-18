@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"hop/internal/types"
 	"hop/pkg/config"
@@ -31,24 +30,14 @@ func (m *mockDiscoverer) TryBecomeLeader() bool {
 type mockAgent struct {
 	id             string
 	endpoint       string
-	jobs           []*types.Job
 	placed         map[string]int
-	stateTime      time.Time
-	syncJobsCalls  int
-	syncJobsJobs   []*types.Job
 	stopAllCalls   int
 }
 
-func (m *mockAgent) ID() string                                    { return m.id }
-func (m *mockAgent) Endpoint() string                              { return m.endpoint }
-func (m *mockAgent) GetJobs() []*types.Job                         { return m.jobs }
-func (m *mockAgent) GetPlacedTaskCounts() map[string]int           { return m.placed }
-func (m *mockAgent) GetStateTime() time.Time                       { return m.stateTime }
-func (m *mockAgent) StopAllTasks()                                 { m.stopAllCalls++ }
-func (m *mockAgent) SyncJobs(jobs []*types.Job, _ time.Time) {
-	m.syncJobsCalls++
-	m.syncJobsJobs = jobs
-}
+func (m *mockAgent) ID() string                          { return m.id }
+func (m *mockAgent) Endpoint() string                    { return m.endpoint }
+func (m *mockAgent) GetPlacedTaskCounts() map[string]int { return m.placed }
+func (m *mockAgent) StopAllTasks()                       { m.stopAllCalls++ }
 
 type mockLeader struct {
 	agents []*types.Agent
@@ -66,15 +55,15 @@ func okRegister() func(_, _, _ string, _ map[string]int, _ string) error {
 	return errRegister(nil)
 }
 
-func errHeartbeat(err error) func(_, _, _ string, _ []*types.Job, _ time.Time, _ string) (*heartbeatResponse, error) {
-	return func(_, _, _ string, _ []*types.Job, _ time.Time, _ string) (*heartbeatResponse, error) {
-		return nil, err
+func errHeartbeat(err error) func(_, _, _, _ string) error {
+	return func(_, _, _, _ string) error {
+		return err
 	}
 }
 
-func okHeartbeat(jobs []*types.Job) func(_, _, _ string, _ []*types.Job, _ time.Time, _ string) (*heartbeatResponse, error) {
-	return func(_, _, _ string, _ []*types.Job, _ time.Time, _ string) (*heartbeatResponse, error) {
-		return &heartbeatResponse{Jobs: jobs}, nil
+func okHeartbeat() func(_, _, _, _ string) error {
+	return func(_, _, _, _ string) error {
+		return nil
 	}
 }
 
@@ -92,7 +81,7 @@ func newTestLoop(disc *mockDiscoverer, ag *mockAgent) *agentLoop {
 		ag:             ag,
 		disc:           disc,
 		doRegister:     okRegister(),
-		doHeartbeat:    okHeartbeat(nil),
+		doHeartbeat:    okHeartbeat(),
 		doBecomeLeader: nopBecomeLeader,
 	}
 }
@@ -225,8 +214,9 @@ func TestTick_HeartbeatNotRegistered_Reregisters(t *testing.T) {
 	}
 }
 
-// Successful heartbeat → failCount=0, SyncJobs called when jobs present
-func TestTick_HeartbeatSuccess_SyncsJobs(t *testing.T) {
+// Successful heartbeat → failCount reset. Heartbeat is nu puur liveness
+// (16-07): geen job-sync meer — gewenste staat heeft één auteur (leader→S3).
+func TestTick_HeartbeatSuccess_ResetsFailCount(t *testing.T) {
 	disc := &mockDiscoverer{leader: "leader:9080"}
 	ag := &mockAgent{id: "a1"}
 	loop := newTestLoop(disc, ag)
@@ -234,31 +224,11 @@ func TestTick_HeartbeatSuccess_SyncsJobs(t *testing.T) {
 	loop.lastLeaderAddr = "leader:9080"
 	loop.failCount = 2 // simulated prior failures
 
-	jobs := []*types.Job{{Name: "my-api"}}
-	loop.doHeartbeat = okHeartbeat(jobs)
-
+	loop.doHeartbeat = okHeartbeat()
 	loop.tick()
 
 	if loop.failCount != 0 {
 		t.Errorf("failCount = %d, want 0", loop.failCount)
-	}
-	if ag.syncJobsCalls != 1 {
-		t.Errorf("SyncJobs calls = %d, want 1", ag.syncJobsCalls)
-	}
-}
-
-// Successful heartbeat with empty jobs → SyncJobs NOT called
-func TestTick_HeartbeatEmptyJobs_NoSync(t *testing.T) {
-	disc := &mockDiscoverer{leader: "leader:9080"}
-	ag := &mockAgent{id: "a1"}
-	loop := newTestLoop(disc, ag)
-	loop.registered = true
-	loop.lastLeaderAddr = "leader:9080"
-
-	loop.tick()
-
-	if ag.syncJobsCalls != 0 {
-		t.Errorf("SyncJobs calls = %d, want 0 (empty response)", ag.syncJobsCalls)
 	}
 }
 
@@ -383,9 +353,9 @@ func TestTick_UsesCachedLeaderAddr(t *testing.T) {
 	loop.lastLeaderAddr = "cached:9080"
 
 	var calledAddr string
-	loop.doHeartbeat = func(addr, _, _ string, _ []*types.Job, _ time.Time, _ string) (*heartbeatResponse, error) {
+	loop.doHeartbeat = func(addr, _, _, _ string) error {
 		calledAddr = addr
-		return &heartbeatResponse{}, nil
+		return nil
 	}
 
 	loop.tick()

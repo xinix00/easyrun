@@ -20,7 +20,6 @@ import (
 	"hop/internal/api"
 	"hop/internal/discovery"
 	"hop/internal/leader"
-	"hop/internal/types"
 	"hop/pkg/config"
 	"hop/pkg/httputil"
 
@@ -261,6 +260,17 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 	}
 	(*l).EnableSettle()
 
+	// Gecommitte clusterstaat: bij bruikbare S3-config commit deze leader
+	// zijn gewenste staat naast de lease en laadt een verse leader hem
+	// terug — failover zonder state-merging (zelfde gate als agentboot,
+	// zie discovery.StateStoreFromConfig).
+	if st := discovery.StateStoreFromConfig(cfg); st != nil {
+		(*l).SetStatePersister(st)
+		if err := (*l).LoadCommittedState(leaderCtx); err != nil {
+			log.Printf("committed state not loaded: %v", err)
+		}
+	}
+
 	// Start leader state loop + health checker BEFORE any state operations
 	// Without this, RegisterAgent deadlocks (query waits on ops channel that nobody reads)
 	go (*l).Run(leaderCtx)
@@ -283,12 +293,6 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 		srv.Stop() // release :9080 synchronously
 		cancel()   // stop leader state loop
 	}
-}
-
-type heartbeatResponse struct {
-	Status    string       `json:"status"`
-	Jobs      []*types.Job `json:"jobs"`
-	StateTime time.Time    `json:"state_time"`
 }
 
 // postJSON sends a POST request with JSON body and API key to the leader.
@@ -319,27 +323,25 @@ func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]
 
 var errNotRegistered = errors.New("not registered with leader")
 
-func sendHeartbeat(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, stateTime time.Time, apiKey string) (*heartbeatResponse, error) {
+// sendHeartbeat is puur een levensteken; de job-lijsten die hier vroeger
+// meereisden zijn gesloopt (16-07) — gewenste staat heeft één auteur (de
+// leader, gecommit naar S3; zie internal/leader/persist.go).
+func sendHeartbeat(leaderAddr, agentID, agentEndpoint, apiKey string) error {
 	resp, err := postJSON(fmt.Sprintf("http://%s/v1/heartbeat", leaderAddr), map[string]any{
-		"id": agentID, "endpoint": agentEndpoint, "version": version, "jobs": jobs, "state_time": stateTime,
+		"id": agentID, "endpoint": agentEndpoint, "version": version,
 	}, apiKey)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, errNotRegistered
+		return errNotRegistered
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("leader returned %d", resp.StatusCode)
+		return fmt.Errorf("leader returned %d", resp.StatusCode)
 	}
-
-	var result heartbeatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return nil
 }
 
 // getOrCreateNodeID returns a stable node ID (config > persisted > generated)

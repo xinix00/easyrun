@@ -31,6 +31,13 @@ type JobStore interface {
 	GetJobs() []*types.Job
 	GetJob(name string) *types.Job
 	StoreJob(job *types.Job)
+	// UpdateJob writes only if the job still exists (atomically in the
+	// store's state loop) and reports whether it did. Reconcile-side
+	// rewrites (priority renumbering) MUST use this instead of StoreJob:
+	// a reconcile holds a snapshot, and upserting from a snapshot
+	// resurrects jobs deleted since the snapshot was taken (measured
+	// 15-07: delete-storm zombies on the Altra).
+	UpdateJob(job *types.Job) bool
 	DeleteJob(name string) // Remove job from store by name
 	GetStateTime() time.Time
 	SyncJobs(jobs []*types.Job, updated time.Time)
@@ -44,7 +51,19 @@ type leaderState struct {
 	dispatching  map[string]bool          // jobName -> true if actively being dispatched
 	settled      bool                     // false during settle period after leader election
 	roundRobin   int
+	// tombstones marks recently deleted job names. Reconcile snapshots and
+	// in-flight dispatches carry job COPIES; without this marker they can
+	// resurrect a deleted job (re-dispatch → agent /run re-registers it —
+	// measured 15-07: delete-storm zombies). Checked before every dispatch;
+	// cleared when the same name is legitimately re-submitted; entries
+	// expire after tombstoneTTL.
+	tombstones map[string]time.Time
 }
+
+// tombstoneTTL: hoe lang een delete-grafsteen geldig blijft. Ruim langer dan
+// elke reconcile-ronde + dispatch-vlucht; kort genoeg om de map klein te
+// houden bij naam-hergebruik in stormen.
+const tombstoneTTL = 2 * time.Minute
 
 // rebuildSortedAgents rebuilds the cached sorted agent list from the agents map.
 // Must be called inside a state operation whenever agents map is modified.
@@ -71,6 +90,12 @@ type Leader struct {
 	settleDelay  time.Duration // wait before first reconciliation (0 = settled immediately)
 	eventBus     *EventBus
 	apiKey       string
+
+	// Committed cluster state (persist.go): extern gecommitte gewenste
+	// staat, met de leader als enige auteur. nil = geen persistentie
+	// (huidige gedrag).
+	persister  StatePersister
+	stateDirty chan struct{}
 }
 
 // New creates a new leader with optional HTTP client (nil uses default)
@@ -116,6 +141,7 @@ func (l *Leader) stateLoop(ctx context.Context) {
 		placed:      make(map[string]map[string]int),
 		dispatching: make(map[string]bool),
 		settled:     l.settleDelay == 0,
+		tombstones:  make(map[string]time.Time),
 	}
 
 	var settleTimer <-chan time.Time
@@ -153,10 +179,14 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 	return <-result
 }
 
-// Heartbeat updates agent's LastSeen and syncs jobs.
-// Returns (nil, false) if agent is unknown — caller should return 404 to force re-register.
-func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime time.Time, version string) ([]*types.Job, bool) {
-	known := query(l, func(s *leaderState) bool {
+// Heartbeat registreert een levensteken van een agent; false = onbekende
+// agent (caller hoort 404 te geven zodat die zich her-registreert). PUUR liveness —
+// géén job-uitwisseling meer (gesloopt 16-07, Derek): de leader is de enige
+// auteur van gewenste staat (gecommit naar S3, persist.go) en agents zijn
+// uitvoerders. De oude bidirectionele job-sync hier was de kraamkamer van
+// de delete-storm-zombies van 15-07.
+func (l *Leader) Heartbeat(id, version string) bool {
+	return query(l, func(s *leaderState) bool {
 		agent, ok := s.agents[id]
 		if !ok {
 			return false
@@ -165,19 +195,6 @@ func (l *Leader) Heartbeat(id, endpoint string, jobs []*types.Job, stateTime tim
 		agent.Version = version
 		return true
 	})
-
-	if !known {
-		return nil, false
-	}
-
-	// Sync job definitions if agent has newer state
-	myStateTime := l.jobStore.GetStateTime()
-	if stateTime.After(myStateTime) && len(jobs) > 0 {
-		log.Printf("Agent %s has newer state, syncing", id)
-		l.jobStore.SyncJobs(jobs, stateTime)
-	}
-
-	return l.jobStore.GetJobs(), true
 }
 
 // RegisterAgent registers a (re)starting agent. Clears old state and triggers reconciliation.
@@ -311,7 +328,9 @@ func (l *Leader) PatchJobPriority(name string, targetIdx int) error {
 		p := i
 		updated := *j
 		updated.Priority = &p
-		l.jobStore.StoreJob(&updated)
+		// Snapshot-herschrijf: UpdateJob zodat een concurrent gedeletete job
+		// hier niet herrijst (zelfde les als normalizePriorities, 15-07).
+		l.jobStore.UpdateJob(&updated)
 	}
 
 	l.eventBus.Notify("job:" + name)

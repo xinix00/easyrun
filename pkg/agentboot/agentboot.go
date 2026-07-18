@@ -27,7 +27,6 @@ import (
 	"hop/internal/discovery"
 	"hop/internal/leader"
 	"hop/internal/runner"
-	"hop/internal/types"
 	"hop/pkg/config"
 	"hop/pkg/hopos"
 	"hop/pkg/httputil"
@@ -103,6 +102,20 @@ func Run(ctx context.Context, o Options) error {
 	if d := cfg.Timeouts.NodeDeadThreshold; d > 0 {
 		l.SetAgentTimeout(d)
 	}
+	// Gecommitte clusterstaat (Derek, 15-07): staat er bruikbare S3-config,
+	// dan commit de leader zijn gewenste staat als object "state/<cluster>"
+	// naast de lease en laadt hij hem bij boot terug — een node-reboot
+	// herplaatst dan zijn eigen jobs (declaratief). Object hernoemen/weghalen
+	// in de bucket = schoon booten. Zonder S3-config: het oude, vluchtige
+	// gedrag. (Zelfde gate als cmd/agent: discovery.StateStoreFromConfig.)
+	if st := discovery.StateStoreFromConfig(cfg); st != nil {
+		l.SetStatePersister(st)
+		if err := l.LoadCommittedState(ctx); err != nil {
+			// Luid maar niet fataal: de node blijft bruikbaar; de operator
+			// ziet dat de gecommitte staat niet geladen is.
+			log.Printf("agentboot: committed state not loaded: %v", err)
+		}
+	}
 	go l.Run(ctx)
 
 	srv := api.NewServer(l, fmt.Sprintf(":%d", cfg.Node.Port+1000), cfg.APIKey, cfg.Cluster.Name)
@@ -120,8 +133,10 @@ func Run(ctx context.Context, o Options) error {
 	l.RegisterAgent(o.NodeID, ag.Endpoint(), Version, ag.GetPlacedTaskCounts())
 	log.Printf("agentboot: node %s is leader (%s), %d slots", o.NodeID, cfg.Cluster.Name, sm.NumSlots())
 
-	// Heartbeat-loop: lease vers houden + job-state syncen met de eigen
-	// leader (dezelfde bytes als een remote agent zou sturen).
+	// Heartbeat-loop: lease vers houden + puur een levensteken naar de eigen
+	// leader. Job-uitwisseling is hier gesloopt (16-07): gewenste staat heeft
+	// één auteur (de leader, gecommit naar S3 — zie leader/persist.go) en de
+	// oude bidirectionele sync was de kraamkamer van de delete-zombies.
 	go func() {
 		leaderAddr := fmt.Sprintf("%s:%d", cfg.Node.IP, cfg.Node.Port+1000)
 		t := time.NewTicker(10 * time.Second)
@@ -134,13 +149,8 @@ func Run(ctx context.Context, o Options) error {
 			case <-t.C:
 			}
 			disc.RenewLease()
-			resp, err := heartbeat(leaderAddr, o.NodeID, ag.Endpoint(), ag.GetJobs(), ag.GetStateTime(), cfg.APIKey)
-			if err != nil {
+			if err := heartbeat(leaderAddr, o.NodeID, ag.Endpoint(), cfg.APIKey); err != nil {
 				log.Printf("agentboot: heartbeat: %v", err)
-				continue
-			}
-			if len(resp.Jobs) > 0 {
-				ag.SyncJobs(resp.Jobs, resp.StateTime)
 			}
 		}
 	}()
@@ -150,33 +160,25 @@ func Run(ctx context.Context, o Options) error {
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
-type heartbeatResponse struct {
-	Status    string       `json:"status"`
-	Jobs      []*types.Job `json:"jobs"`
-	StateTime time.Time    `json:"state_time"`
-}
-
-func heartbeat(leaderAddr, id, endpoint string, jobs []*types.Job, stateTime time.Time, apiKey string) (*heartbeatResponse, error) {
+// heartbeat is puur een levensteken (id/endpoint/version); de job-lijsten
+// die hier vroeger meereisden zijn gesloopt — zie leader/persist.go.
+func heartbeat(leaderAddr, id, endpoint, apiKey string) error {
 	body, _ := json.Marshal(map[string]any{
-		"id": id, "endpoint": endpoint, "version": Version, "jobs": jobs, "state_time": stateTime,
+		"id": id, "endpoint": endpoint, "version": Version,
 	})
 	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/v1/heartbeat", leaderAddr), bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	httputil.SignRequest(req, apiKey, body)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("leader returned %d", resp.StatusCode)
+		return fmt.Errorf("leader returned %d", resp.StatusCode)
 	}
-	var result heartbeatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
-	}
-	return &result, nil
+	return nil
 }

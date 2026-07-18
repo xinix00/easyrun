@@ -72,22 +72,30 @@ Node 1 (agent)                  Node 1 (agent + leader)
 No sync needed! The agent BECOMES leader, not a separate entity.
 ```
 
-## Job Sync via Heartbeat
+## Committed State (single author: the leader)
 
 ```
 Leader has ALL jobs (single source of truth)
 
-Agent 1 ──heartbeat──► Leader
-         {my jobs: [...], state_time: T}
+Leader ──debounced snapshot──► S3 object "state/<cluster>"
+        (same bucket, credentials and signer as the election lease)
 
-         ◄────────────────────
-         response: {all jobs: [...], state_time: T}
-
-         Agent 1 saves new jobs via SyncJobs()
-
-Each agent has a COPY of all jobs.
-When an agent becomes leader, it already knows them!
+New leader at boot/takeover:
+        ◄── Load snapshot ── S3
+        Store now mirrors the snapshot EXACTLY (deletion is absence:
+        jobs missing from the snapshot are dropped, even if the local
+        state.json still knew them)
 ```
+
+- The leader is the **only author** of desired state. Agents are executors;
+  they never send job definitions back (the old bidirectional heartbeat
+  sync bred delete-resurrection zombies and was removed).
+- Snapshot writes are debounced (~1s), so a crash loses at most the newest
+  mutations — visible declaratively (the job is absent) and re-submittable.
+- Renaming or deleting the state object in the bucket is the operator's
+  "boot clean" switch. See `internal/leader/persist.go`.
+- Without usable S3 config there is no committed state: a new leader then
+  only knows the jobs in its own local store.
 
 ## Registration Protocol
 
@@ -95,25 +103,25 @@ When an agent becomes leader, it already knows them!
 Agent startup or leader change:
 
 Agent ──POST /v1/agents──► Leader
-        {id, endpoint, version, placed: {jobID: count}}
+        {id, endpoint, version, placed: {jobName: count}}
 
         ◄──────────────────────
         {status: "registered", jobs: [...], state_time: T}
 
-Subsequent heartbeats:
+Subsequent heartbeats (pure liveness):
 
 Agent ──POST /v1/heartbeat──► Leader
-        {id, endpoint, version, jobs: [...], state_time: T}
+        {id, endpoint, version}
 
         ◄────────────────────────
-        {status: "ok", jobs: [...], state_time: T}
+        {status: "ok"}
 
 If leader returns 404: agent is unknown → re-register next tick
 ```
 
 **Registration vs Heartbeat:**
 - Registration (POST /v1/agents): includes `placed` counts, triggers reconciliation
-- Heartbeat (POST /v1/heartbeat): updates LastSeen, syncs job state, no reconciliation
+- Heartbeat (POST /v1/heartbeat): updates LastSeen only (pure liveness), no job exchange, no reconciliation
 
 ## Settle Period
 

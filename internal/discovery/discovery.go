@@ -19,6 +19,8 @@ import (
 	"github.com/xinix00/hoplock/mem"
 	"github.com/xinix00/hoplock/s3"
 	"github.com/xinix00/hoplockserver/client"
+
+	"hop/pkg/config"
 )
 
 const backendTimeout = 5 * time.Second
@@ -86,6 +88,65 @@ func S3Backend(cfg S3BackendConfig, clusterName string) hoplock.Backend {
 		SessionToken:    cfg.SessionToken,
 		UsePathStyle:    cfg.UsePathStyle,
 	}
+}
+
+// S3StateStore persists the leader's committed cluster state as a plain
+// object at "state/<cluster>", next to the election lease — same bucket,
+// same credentials, same signer (leader.StatePersister). Renaming or
+// deleting that object in the bucket is the operator's "boot clean" switch.
+type S3StateStore struct {
+	b   *s3.Backend
+	key string
+}
+
+// NewS3StateStore wires the state object for the given cluster.
+func NewS3StateStore(cfg S3BackendConfig, clusterName string) *S3StateStore {
+	return &S3StateStore{
+		b: &s3.Backend{
+			Endpoint:        cfg.Endpoint,
+			Bucket:          cfg.Bucket,
+			Key:             "state/" + clusterName, // alleen voor foutmeldingen; object-API krijgt de key expliciet
+			Region:          cfg.Region,
+			AccessKeyID:     cfg.AccessKeyID,
+			SecretAccessKey: cfg.SecretAccessKey,
+			SessionToken:    cfg.SessionToken,
+			UsePathStyle:    cfg.UsePathStyle,
+		},
+		key: "state/" + clusterName,
+	}
+}
+
+// StateStoreFromConfig geeft de committed-state-store voor deze cluster-
+// config, of nil wanneer de S3-sectie niet bruikbaar is (bucket én endpoint
+// vereist — het s3-backend weigert een lege endpoint). Dit is bewust de
+// ENIGE gate: cmd/agent en agentboot hadden elk hun eigen variant
+// (Type=="s3" zonder endpoint-check vs. bucket+endpoint zonder type) en
+// liepen uit elkaar. Een gevulde S3-sectie betekent: S3 is de bron van
+// waarheid — voor de lease én voor de gecommitte staat.
+func StateStoreFromConfig(cfg *config.Config) *S3StateStore {
+	s3c := cfg.Cluster.Lock.S3
+	if s3c.Bucket == "" || s3c.Endpoint == "" {
+		return nil
+	}
+	return NewS3StateStore(S3BackendConfig{
+		Endpoint:        s3c.Endpoint,
+		Bucket:          s3c.Bucket,
+		Region:          s3c.Region,
+		AccessKeyID:     s3c.AccessKeyID,
+		SecretAccessKey: s3c.SecretAccessKey,
+		SessionToken:    s3c.SessionToken,
+		UsePathStyle:    s3c.UsePathStyle,
+	}, cfg.Cluster.Name)
+}
+
+// Save overschrijft de snapshot (enige schrijver: de leaseholder).
+func (s *S3StateStore) Save(ctx context.Context, snapshot []byte) error {
+	return s.b.PutObject(ctx, s.key, snapshot, "application/json")
+}
+
+// Load leest de snapshot; ok=false = geen object = schone boot.
+func (s *S3StateStore) Load(ctx context.Context) ([]byte, bool, error) {
+	return s.b.GetObject(ctx, s.key)
 }
 
 // NodeAddr returns this node's owner identity.

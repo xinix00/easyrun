@@ -35,7 +35,7 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 
 	// Register agent-1
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
-	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
+	ldr.Heartbeat("agent-1", "")
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{Name: "app", Command: "./app", Count: 20}
@@ -123,8 +123,8 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"app": 10})
 	ldr.RegisterAgent("agent-2", agent2.URL(), "", map[string]int{"app": 10})
 	// Heartbeat for keepalive
-	ldr.Heartbeat("agent-1", agent1.URL(), []*types.Job{job}, time.Now(), "")
-	ldr.Heartbeat("agent-2", agent2.URL(), []*types.Job{job}, time.Now(), "")
+	ldr.Heartbeat("agent-1", "")
+	ldr.Heartbeat("agent-2", "")
 
 	// Wait for settle timer + reconciliation
 	time.Sleep(500 * time.Millisecond)
@@ -207,7 +207,7 @@ func TestAgentRestartHeartbeatRaceOverScheduling(t *testing.T) {
 	// In production: agent-1 received /run (202 Accepted) but task hasn't
 	// appeared in s.tasks yet → GetPlacedTaskCounts() returns OLD count.
 	// This heartbeat REPLACES the leader's placed[a1] with stale data.
-	ldr.Heartbeat("agent-1", agents[0].URL(), nil, time.Time{}, "")
+	ldr.Heartbeat("agent-1", "")
 	time.Sleep(20 * time.Millisecond)
 
 	// ---- Agent-2 comes back ----
@@ -256,9 +256,9 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
 	ldr.RegisterAgent("agent-2", agent2.URL(), "", nil)
 	ldr.RegisterAgent("agent-3", agent3.URL(), "", nil)
-	ldr.Heartbeat("agent-1", agent1.URL(), nil, time.Time{}, "")
-	ldr.Heartbeat("agent-2", agent2.URL(), nil, time.Time{}, "")
-	ldr.Heartbeat("agent-3", agent3.URL(), nil, time.Time{}, "")
+	ldr.Heartbeat("agent-1", "")
+	ldr.Heartbeat("agent-2", "")
+	ldr.Heartbeat("agent-3", "")
 	time.Sleep(20 * time.Millisecond)
 
 	// Dispatch 20 tasks (round-robin across 3 agents → 7+7+6)

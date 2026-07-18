@@ -16,6 +16,9 @@ import (
 // Run starts the leader's state loop and dead agent checker
 func (l *Leader) Run(ctx context.Context) {
 	go l.stateLoop(ctx)
+	if l.persister != nil {
+		go l.persistLoop(ctx) // gecommitte staat (persist.go)
+	}
 
 	ticker := time.NewTicker(deadAgentCheckInterval)
 	defer ticker.Stop()
@@ -76,7 +79,10 @@ func (l *Leader) normalizePriorities(jobs []*types.Job) {
 			p := i
 			updated := *job
 			updated.Priority = &p
-			l.jobStore.StoreJob(&updated)
+			// UpdateJob, niet StoreJob: deze lus werkt op een snapshot, en
+			// een upsert vanaf een snapshot herrijst een job die intussen
+			// gedeletet is (de delete-storm-zombies van 15-07).
+			l.jobStore.UpdateJob(&updated)
 			jobs[i] = &updated
 		}
 	}

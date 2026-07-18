@@ -50,6 +50,16 @@ func (m *MockJobStore) StoreJob(job *types.Job) {
 	m.jobs[job.Name] = job
 }
 
+func (m *MockJobStore) UpdateJob(job *types.Job) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.jobs[job.Name]; !ok {
+		return false
+	}
+	m.jobs[job.Name] = job
+	return true
+}
+
 func (m *MockJobStore) DeleteJob(name string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

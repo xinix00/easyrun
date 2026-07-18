@@ -1,6 +1,8 @@
 package runner
 
 import (
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -22,8 +24,12 @@ type fakeSlotManager struct {
 
 type fakeSlot struct {
 	image    []byte
+	staged   []byte // door de "apploader" gedownloade image, wacht op StartStaged
 	memLimit uint64
+	cores    int
 	env      map[string]string
+	mounts   map[string]string
+	ports    map[string]int
 	coreOn   bool
 	app      uint64
 	exitCode uint64
@@ -52,16 +58,47 @@ func newFakeSlotManager(num int) *fakeSlotManager {
 func (f *fakeSlotManager) NumSlots() int             { return f.num }
 func (f *fakeSlotManager) CoreClass(slot int) string { return f.classes[slot] }
 
-func (f *fakeSlotManager) Start(slot int, image []byte, memLimit uint64, env map[string]string) error {
+// StartLoader is phase 1: it loads the (embedded) apploader and simulates it —
+// the real loader downloads the app image (env HOP_IMAGE_URL) on its own
+// core+netstack and signals SlotStaged. The fake fetches that image and parks
+// the slot at SlotStaged; StartStaged then promotes it (phase 2). This mirrors
+// the real two-phase "app downloads its own image" flow.
+func (f *fakeSlotManager) StartLoader(slot int, memLimit uint64, env map[string]string) error {
+	url := env["HOP_IMAGE_URL"]
+	if url == "" {
+		return fmt.Errorf("fake: apploader started without HOP_IMAGE_URL")
+	}
+	resp, err := http.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	img, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	s := &fakeSlot{
-		image: image, memLimit: memLimit, env: env,
-		coreOn: true, app: hopos.SlotReady,
-		logs: make(chan string, 16),
+	f.slots[slot] = &fakeSlot{
+		staged: img, memLimit: memLimit, env: env,
+		app: hopos.SlotStaged, logs: make(chan string, 16),
 	}
+	return nil
+}
+
+// StartStaged promotes the staged image to the running app (phase 2), with the
+// real cores/volumes/ports (the loader ran on 1 core, no mounts).
+func (f *fakeSlotManager) StartStaged(slot int, memLimit uint64, cores int, env map[string]string, mounts map[string]string, ports map[string]int) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	s, ok := f.slots[slot]
+	if !ok || s.staged == nil {
+		return fmt.Errorf("fake: StartStaged on slot %d with nothing staged", slot)
+	}
+	s.image, s.staged = s.staged, nil
+	s.memLimit, s.cores, s.env, s.mounts, s.ports = memLimit, cores, env, mounts, ports
+	s.coreOn, s.app = true, hopos.SlotReady
 	s.logs <- "app leeft"
-	f.slots[slot] = s
 	return nil
 }
 
@@ -124,8 +161,8 @@ func TestHopRunnerLifecycle(t *testing.T) {
 	srv := imageServer(t, image)
 	sm := newFakeSlotManager(11)
 	r := NewHopRunner(sm, map[string]string{"node.os": "hopos"})
-
 	job := hopJob(srv.URL)
+	job.Volumes = map[string]string{"/data": "/data"}
 	task := &types.Task{ID: "t1", JobName: "demo", Driver: types.DriverHop}
 
 	if err := r.Run(job, task); err != nil {
@@ -147,6 +184,9 @@ func TestHopRunnerLifecycle(t *testing.T) {
 	}
 	if s.env["ER_ATTR_NODE_OS"] != "hopos" {
 		t.Fatalf("node attrs not injected as ER_ATTR_*: %v", s.env)
+	}
+	if s.mounts["/data"] != "/data" {
+		t.Fatalf("job.Volumes not passed to slot: %v", s.mounts)
 	}
 
 	if st, _ := r.Status(task); st != types.TaskRunning {
@@ -174,11 +214,73 @@ func TestHopRunnerLifecycle(t *testing.T) {
 	}
 }
 
+func TestHopRunnerPorts(t *testing.T) {
+	srv := imageServer(t, []byte("img"))
+	sm := newFakeSlotManager(11)
+	r := NewHopRunner(sm, nil)
+	job := hopJob(srv.URL)
+	job.Ports = map[string]int{"http": 0} // 0 = dynamic; agent allocates
+	task := &types.Task{ID: "t-ports", Ports: map[string]int{"http": 18080}}
+
+	if err := r.Run(job, task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	s := sm.slot(task.Pid)
+	if s.ports["http"] != 18080 {
+		t.Fatalf("task.Ports not passed to slot: %v", s.ports)
+	}
+	if s.env["ER_PORT_HTTP"] != "18080" {
+		t.Fatalf("ER_PORT_HTTP not injected: %v", s.env)
+	}
+}
+
+// TestHopRunnerDeletedDuringStaging: wordt de task tijdens staging gestopt
+// (delete/preemptie → Stop), dan moet Run met nil eindigen ZONDER iets aan de
+// (door Stop vrijgegeven) slot te koppelen — geen task.Pid, geen
+// slots/inUse-entry, geen log-broadcaster. Anders stopte de ghost-guard via
+// de task.Pid-fallback de slot van een ANDERE task die 'm intussen had.
+func TestHopRunnerDeletedDuringStaging(t *testing.T) {
+	// Trage download: Stop komt binnen terwijl de apploader nog fetcht.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(300 * time.Millisecond)
+		_, _ = w.Write([]byte("img"))
+	}))
+	t.Cleanup(srv.Close)
+
+	sm := newFakeSlotManager(11)
+	r := NewHopRunner(sm, nil)
+	job := hopJob(srv.URL)
+	task := &types.Task{ID: "t-del", JobName: "demo", Driver: types.DriverHop}
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- r.Run(job, task) }()
+
+	time.Sleep(50 * time.Millisecond) // Run zit midden in de staging
+	if err := r.Stop(task); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("Run hoort nil te geven bij stop-tijdens-staging, kreeg: %v", err)
+	}
+	if task.Pid != 0 {
+		t.Fatalf("task.Pid = %d, hoort 0 te blijven (slot is vrijgegeven)", task.Pid)
+	}
+	r.mu.RLock()
+	_, hasSlot := r.slots[task.ID]
+	_, hasLog := r.stdoutLog[task.ID]
+	busy := len(r.inUse)
+	stopping := len(r.stopping)
+	r.mu.RUnlock()
+	if hasSlot || hasLog || busy != 0 || stopping != 0 {
+		t.Fatalf("runner-state niet schoon: slot=%v log=%v inUse=%d stopping=%d", hasSlot, hasLog, busy, stopping)
+	}
+}
+
 func TestHopRunnerCoreClassAllocation(t *testing.T) {
 	srv := imageServer(t, []byte("img"))
 	sm := newFakeSlotManager(11)
 	r := NewHopRunner(sm, nil)
-
 	job := hopJob(srv.URL)
 	job.Tags = map[string]string{"core-class": "big"}
 	task := &types.Task{ID: "t-big"}
@@ -191,14 +293,46 @@ func TestHopRunnerCoreClassAllocation(t *testing.T) {
 	}
 }
 
+func TestHopRunnerSMPCores(t *testing.T) {
+	srv := imageServer(t, []byte("img"))
+	sm := newFakeSlotManager(11)
+	r := NewHopRunner(sm, nil)
+	// CPUShares 3072 = 3 cores → één SMP-task op 3 aaneengesloten cores.
+	job := hopJob(srv.URL)
+	job.CPUShares = 3072
+	task := &types.Task{ID: "t-smp"}
+	if err := r.Run(job, task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if s := sm.slot(task.Pid); s.cores != 3 {
+		t.Fatalf("cores doorgegeven aan slot = %d, want 3", s.cores)
+	}
+	// Alle 3 cores (primair + 2 secundair) moeten bezet zijn: een tweede,
+	// even grote task mag ze niet kunnen pakken maar wel de resterende.
+	prim := task.Pid
+	for c := prim; c < prim+3; c++ {
+		if id := r.inUse[c]; id != task.ID {
+			t.Fatalf("core %d bezet door %q, want %q", c, id, task.ID)
+		}
+	}
+
+	// Vrijgeven geeft álle 3 de cores terug.
+	if err := r.Stop(task); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	for c := prim; c < prim+3; c++ {
+		if _, busy := r.inUse[c]; busy {
+			t.Fatalf("core %d nog bezet na Stop", c)
+		}
+	}
+}
+
 func TestHopRunnerRejections(t *testing.T) {
 	srv := imageServer(t, []byte("img"))
 	sm := newFakeSlotManager(2)
 	r := NewHopRunner(sm, nil)
-
 	cases := map[string]*types.Job{
 		"container":   {Image: "nginx", Artifacts: []types.Artifact{{URL: srv.URL}}},
-		"ports":       {Ports: map[string]int{"http": 80}, Artifacts: []types.Artifact{{URL: srv.URL}}},
 		"no artifact": {Command: "./app"},
 		"extract":     {Artifacts: []types.Artifact{{URL: srv.URL, Extract: "tar.gz"}}},
 	}

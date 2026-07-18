@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"time"
 
 	"hop/internal/types"
 	"hop/pkg/config"
@@ -23,10 +22,7 @@ type Discoverer interface {
 type agentAPI interface {
 	ID() string
 	Endpoint() string
-	GetJobs() []*types.Job
 	GetPlacedTaskCounts() map[string]int
-	GetStateTime() time.Time
-	SyncJobs(jobs []*types.Job, stateTime time.Time)
 	StopAllTasks()
 }
 
@@ -44,7 +40,7 @@ type agentLoop struct {
 
 	// injectable for testing
 	doRegister     func(leaderAddr, agentID, agentEndpoint string, placed map[string]int, apiKey string) error
-	doHeartbeat    func(leaderAddr, agentID, agentEndpoint string, jobs []*types.Job, stateTime time.Time, apiKey string) (*heartbeatResponse, error)
+	doHeartbeat    func(leaderAddr, agentID, agentEndpoint, apiKey string) error
 	doBecomeLeader func() (stop func(), l leaderAPI)
 
 	// mutable state
@@ -104,9 +100,10 @@ func (s *agentLoop) tick() {
 		} else {
 			s.failCount = 0
 		}
-		// Self-heartbeat for job state sync
+		// Self-heartbeat: puur liveness (LastSeen); job-sync is gesloopt —
+		// gewenste staat heeft één auteur (leader → S3, leader/persist.go).
 		leaderAddr = fmt.Sprintf("%s:%d", s.cfg.Node.IP, s.cfg.Node.Port+1000)
-		_, _ = s.doHeartbeat(leaderAddr, s.ag.ID(), s.ag.Endpoint(), s.ag.GetJobs(), s.ag.GetStateTime(), s.cfg.APIKey)
+		_ = s.doHeartbeat(leaderAddr, s.ag.ID(), s.ag.Endpoint(), s.cfg.APIKey)
 	} else if leaderAddr != "" {
 		// On startup (or after leader change): register first with placed counts
 		if !s.registered {
@@ -122,8 +119,8 @@ func (s *agentLoop) tick() {
 			return
 		}
 
-		// Already registered → heartbeat
-		resp, err := s.doHeartbeat(leaderAddr, s.ag.ID(), s.ag.Endpoint(), s.ag.GetJobs(), s.ag.GetStateTime(), s.cfg.APIKey)
+		// Already registered → heartbeat (puur liveness, geen job-sync)
+		err := s.doHeartbeat(leaderAddr, s.ag.ID(), s.ag.Endpoint(), s.cfg.APIKey)
 		if err != nil {
 			if errors.Is(err, errNotRegistered) {
 				log.Printf("Not registered with leader, will re-register...")
@@ -135,9 +132,6 @@ func (s *agentLoop) tick() {
 		} else {
 			s.failCount = 0
 			s.lastLeaderAddr = leaderAddr
-			if len(resp.Jobs) > 0 {
-				s.ag.SyncJobs(resp.Jobs, resp.StateTime)
-			}
 		}
 	} else {
 		// No leader known

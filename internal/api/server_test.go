@@ -98,7 +98,7 @@ func TestGetAgentsWithRegistered(t *testing.T) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.Heartbeat(agentID, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -140,9 +140,8 @@ func TestHeartbeatSuccess(t *testing.T) {
 	if resp["status"] != "ok" {
 		t.Errorf("status = %v, want %q", resp["status"], "ok")
 	}
-	if _, ok := resp["state_time"]; !ok {
-		t.Error("Response missing state_time")
-	}
+	// Heartbeat is puur liveness (16-07): geen state_time/jobs meer in de
+	// response — gewenste staat heeft één auteur (leader → S3).
 }
 
 func TestHeartbeatMissingFields(t *testing.T) {
@@ -307,7 +306,7 @@ func TestRunJobCreatesNew(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	l.RegisterAgent("mock-agent", mockAgent.URL(), "", nil)
-	l.Heartbeat("mock-agent", mockAgent.URL(), nil, time.Time{}, "")
+	l.Heartbeat("mock-agent", "")
 	time.Sleep(10 * time.Millisecond)
 
 	server := NewServer(l, ":9080", "", "test")
@@ -375,7 +374,7 @@ func TestRunJobUpdateExisting(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	l.RegisterAgent("mock-agent", mockAgent.URL(), "", nil)
-	l.Heartbeat("mock-agent", mockAgent.URL(), nil, time.Time{}, "")
+	l.Heartbeat("mock-agent", "")
 	time.Sleep(10 * time.Millisecond)
 
 	server := NewServer(l, ":9080", "", "test")
@@ -439,7 +438,7 @@ func TestUnregisterAgent(t *testing.T) {
 	defer cancel()
 
 	l.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
-	l.Heartbeat("agent-1", "http://10.0.0.1:8080", nil, time.Time{}, "")
+	l.Heartbeat("agent-1", "")
 	time.Sleep(10 * time.Millisecond)
 
 	w := doRequest(server, "DELETE", "/v1/agents/agent-1", nil)
@@ -499,7 +498,7 @@ func TestStatusEndpointWithAgents(t *testing.T) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, endpoint, nil, time.Time{}, "")
+		l.Heartbeat(agentID, "")
 	}
 	time.Sleep(10 * time.Millisecond)
 

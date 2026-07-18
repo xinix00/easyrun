@@ -463,6 +463,21 @@ func (a *Agent) StoreJob(job *types.Job) {
 	})
 }
 
+// UpdateJob writes only if the job still exists (JobStore interface): the
+// existence check and the write happen in one state-loop op, so a delete
+// can never interleave. Snapshot-based rewrites (reconcile's priority
+// renumbering) use this so they cannot resurrect a deleted job.
+func (a *Agent) UpdateJob(job *types.Job) bool {
+	return query(a, func(s *agentState) bool {
+		if _, ok := s.jobs[job.Name]; !ok {
+			return false
+		}
+		s.jobs[job.Name] = job
+		s.stateTime = time.Now()
+		return true
+	})
+}
+
 // DeleteJob removes a job from the store by name (for JobStore interface)
 func (a *Agent) DeleteJob(name string) {
 	a.do(func(s *agentState) {
@@ -578,8 +593,10 @@ func (a *Agent) allocatePortsForJob(job *types.Job) (map[string]int, error) {
 	return allocatePorts(job.Ports)
 }
 
+// getFreePort picks a free node port via a wildcard bind (no 127.0.0.1:
+// HopOS' network stack has no loopback address).
 func getFreePort() (int, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return 0, err
 	}

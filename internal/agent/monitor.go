@@ -162,6 +162,32 @@ func (a *Agent) measureTaskUsage(task *types.Task) {
 		cpuPercent = (dockerCPU / 100.0) / allocCores * 100
 		// Mem: Docker already gives % of limit — use directly
 		memPercent = dockerMem
+	} else if task.Driver == types.DriverHop {
+		// Hop: there is no process to ps — the slot IS the process. The app
+		// reports its own draw (Go MemStats.Sys, ~2s cadence) over its slot
+		// control page, and the node derives CPU from the slot's idle-tick
+		// counter (already % of the task's own cores, like Docker's MemPerc —
+		// no allocCores scaling here). The runner surfaces both via Usage;
+		// liveness comes from the slot heartbeat.
+		u, ok := a.runnerFor(task.Driver).(interface {
+			Usage(*types.Task) (float64, uint64, bool)
+		})
+		if !ok {
+			return
+		}
+		cpuPct, memBytes, reported := u.Usage(task)
+		if cpuPct < 0 && !reported {
+			return // nothing measured yet (task still starting)
+		}
+		if cpuPct >= 0 {
+			cpuPercent = cpuPct
+		}
+		// CPU and memory report independently: a compute-hogging app starves
+		// its own in-app mem reporter (cooperative scheduling on its core),
+		// and that is exactly the app whose CPU must not stay hidden.
+		if reported && allocMem > 0 {
+			memPercent = float64(memBytes) / allocMem * 100
+		}
 	} else {
 		// Exec: ps gives cumulative CPU seconds + RSS bytes
 		cpuSec, memBytes, err := getProcessUsage(task.Pid)

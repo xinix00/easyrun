@@ -2,6 +2,8 @@ package leader
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -47,6 +49,62 @@ func TestDeleteJobByName(t *testing.T) {
 	jobs := store.GetJobs()
 	if len(jobs) != 0 {
 		t.Errorf("Store should be empty, got %d jobs", len(jobs))
+	}
+}
+
+// TestDeleteSweepSpaartHersubmit: een legitieme her-submit tijdens een
+// lopende delete licht de grafsteen (DispatchJob, synchroon) — de
+// naveeg-sweep moet daar dan vanaf blijven. Regressie: de sweep checkte
+// alleen GetJob != nil en veegde daarmee ook de nieuwe job van de
+// gebruiker weg, die al "dispatched" als antwoord had gekregen.
+func TestDeleteSweepSpaartHersubmit(t *testing.T) {
+	store := NewMockJobStore()
+	leader := New("leader", store, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go leader.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	// Trage agent: de delete blokkeert ~300ms op de agent-stop — precies
+	// het venster waarin de her-submit binnenkomt.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			time.Sleep(300 * time.Millisecond)
+		}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer srv.Close()
+
+	leader.RegisterAgent("agent-1", srv.URL, "", nil)
+	leader.Heartbeat("agent-1", "")
+	time.Sleep(10 * time.Millisecond)
+
+	store.StoreJob(&types.Job{Name: "app", Command: "./v1", Count: 1})
+	leader.do(func(s *leaderState) {
+		s.placed["agent-1"] = map[string]int{"app": 1}
+	})
+	time.Sleep(10 * time.Millisecond)
+
+	done := make(chan struct{})
+	go func() {
+		leader.DeleteJobByName("app")
+		close(done)
+	}()
+
+	// Her-submit terwijl de delete nog op de trage agent wacht.
+	time.Sleep(50 * time.Millisecond)
+	if err := leader.DispatchJob(&types.Job{Name: "app", Command: "./v2", Count: 1}); err != nil {
+		t.Fatalf("DispatchJob: %v", err)
+	}
+
+	<-done
+	got := store.GetJob("app")
+	if got == nil {
+		t.Fatal("her-submit is door de delete-sweep weggeveegd")
+	}
+	if got.Command != "./v2" {
+		t.Fatalf("verwachtte de her-submit (./v2), kreeg %q", got.Command)
 	}
 }
 

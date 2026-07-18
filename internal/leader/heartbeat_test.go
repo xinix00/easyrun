@@ -6,7 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
 )
 
 // ============== HEARTBEAT TESTS ==============
@@ -21,7 +20,7 @@ func TestLeaderHeartbeatRegistersAgent(t *testing.T) {
 
 	// Send heartbeat from remote agent
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
+	leader.Heartbeat("remote-agent", "")
 
 	time.Sleep(10 * time.Millisecond)
 
@@ -48,7 +47,7 @@ func TestLeaderHeartbeatUpdatesLastSeen(t *testing.T) {
 
 	// First heartbeat
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
+	leader.Heartbeat("remote-agent", "")
 	time.Sleep(10 * time.Millisecond)
 
 	agents := leader.GetAgents()
@@ -56,63 +55,12 @@ func TestLeaderHeartbeatUpdatesLastSeen(t *testing.T) {
 
 	// Wait and send another heartbeat
 	time.Sleep(50 * time.Millisecond)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
+	leader.Heartbeat("remote-agent", "")
 	time.Sleep(10 * time.Millisecond)
 
 	agents = leader.GetAgents()
 	if !agents[0].LastSeen.After(firstSeen) {
 		t.Error("LastSeen should be updated after second heartbeat")
-	}
-}
-
-func TestLeaderHeartbeatLearnsJobsFromRemoteAgents(t *testing.T) {
-	store := NewMockJobStore()
-	leader := New("local-agent", store, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go leader.stateLoop(ctx)
-
-	// Remote agent has jobs (with IDs for placement tracking)
-	remoteJobs := []*types.Job{
-		{Name: "remote-job-1", Command: "echo 1"},
-		{Name: "remote-job-2", Command: "echo 2"},
-	}
-
-	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, time.Now(), "")
-	time.Sleep(10 * time.Millisecond)
-
-	// Store should have learned about the jobs
-	jobs := store.GetJobs()
-	if len(jobs) != 2 {
-		t.Errorf("Store has %d jobs, want 2", len(jobs))
-	}
-}
-
-func TestLeaderHeartbeatSyncsNewerState(t *testing.T) {
-	store := NewMockJobStore()
-	store.stateTime = time.Now().Add(-1 * time.Hour) // Our state is old
-
-	leader := New("local-agent", store, nil)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go leader.stateLoop(ctx)
-
-	// Remote agent has newer state
-	newerTime := time.Now()
-	remoteJobs := []*types.Job{
-		{Name: "newer-job", Command: "echo newer"},
-	}
-
-	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", remoteJobs, newerTime, "")
-	time.Sleep(10 * time.Millisecond)
-
-	// Store should have synced
-	if !store.stateTime.Equal(newerTime) {
-		t.Errorf("Store stateTime = %v, want %v", store.stateTime, newerTime)
 	}
 }
 
@@ -127,7 +75,7 @@ func TestLeaderGetAgents(t *testing.T) {
 	// Register multiple agents
 	for i := 0; i < 5; i++ {
 		leader.RegisterAgent("agent-"+string(rune('a'+i)), "http://host:8080", "", nil)
-		leader.Heartbeat("agent-"+string(rune('a'+i)), "http://host:8080", nil, time.Time{}, "")
+		leader.Heartbeat("agent-"+string(rune('a'+i)), "")
 	}
 
 	time.Sleep(10 * time.Millisecond)
@@ -148,7 +96,7 @@ func TestLeaderUnregisterAgent(t *testing.T) {
 
 	// Register agent
 	leader.RegisterAgent("remote-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("remote-agent", "http://192.168.1.10:8080", nil, time.Time{}, "")
+	leader.Heartbeat("remote-agent", "")
 	time.Sleep(10 * time.Millisecond)
 
 	if len(leader.GetAgents()) != 1 {
@@ -187,7 +135,7 @@ func TestLeaderConcurrentHeartbeats(t *testing.T) {
 			defer wg.Done()
 			agentID := "agent-" + string(rune('a'+n%10))
 			for j := 0; j < 10; j++ {
-				leader.Heartbeat(agentID, "http://host:8080", nil, time.Time{}, "")
+				leader.Heartbeat(agentID, "")
 			}
 		}(i)
 	}

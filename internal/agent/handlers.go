@@ -220,6 +220,20 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	if job.Driver == "" {
 		job.Driver = types.DriverFor(job.Image)
 	}
+	// A HopOS app runs on whole cores (slots): cpu_shares picks the SMP width and
+	// a fractional request can't map onto a partial slot. Round up to the next
+	// whole core (min one) so HOP's accounting matches exactly what HopOS
+	// allocates — HOP helps HopOS. The capacity check below then counts SLOTS (on
+	// a HopOS node CPUCores == NumSlots, agentboot), so a full node rejects HERE,
+	// before a slot is allocated, instead of accepting and then failing in the
+	// runner when no slot is free.
+	if job.Driver == types.DriverHop {
+		cores := (job.CPUShares + 1023) / 1024
+		if cores < 1 {
+			cores = 1
+		}
+		job.CPUShares = cores * 1024
+	}
 	task := newTask(&job)
 
 	// Check capacity AND add task to state atomically.
@@ -381,6 +395,29 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 		job.Driver = types.DriverFor(job.Image)
 	}
 
+	// Registreer de job vóór de (trage) runner-start; de post-run-guard
+	// hieronder weigert dan precies het geval "job verdween ONDERWEG" (een
+	// delete die deze start kruiste) zonder directe aanroepers (restarts,
+	// tests) te breken die niet via de /run-accept binnenkwamen.
+	// NIET onvoorwaardelijk: een delete die tussen de /run-accept en deze
+	// goroutine viel, heeft de accepted task al op Stopping gezet — het
+	// job-record dan terugzetten liet het als spook op de agent achter (en
+	// op een leader-node kon het via de store zelfs cluster-breed
+	// herrijzen). task.State lezen kan alleen ín de state-op (het muteert
+	// in de state-loop); nieuwe tasks staan op TaskRunning, dus directe
+	// aanroepers passeren gewoon.
+	fresh := query(a, func(s *agentState) bool {
+		if task.State == types.TaskStopping {
+			return false
+		}
+		s.jobs[job.Name] = job
+		return true
+	})
+	if !fresh {
+		log.Printf("job %s deleted before start of task %.8s — skipping", job.Name, task.ID)
+		return nil
+	}
+
 	// Resolve platform-specific artifact (runtime only — don't modify stored job)
 	runJob, err := a.resolveJobForRun(job)
 	if err != nil {
@@ -399,9 +436,16 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 		return fmt.Errorf("failed to start: %w", err)
 	}
 
-	// Store in state. If /stop marked the task as Stopping while we were starting,
-	// don't re-add it (prevents ghost tasks after preemption race).
+	// Store in state. If /stop marked the task as Stopping while we were
+	// starting, don't re-add it (prevents ghost tasks after preemption race).
+	// Same guard for the JOB record: the accept step registered it, but if a
+	// delete swept it away while the runner was starting, re-adding it here
+	// would resurrect a deleted job (the last zombie of the 15-07 hunt) —
+	// treat that exactly like the ghost-task case.
 	alive := query(a, func(s *agentState) bool {
+		if _, ok := s.jobs[job.Name]; !ok {
+			return false // job deleted mid-start → ghost: stop it again below
+		}
 		s.jobs[job.Name] = job
 		if task.State == types.TaskRunning {
 			s.tasks[task.ID] = task
@@ -410,6 +454,7 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 		return false
 	})
 	if !alive {
+		log.Printf("ghost task %.8s (job %s): deleted mid-start — stopping again", task.ID, job.Name) // freeze-forensiek
 		_ = a.runnerFor(job.Driver).Stop(task)
 		return nil
 	}
@@ -444,10 +489,11 @@ func allocatePorts(portConfig map[string]int) (map[string]int, error) {
 	return ports, nil
 }
 
-// isPortAvailable checks if a port is available for binding
+// isPortAvailable checks if a port is available for binding. It probes the
+// wildcard address: the agent is asking "is this node port free", and on
+// HopOS the network stack has no loopback address at all.
 func isPortAvailable(port int) bool {
-	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	listener, err := net.Listen("tcp", addr)
+	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return false
 	}
@@ -592,6 +638,9 @@ func (a *Agent) restartTask(task *types.Task) {
 func (a *Agent) deleteJob(jobName string) int {
 	tasks := query(a, func(s *agentState) []*types.Task {
 		delete(s.jobs, jobName)
+		// De klok mee: zonder deze bump geldt een sync-payload van vóór deze
+		// delete nog als "nieuwer" en her-importeert hij de job (15-07).
+		s.stateTime = time.Now()
 		var tasks []*types.Task
 		for _, task := range s.tasks {
 			if task.JobName == jobName {

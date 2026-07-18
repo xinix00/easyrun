@@ -74,6 +74,7 @@ func runApply(args []string) error {
 	name := fs.String("name", "", "Job name (required)")
 	command := fs.String("command", "", "Command to run")
 	image := fs.String("image", "", "Docker image")
+	driver := fs.String("driver", "", "Driver: exec (default), docker, or hop (HopOS slot; needs --artifact, no command/image)")
 	cpu := fs.Int("cpu", 0, "CPU shares")
 	memory := fs.String("memory", "", "Memory limit (e.g., 512M, 1G)")
 	priorityFlag := fs.Int("priority", -1, "Scheduling priority (0=highest, omit to append at end)")
@@ -83,7 +84,7 @@ func runApply(args []string) error {
 	checkPort := fs.String("check-port", "", "Health check port name")
 	checkFailures := fs.Int("check-failures", 0, "Consecutive failures before unhealthy")
 
-	var envFlags, artifactFlags, affinityFlags []string
+	var envFlags, artifactFlags, affinityFlags, tagFlags []string
 	for i := 0; i < len(args); i++ {
 		switch {
 		case args[i] == "--env" || args[i] == "-env":
@@ -104,6 +105,12 @@ func runApply(args []string) error {
 				args = append(args[:i], args[i+2:]...)
 				i--
 			}
+		case args[i] == "--tag" || args[i] == "-tag":
+			if i+1 < len(args) {
+				tagFlags = append(tagFlags, args[i+1])
+				args = append(args[:i], args[i+2:]...)
+				i--
+			}
 		}
 	}
 
@@ -112,12 +119,18 @@ func runApply(args []string) error {
 	if *name == "" {
 		return fmt.Errorf("--name is required")
 	}
-	if *command == "" && *image == "" {
+	// hop-driver-jobs (HopOS-slots) dragen een artifact i.p.v. command/image;
+	// alle andere drivers eisen zoals vanouds één van beide.
+	if *driver == "hop" {
+		if len(artifactFlags) == 0 {
+			return fmt.Errorf("--driver hop requires --artifact <url>")
+		}
+	} else if *command == "" && *image == "" {
 		return fmt.Errorf("either --command or --image is required")
 	}
 
-	job := buildJob(*name, *command, *image, *cpu, *memory, *priorityFlag,
-		envFlags, artifactFlags, affinityFlags,
+	job := buildJob(*name, *command, *image, *driver, *cpu, *memory, *priorityFlag,
+		envFlags, artifactFlags, affinityFlags, tagFlags,
 		*checkType, *checkPath, *checkPort, *checkFailures, *updatePolicy)
 
 	resp, err := doRequest("POST", "/v1/jobs", job)
@@ -142,8 +155,8 @@ func runApply(args []string) error {
 }
 
 // buildJob constructs a Job from CLI flags
-func buildJob(name, command, image string, cpu int, memory string, priorityFlag int,
-	envFlags, artifactFlags, affinityFlags []string,
+func buildJob(name, command, image, driver string, cpu int, memory string, priorityFlag int,
+	envFlags, artifactFlags, affinityFlags, tagFlags []string,
 	checkType, checkPath, checkPort string, checkFailures int,
 	updatePolicy string) types.Job {
 
@@ -151,8 +164,13 @@ func buildJob(name, command, image string, cpu int, memory string, priorityFlag 
 		Name:         name,
 		Command:      command,
 		Image:        image,
+		Driver:       driver,
 		CPUShares:    cpu,
 		UpdatePolicy: types.UpdatePolicy(updatePolicy),
+	}
+
+	if len(tagFlags) > 0 {
+		job.Tags = parseKV(strings.Join(tagFlags, ","))
 	}
 
 	if priorityFlag >= 0 {
