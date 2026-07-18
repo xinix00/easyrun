@@ -1,90 +1,82 @@
 # Architecture
 
-```
-┌─────────────────────────────────────────────────────┐
-│              hoplock (lease via CAS)                │
-│      hoplockserver or any S3-compatible store       │
-└─────────────────────────────────────────────────────┘
-                          │
-         ┌────────────────┼────────────────┐
-         ▼                ▼                ▼
-    ┌─────────┐      ┌─────────┐      ┌─────────┐
-    │  Node 1 │      │  Node 2 │      │  Node 3 │
-    │ (Agent) │      │ (Agent) │      │ (Agent) │
-    │ :8080   │      │ + LEADER│      │ :8080   │
-    └─────────┘      │ :8080   │      └─────────┘
-         │           │ :9080   │           │
-         │           └─────────┘           │
-         │                │                │
-         └────heartbeat───┼────heartbeat───┘
-                          │
-                    round robin
-                    job dispatch
+```mermaid
+flowchart TB
+    lock[("hoplock lease<br/>hoplockserver · S3 · R2 · MinIO")]
+
+    subgraph node1["Node 1"]
+        agent1["agent :8080"]
+    end
+    subgraph node2["Node 2"]
+        leader["leader :9080"]
+        agent2["agent :8080"]
+    end
+    subgraph node3["Node 3"]
+        agent3["agent :8080"]
+    end
+
+    agent1 -. "CAS race on expiry" .-> lock
+    leader -- "renew lease" --> lock
+    agent3 -. "CAS race on expiry" .-> lock
+
+    agent1 -- "heartbeat 10s" --> leader
+    agent3 -- "heartbeat 10s" --> leader
+    leader -- "round-robin dispatch" --> agent1 & agent2 & agent3
+
+    classDef leaderCls fill:#9085e9,stroke:#6f63c9,color:#111
+    class leader leaderCls
 ```
 
 ## Node with Leader Role (Shared State)
 
-```
-┌─────────────────────────────────────────────┐
-│              Node 2 (leader node)           │
-│                                             │
-│  ┌─────────────────────────────────────┐   │
-│  │              Agent                   │   │
-│  │  ┌─────────────────────────────┐    │   │
-│  │  │     jobs map (JobStore)     │◄───┼───┼─── shared!
-│  │  │  - job-1: nginx             │    │   │
-│  │  │  - job-2: redis             │    │   │
-│  │  │  - job-3: api (op node 1)   │    │   │
-│  │  └─────────────────────────────┘    │   │
-│  │              ▲                       │   │
-│  │              │ direct reference      │   │
-│  │  ┌───────────┴───────────────┐      │   │
-│  │  │         Leader            │      │   │
-│  │  │  - agents map             │      │   │
-│  │  │  - placed map             │      │   │
-│  │  │  - dispatching map        │      │   │
-│  │  │  - settled flag           │      │   │
-│  │  │  - round robin state      │      │   │
-│  │  └───────────────────────────┘      │   │
-│  └─────────────────────────────────────┘   │
-│                                             │
-│    :8080 (agent API)                       │
-│    :9080 (leader API)                      │
-└─────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph node2["Node 2 — leader node (:8080 agent · :9080 leader)"]
+        subgraph agentBox["Agent"]
+            jobs[("jobs map — JobStore<br/>job-1: nginx · job-2: redis · job-3: api")]
+        end
+        subgraph leaderBox["Leader"]
+            lstate["agents map · placed map<br/>dispatching map · settled flag<br/>round-robin state"]
+        end
+        lstate -- "direct reference — shared!" --> jobs
+    end
+
+    classDef leaderCls fill:#9085e9,stroke:#6f63c9,color:#111
+    class leaderBox leaderCls
 ```
 
 ## Leader Failover (no bootstrap needed)
 
-```
-BEFORE:                         AFTER:
-Node 2 = Leader                 Node 1 = New Leader
+```mermaid
+flowchart LR
+    subgraph before["BEFORE — Node 2 is leader"]
+        b["Node 1 · agent<br/>jobs: job-3"]
+    end
+    subgraph after["AFTER — Node 1 is the new leader"]
+        a["Node 1 · agent + leader<br/>jobs: job-3 — SAME data"]
+    end
+    b -- "wins the lease<br/>(no bootstrap, no sync)" --> a
 
-Node 1 (agent)                  Node 1 (agent + leader)
-┌──────────────┐                ┌──────────────────────┐
-│ jobs:        │                │ jobs: ◄──────────────┼─── SAME DATA!
-│  - job-3     │   ────────►    │  - job-3             │
-└──────────────┘                │                      │
-                                │ Leader:              │
-                                │  - uses jobs         │
-                                │    directly          │
-                                └──────────────────────┘
-
-No sync needed! The agent BECOMES leader, not a separate entity.
+    classDef leaderCls fill:#9085e9,stroke:#6f63c9,color:#111
+    class a leaderCls
 ```
+
+No sync needed — the agent **becomes** leader, not a separate entity: the
+leader reads the agent's own jobs map directly.
 
 ## Committed State (single author: the leader)
 
-```
-Leader has ALL jobs (single source of truth)
+```mermaid
+sequenceDiagram
+    participant L as Leader (all jobs — single source of truth)
+    participant S3 as S3 object state/cluster
+    participant NL as New leader
 
-Leader ──debounced snapshot──► S3 object "state/<cluster>"
-        (same bucket, credentials and signer as the election lease)
-
-New leader at boot/takeover:
-        ◄── Load snapshot ── S3
-        Store now mirrors the snapshot EXACTLY (deletion is absence:
-        jobs missing from the snapshot are dropped, even if the local
-        state.json still knew them)
+    L->>S3: PUT snapshot of all jobs (debounced ~1s)
+    Note over L,S3: same bucket, credentials and signer as the election lease
+    NL->>S3: GET snapshot at boot / takeover
+    S3-->>NL: desired state
+    Note over NL: store mirrors the snapshot EXACTLY.<br/>Deletion is absence: jobs missing from the snapshot are dropped,<br/>even if the local state.json still knew them.
 ```
 
 - The leader is the **only author** of desired state. Agents are executors;
@@ -99,24 +91,24 @@ New leader at boot/takeover:
 
 ## Registration Protocol
 
-```
-Agent startup or leader change:
+```mermaid
+sequenceDiagram
+    autonumber
+    participant A as Agent
+    participant L as Leader
 
-Agent ──POST /v1/agents──► Leader
-        {id, endpoint, version, placed: {jobName: count}}
+    Note over A,L: agent startup or leader change
+    A->>L: POST /v1/agents — id, endpoint, version, placed {jobName: count}
+    L-->>A: registered + jobs + state_time
 
-        ◄──────────────────────
-        {status: "registered", jobs: [...], state_time: T}
-
-Subsequent heartbeats (pure liveness):
-
-Agent ──POST /v1/heartbeat──► Leader
-        {id, endpoint, version}
-
-        ◄────────────────────────
-        {status: "ok"}
-
-If leader returns 404: agent is unknown → re-register next tick
+    loop every 10s — pure liveness
+        A->>L: POST /v1/heartbeat — id, endpoint, version
+        alt known agent
+            L-->>A: 200 ok
+        else unknown agent (e.g. new leader)
+            L-->>A: 404 — re-register next tick
+        end
+    end
 ```
 
 **Registration vs Heartbeat:**
@@ -125,21 +117,19 @@ If leader returns 404: agent is unknown → re-register next tick
 
 ## Settle Period
 
+```mermaid
+timeline
+    title Settle period after election
+    T+0s  : Leader elected, settled = false
+          : Agents register with placed counts
+          : Jobs stored but NOT dispatched
+    T+30s : Settle delay expires, settled = true
+          : reconcileJobs() compares desired vs actual
+          : Only truly missing instances dispatched
 ```
-Leader elected at T=0
 
-T=0s:  Leader starts, settled=false
-       Agents register with placed counts
-       Jobs stored but NOT dispatched
-
-T=30s: Settle delay expires, settled=true
-       reconcileJobs() runs
-       Compares desired vs actual (from placed counts)
-       Only dispatches truly missing instances
-
-Without settle:
-  Leader doesn't know what agents are running → dispatches everything → duplicates!
-```
+Without settle the leader doesn't know what agents are already running →
+it would dispatch everything → duplicates.
 
 ## Components
 

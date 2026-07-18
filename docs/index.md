@@ -56,6 +56,27 @@ manage it all from the hosted dashboard at
 
 Hop is part of a small suite (each with its own repo/README):
 
+```mermaid
+flowchart TB
+    gui["hop-gui<br/>gui.gethop.org"] -- "HMAC-signed HTTP<br/>from the browser" --> agent
+
+    subgraph node["every node"]
+        agent["hop agent :8080<br/>(+ leader :9080 on one node)"]
+        dns["hopdns :5353"]
+        lb["hoplb :80"]
+        prom["hopprom :9090"]
+        dns -- "SSE" --> agent
+        lb -- "poll 5s" --> agent
+        prom -- "poll 5s" --> agent
+    end
+
+    agent <-- "CAS lease + committed state" --> lock[("hoplockserver :8090<br/>or any S3 bucket")]
+    agent -- "driver: exec · docker · hop" --> work["processes · containers · HopOS slots"]
+
+    classDef agentCls fill:#9085e9,stroke:#6f63c9,color:#111
+    class agent agentCls
+```
+
 | Project | Role |
 |---------|------|
 | [**hopdns**](https://github.com/xinix00/hopdns) | DNS service discovery (`myapp.hop.local`), federation across clusters |

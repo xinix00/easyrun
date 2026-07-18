@@ -110,14 +110,18 @@ project) — serve it from anywhere, or open the file locally.
 
 ## Architecture
 
-```
-┌─────────┐      ┌─────────┐      ┌─────────┐
-│ Agent A │      │ Agent B │      │ Agent C │
-│ (Leader)│◄────►│         │◄────►│         │
-└─────────┘      └─────────┘      └─────────┘
-     │                │                │
-     └────────────────┴────────────────┘
-              Heartbeats (10s)
+```mermaid
+flowchart LR
+    A["Agent A — leader"]
+    B["Agent B"]
+    C["Agent C"]
+
+    B -- "heartbeat 10s" --> A
+    C -- "heartbeat 10s" --> A
+    A -- "dispatch" --> B & C
+
+    classDef leaderCls fill:#9085e9,stroke:#6f63c9,color:#111
+    class A leaderCls
 ```
 
 - **Leader**: Dispatches jobs, monitors agent health, reconciles on changes
