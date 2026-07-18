@@ -530,8 +530,8 @@ func (a *Agent) restartTask(task *types.Task) {
 		return 0
 	})
 
-	// -1 means unlimited restarts
-	if maxRestarts > 0 && restartCount >= maxRestarts {
+	// -1 = unlimited restarts; 0 = no restarts at all (first crash is final)
+	if maxRestarts >= 0 && restartCount >= maxRestarts {
 		log.Printf("Task %s exceeded max restarts (%d within %s), giving up", task.ID, maxRestarts, restartWindow)
 		a.do(func(s *agentState) {
 			if t := s.tasks[task.ID]; t != nil {

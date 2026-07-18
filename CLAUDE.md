@@ -50,5 +50,5 @@ go build -o bin/run ./cmd/cli
 - **Committed state**: leader snapshots desired state to S3 object `state/<cluster>` (next to the election lease, debounced ~1s); a new leader loads it at takeover — the snapshot is the ONLY truth (deletion is absence). See internal/leader/persist.go
 - **State persistence (local)**: ./data/state-{cluster}.json (debounced save, 5s)
 - **Node ID**: persisted in data/node-id, survives restarts
-- **MaxRestarts**: *int — nil/omitted = default 5, -1 = unlimited
+- **MaxRestarts**: *int — nil/omitted = default 5, 0 = no restarts, -1 = unlimited
 - **Version**: injected at build time via `-ldflags "-X main.version=..."` (default: "dev")

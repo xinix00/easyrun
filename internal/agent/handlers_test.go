@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1088,5 +1089,97 @@ func TestHandleRun_EarlyFailure_ThenSuccess(t *testing.T) {
 	}
 	if running != 1 {
 		t.Errorf("Expected 1 running task, got %d", running)
+	}
+}
+
+// ============== MAX RESTARTS SEMANTICS ==============
+
+// TestMaxRestartsZeroMeansNoRestarts pins the MaxRestarts=0 contract: the
+// first crash is final. restartTask must give up immediately (mark the task
+// failed) without ever invoking the runner again.
+func TestMaxRestartsZeroMeansNoRestarts(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+
+	var runCalls atomic.Int32
+	mockRunner.onRun = func(job *types.Job) error {
+		runCalls.Add(1)
+		return ErrSimulated
+	}
+
+	agent := New(cfg, "test-agent", mockRunner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{Name: "no-restarts", Command: "./app", MaxRestarts: intPtr(0)}
+	task := newTask(job)
+	agent.do(func(s *agentState) {
+		s.jobs[job.Name] = job
+		s.tasks[task.ID] = task
+	})
+
+	// Simulate the crash path: monitor detects death → restartTask.
+	agent.restartTask(task)
+	time.Sleep(50 * time.Millisecond)
+
+	if n := runCalls.Load(); n != 0 {
+		t.Errorf("Runner was invoked %d time(s), want 0 (MaxRestarts=0 means no restarts)", n)
+	}
+	state := query(agent, func(s *agentState) types.TaskState {
+		if tk := s.tasks[task.ID]; tk != nil {
+			return tk.State
+		}
+		return ""
+	})
+	if state != types.TaskFailed {
+		t.Errorf("Task state = %q, want %q", state, types.TaskFailed)
+	}
+}
+
+// TestMaxRestartsOneAllowsExactlyOneRestart guards the boundary of the
+// >= comparison: MaxRestarts=1 must allow exactly one restart attempt,
+// then give up.
+func TestMaxRestartsOneAllowsExactlyOneRestart(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+
+	var runCalls atomic.Int32
+	mockRunner.onRun = func(job *types.Job) error {
+		runCalls.Add(1)
+		return ErrSimulated // every attempt fails → recursion must stop at the limit
+	}
+
+	agent := New(cfg, "test-agent", mockRunner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{Name: "one-restart", Command: "./app", MaxRestarts: intPtr(1)}
+	task := newTask(job)
+	agent.do(func(s *agentState) {
+		s.jobs[job.Name] = job
+		s.tasks[task.ID] = task
+	})
+
+	agent.restartTask(task)
+	time.Sleep(100 * time.Millisecond)
+
+	if n := runCalls.Load(); n != 1 {
+		t.Errorf("Runner was invoked %d time(s), want exactly 1 (MaxRestarts=1)", n)
+	}
+	failed := query(agent, func(s *agentState) int {
+		n := 0
+		for _, tk := range s.tasks {
+			if tk.State == types.TaskFailed {
+				n++
+			}
+		}
+		return n
+	})
+	if failed != 1 {
+		t.Errorf("Expected 1 failed task in state, got %d", failed)
 	}
 }

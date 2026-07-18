@@ -196,7 +196,7 @@ project) — serve it from anywhere, or open the file locally.
   - **timeout**: Request/connect timeout (http/tcp, default 5s)
   - **initial_timeout**: Grace period after start to become healthy (default 30s)
   - **failure_threshold**: Consecutive failures before restart (default 3)
-- **max_restarts**: Max restart attempts (omit for the default of 5, -1 = unlimited)
+- **max_restarts**: Max restart attempts — omit for the default of 5, `0` = no restarts, `-1` = unlimited
 - **update_policy**: rolling (default), recreate, or blue-green
 
 ## Named Ports
@@ -268,7 +268,7 @@ SSE format, live stream only, no storage. Pipe to external tools for persistence
 
 ### Task Failures
 - Agent detects crash (monitor loop, 5s interval)
-- Auto-restart locally (up to max_restarts, default 5, -1 = unlimited)
+- Auto-restart locally (up to max_restarts: default 5, 0 = no restarts, -1 = unlimited)
 - Health check failures -> kill + restart (after failure_threshold consecutive failures, default 3)
 
 ### Agent Failures

@@ -247,7 +247,7 @@ curl -X POST http://localhost:9080/v1/jobs \
   - `timeout` (duration): Request/connect timeout (http/tcp, default 5s)
   - `initial_timeout` (duration): Grace period for slow-starting services (default 30s)
   - `failure_threshold` (int): Consecutive failures before restart (default 3)
-- `max_restarts` (int): Max restart attempts (omit for the default of 5, -1 = unlimited)
+- `max_restarts` (int): Max restart attempts — omit for the default of 5, `0` = no restarts (first crash is final), `-1` = unlimited
 - `restart_window` (duration): Reset the restart count when the last crash is longer ago than this (default 5m)
 - `update_policy` (string): `rolling` (default), `recreate`, or `blue-green`
 - `priority` (int): Scheduling priority — 0 = highest/top, N = Nth position (omit to append at the end)

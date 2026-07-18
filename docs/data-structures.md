@@ -21,7 +21,7 @@ type Job struct {
     Tags          map[string]string // Labels for service discovery/grouping
     Volumes       map[string]string // host_path → task_path (bind-mounted on Linux, symlinked on macOS)
     HealthCheck   *HealthCheck      // Health check config (optional, http/tcp/file)
-    MaxRestarts   *int              // nil = default (5), -1 = unlimited
+    MaxRestarts   *int              // nil = default (5), 0 = no restarts, -1 = unlimited
     RestartWindow time.Duration     // 0 = default (5m) — reset restart count if last crash was longer ago
     UpdatePolicy  UpdatePolicy      // How to update: rolling | recreate | blue-green
     Priority      *int              // nil = auto (append at end), 0 = top, N = Nth position
