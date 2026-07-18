@@ -58,11 +58,11 @@ Hop is part of a small suite (each with its own repo/README):
 
 | Project | Role |
 |---------|------|
-| **hopdns** | DNS service discovery (`myapp.hop.local`), federation across clusters |
-| **hoplb** | HTTP load balancer driven by `hoplb-urlprefix` job tags |
-| **hopprom** | Prometheus exporter for cluster health |
-| **hoplockserver** | Minimal CAS lease store (the default lock backend) |
-| **hop-gui** | The web dashboard (also hosted at gui.gethop.org) |
-| **HopOS** | The Go-only OS; hop schedules onto it via the `hop` driver |
+| [**hopdns**](https://github.com/xinix00/hopdns) | DNS service discovery (`myapp.hop.local`), federation across clusters |
+| [**hoplb**](https://github.com/xinix00/hoplb) | HTTP load balancer driven by `hoplb-urlprefix` job tags |
+| [**hopprom**](https://github.com/xinix00/hopprom) | Prometheus exporter for cluster health |
+| **hoplockserver** | Minimal CAS lease store (the default lock backend) — not yet published |
+| [**hop-gui**](https://github.com/xinix00/hop-gui) | The web dashboard (also hosted at [gui.gethop.org](https://gui.gethop.org)) |
+| [**HopOS**](https://github.com/xinix00/HopOS) | The Go-only OS; hop schedules onto it via the `hop` driver |
 
 Security model and threat analysis: see `SECURITY.md` in the monorepo root.
