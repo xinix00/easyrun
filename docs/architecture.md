@@ -2,8 +2,8 @@
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                     HopRaft                        │
-│              (leader election via HTTP)             │
+│              hoplock (lease via CAS)                │
+│      hoplockserver or any S3-compatible store       │
 └─────────────────────────────────────────────────────┘
                           │
          ┌────────────────┼────────────────┐
@@ -143,18 +143,18 @@ Without settle:
 
 ## Components
 
-### HopRaft
-- Separate service for leader election
-- Runs on 3+ nodes for HA
-- Uses UDP for internal election (lowest IP wins)
-- HTTP API for lease management
+### hoplock (leader election)
+- Lease-based election: CAS (compare-and-swap) over a blob store — no quorum, no log replication
+- Backends: `hoplockserver` (mini HTTP server, default), any S3-compatible store (AWS/R2/MinIO/B2), or in-memory (`--standalone`)
+- Each agent reads the lease blob periodically; on expiry, one agent wins the conditional write and becomes leader
+- The blob store IS the truth — HA comes from the store, not from hop
 
 ### Leader
-- Node that has lease via HopRaft
+- Node that holds the hoplock lease
 - Receives heartbeats from agents
 - Dispatches regular jobs via deterministic round-robin (agents sorted by ID)
 - Dispatches daemon jobs (count=-1) via reconcile-based dispatch
-- Tracks which job instances run on which agents (placed map: agentID → jobID → count)
+- Tracks which job instances run on which agents (placed map: agentID → jobName → count)
 - On agent failure: cleans stale placement, reconciles all jobs
 - Runs on port+1000 (default 9080)
 
@@ -195,9 +195,10 @@ Without settle:
 - Resolves platform-specific artifacts: picks first artifact whose `match` constraints match node attributes
 
 ### Runner Selection
-- Agent has both `ExecRunner` and `DockerRunner`
-- `job.Driver` / `task.Driver` determines which runner is used (`"exec"` or `"docker"`)
+- Agent has `ExecRunner` and `DockerRunner`; HopOS nodes additionally register a `HopRunner`
+- `job.Driver` / `task.Driver` determines which runner is used (`"exec"`, `"docker"`, or `"hop"`)
 - Driver is derived from `image` field if not set explicitly (`image != ""` → `"docker"`)
+- `"hop"` runs a native Go app image on a dedicated HopOS core slot (isolation and memory limits enforced in hardware) — registered via `agent.WithHopRunner(...)`, falls back to exec elsewhere
 - All other systems (scheduling, health checks, service discovery) are runner-agnostic
 
 ### ExecRunner
@@ -323,8 +324,8 @@ Three check types: HTTP, TCP, and file-based.
 
 ### Leader fails
 1. Agents get heartbeat timeout
-2. After 3 failures: agents try to become leader via HopRaft
-3. First to get lease becomes new leader with settle period (30s)
+2. After 3 failures: agents race for the expired hoplock lease (CAS)
+3. First to win the conditional write becomes new leader with settle period (30s)
 4. Agents re-register with placed counts (leader returns 404 → triggers re-registration)
 5. After settle: reconciliation dispatches only truly missing instances
 
@@ -336,6 +337,6 @@ Three check types: HTTP, TCP, and file-based.
 
 ### Agent isolated (network partition)
 1. Agent can't reach leader
-2. Agent can't become leader (no HopRaft quorum)
+2. Agent can't become leader (can't reach the lock backend, or the lease is held)
 3. After 6 ticks (60s): agent stops all tasks
 4. Prevents duplicate running tasks

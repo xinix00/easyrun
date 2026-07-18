@@ -4,8 +4,9 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 
 ## Documentation
 
-See `/docs` for detailed documentation:
+See `/docs` for detailed documentation (start at `index.md`):
 
+- `index.md` - Entry point: overview, quick start, map of all guides
 - `architecture.md` - Architecture overview (state loop, registration, settle period)
 - `data-structures.md` - Core data types and states
 - `api.md` - HTTP API endpoints
@@ -26,7 +27,7 @@ go build -o bin/run ./cmd/cli
 ./bin/agent --standalone --cluster=dev
 
 # Deploy job
-./bin/run deploy --name test --command "echo hello"
+./bin/run apply --name test --command "echo hello"
 ```
 
 ## Design Principles
@@ -49,5 +50,5 @@ go build -o bin/run ./cmd/cli
 - **Committed state**: leader snapshots desired state to S3 object `state/<cluster>` (next to the election lease, debounced ~1s); a new leader loads it at takeover — the snapshot is the ONLY truth (deletion is absence). See internal/leader/persist.go
 - **State persistence (local)**: ./data/state-{cluster}.json (debounced save, 5s)
 - **Node ID**: persisted in data/node-id, survives restarts
-- **MaxRestarts**: 0 = default 5, -1 = unlimited
+- **MaxRestarts**: *int — nil/omitted = default 5, -1 = unlimited
 - **Version**: injected at build time via `-ldflags "-X main.version=..."` (default: "dev")

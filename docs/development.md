@@ -13,23 +13,23 @@ GOOS=linux GOARCH=amd64 go build -o bin/agent-linux ./cmd/agent
 
 ## Test Lokaal
 
-1. Start HopRaft (in hopraft/ folder):
-```bash
-cd hopraft
-go run ./cmd/election -http-port 7080 -raft-port 7946
-```
-
-2. Start agent:
+1. Start agent (standalone = in-memory lock backend, geen extra services):
 ```bash
 ./bin/agent --cluster=dev --standalone
 # of met config:
 ./bin/agent --config ./dev-config.yaml
 ```
 
-3. Test CLI:
+Multi-node lokaal? Start hoplockserver en geef elke agent `--lock`:
+```bash
+../bin/hoplockserver -listen :8090 -data ./data/lock   # vanuit de monorepo
+./bin/agent --cluster=dev --lock http://127.0.0.1:8090 --config dev-node1.yaml
+```
+
+2. Test CLI:
 ```bash
 ./bin/run --leader localhost:9080 status
-./bin/run --leader localhost:9080 deploy --name test --command "sleep 60"
+./bin/run --leader localhost:9080 apply --name test --command "sleep 60"
 ./bin/run --leader localhost:9080 delete test
 ./bin/run --leader localhost:9080 agents
 ./bin/run --leader localhost:9080 logs <task-id>
@@ -69,16 +69,20 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
     /api/
         server.go          # Leader HTTP API
     /discovery/
-        discovery.go       # HopRaft client
+        discovery.go       # hoplock backends (hoplockserver / S3 / mem) + leader discovery
     /types/
         types.go           # Core data types (Job, Task, Agent, etc.)
 /pkg
     /config/
         config.go          # Configuratie laden
     /httputil/
+        auth.go            # HMAC request auth (X-Hop-Auth): RequireHMAC + SignRequest
         response.go        # JSON response helpers
 /docs                      # Documentatie
 ```
+
+Daarnaast: `internal/leader/persist.go` (committed cluster state naar S3) en
+`internal/runner/hopos.go` (HopRunner voor HopOS-nodes, driver=`hop`).
 
 ## Poorten
 
@@ -86,8 +90,7 @@ go run ./cmd/election -http-port 7080 -raft-port 7946
 |---------|-------|--------------|
 | Agent | 8080 | Agent HTTP API |
 | Leader | 9080 | Leader HTTP API (port+1000) |
-| HopRaft HTTP | 7080 | HopRaft HTTP API |
-| HopRaft UDP | 7946 | HopRaft verkiezing |
+| hoplockserver | 8090 | CAS lease store (default lock backend) |
 
 ## Tests
 
@@ -114,7 +117,8 @@ go test -bench=. -benchmem ./internal/...
 ## Dependencies
 
 - `github.com/google/uuid` — UUID generation
-- `github.com/urfave/cli/v2` — CLI framework (only in cmd/cli)
+- `github.com/xinix00/hoplock` — lease-based leader election (CAS over blob store)
+- `github.com/xinix00/hoplockserver` — client for the hoplockserver backend
 - `gopkg.in/yaml.v3` — YAML config parsing (only in pkg/config)
 
-All core logic uses Go stdlib only.
+All core logic uses Go stdlib only (the CLI uses stdlib `flag`).

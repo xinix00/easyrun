@@ -6,23 +6,25 @@ What the user wants to run.
 
 ```go
 type Job struct {
-    ID           string            // Unique identifier (auto-generated)
-    Name         string            // Human-readable name (UNIQUE KEY for upsert)
-    Affinity     map[string]string // Node attribute constraints (optional, AND logic)
-    Driver       string            // "exec" (default) or "docker"
-    Image        string            // Docker image (only for driver=docker)
-    Artifacts    []Artifact        // Platform-specific binaries (optional, agent picks first match)
-    Command      string            // Command to execute (required for process, optional for Docker)
-    Count        int               // Number of instances (see below)
-    Ports        map[string]int    // Process: port name → host port (0=dynamic). Docker: port name → container port
-    CPUShares    int               // Relative CPU priority (0 = no limiting)
-    MemoryLimit  uint64            // Bytes (0 = no limiting)
-    Env          map[string]string // Extra environment variables
-    Tags         map[string]string // Labels for service discovery/grouping
-    Volumes      map[string]string // host_path → task_path (symlinked / Docker -v)
-    HealthCheck  *HealthCheck      // Health check config (optional, http/tcp/file)
-    MaxRestarts  int               // Max restart attempts (0=default 5, -1=unlimited)
-    UpdatePolicy UpdatePolicy      // How to update: rolling | recreate | blue-green
+    Name          string            // UNIQUE KEY — no separate UUID
+    Affinity      map[string]string // Node attribute constraints (optional, AND logic)
+    Driver        string            // "exec" (default), "docker", or "hop" (HopOS slot)
+    Image         string            // Docker image (only for driver=docker)
+    Artifacts     []Artifact        // Platform-specific binaries (optional, agent picks first match)
+    User          string            // Run as this user (default: inherit from agent)
+    Command       string            // Command to execute (required for process, optional for Docker)
+    Count         int               // Number of instances (see below)
+    Ports         map[string]int    // Process: port name → host port (0=dynamic). Docker: port name → container port
+    CPUShares     int               // Relative CPU priority (0 = no limiting)
+    MemoryLimit   uint64            // Bytes (0 = no limiting)
+    Env           map[string]string // Extra environment variables
+    Tags          map[string]string // Labels for service discovery/grouping
+    Volumes       map[string]string // host_path → task_path (bind-mounted on Linux, symlinked on macOS)
+    HealthCheck   *HealthCheck      // Health check config (optional, http/tcp/file)
+    MaxRestarts   *int              // nil = default (5), -1 = unlimited
+    RestartWindow time.Duration     // 0 = default (5m) — reset restart count if last crash was longer ago
+    UpdatePolicy  UpdatePolicy      // How to update: rolling | recreate | blue-green
+    Priority      *int              // nil = auto (append at end), 0 = top, N = Nth position
 }
 ```
 
@@ -124,7 +126,7 @@ Ports can be dynamic (assigned at runtime) or fixed:
 
 ### Volumes
 
-Mount host directories into the task's working directory via symlinks:
+Mount host directories into the task's working directory:
 
 ```json
 {
@@ -137,17 +139,18 @@ Mount host directories into the task's working directory via symlinks:
 
 - Host paths must exist (validation at task start)
 - Target paths are relative to task directory
-- Mounted as symlinks, unmounted on task cleanup
+- Bind-mounted on Linux, symlinked on macOS; unmounted on task cleanup (Docker: `-v hostPath:containerPath`)
 
 ### Artifact
 
 ```go
 type Artifact struct {
-    URL     string            // Download URL (http://, https://, s3://)
-    Match   map[string]string // Node attribute constraints (agent picks first match, empty = catch-all)
-    Headers map[string]string // HTTP headers (Authorization, X-API-Key, etc.)
-    Auth    map[string]string // Other credentials (S3, helpers)
-    Extract string            // "tar.gz", "tar.bz2", "zip", "" (empty = raw file)
+    URL      string            // Download URL (http://, https://, s3://)
+    Match    map[string]string // Node attribute constraints (agent picks first match, empty = catch-all)
+    Headers  map[string]string // HTTP headers (Authorization, X-API-Key, etc.)
+    Auth     map[string]string // Other credentials (S3, helpers)
+    Extract  string            // "tar.gz", "tar.bz2", "zip", "" (empty = raw file)
+    Filename string            // Override filename for raw downloads (default: basename from URL)
 }
 ```
 
@@ -236,22 +239,26 @@ A running instance of a Job.
 
 ```go
 type Task struct {
-    ID           string         // Unique identifier
-    JobID        string         // Job ID (which version of the job)
+    ID           string         // Unique identifier (regenerated on every restart)
     JobName      string         // Job name (which job this task belongs to)
-    Driver       string         // "exec" or "docker"
+    Driver       string         // "exec", "docker", or "hop"
     Image        string         // Docker image (only for driver=docker)
     Ports        map[string]int // Named port -> host port number
-    Pid          int            // Process ID (0 for Docker tasks)
-    State        TaskState      // running, stopped, failed
+    Pid          int            // Process ID (Docker: 0; HopOS: primary slot index)
+    State        TaskState      // running, stopping, stopped, failed
     StartedAt    time.Time
     RestartCount int            // Number of times restarted
+    LastFailedAt time.Time      // Last crash time (drives the restart window)
+    CPUShares    int            // Copied from the job (capacity accounting)
+    MemoryLimit  uint64         // Copied from the job (capacity accounting)
+    CPUPercent   float64        // Live usage, measured by the agent monitor (5s)
+    MemPercent   float64        // Live usage, measured by the agent monitor (5s)
 }
 ```
 
-**Note:** Task has both `JobID` and `JobName`. Use `task.JobName` to look up the job by name, `task.JobID` to reference the specific version.
+**Note:** Task has **only `JobName`** — there is no JobID (jobs have no separate ID). Always use `task.JobName` for job lookups.
 
-**Note:** `task.Driver` determines which runner manages this task. `"exec"` = ExecRunner, `"docker"` = DockerRunner.
+**Note:** `task.Driver` determines which runner manages this task: `"exec"` = ExecRunner, `"docker"` = DockerRunner, `"hop"` = HopRunner (HopOS).
 
 **Ports:** Task gets ENV vars `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all allocated ports.
 
@@ -262,8 +269,9 @@ type Task struct {
 | State | Meaning |
 |-------|---------|
 | `running` | Process is running |
+| `stopping` | Being stopped (shutdown, restart swap, preemption) |
 | `stopped` | Intentionally stopped |
-| `failed` | Crashed, OOM killed, etc |
+| `failed` | Crashed, OOM killed, exceeded max restarts, etc |
 
 ## Agent
 
@@ -283,8 +291,8 @@ type Agent struct {
 ```go
 type leaderState struct {
     agents      map[string]*Agent           // Registered agents
-    placed      map[string]map[string]int   // agentID → jobID → count
-    dispatching map[string]bool             // jobID → true if being dispatched
+    placed      map[string]map[string]int   // agentID → jobName → count
+    dispatching map[string]bool             // jobName → true if being dispatched
     settled     bool                        // false during settle period
     roundRobin  int                         // Counter for round-robin
 }
@@ -296,14 +304,14 @@ All state access goes through a single goroutine via the `ops` channel, using `d
 
 The leader tracks:
 - Which agents are online (via heartbeats)
-- Which job instances run on which agents (`placed`: agentID → jobID → count)
+- Which job instances run on which agents (`placed`: agentID → jobName → count)
 - Which jobs are being actively dispatched (`dispatching`: prevents double dispatch)
 - Whether the settle period has elapsed (`settled`: defers reconciliation until agents register)
 - Round-robin counter for deterministic agent selection (agents sorted by ID)
 
 **Settle period:** After becoming leader, the leader waits for `agentTimeout` (30s) before reconciling. This allows agents to register with their `placed` counts, preventing duplicate dispatches.
 
-**Placement tracking:** `placed[agentID][jobID] = count` tracks how many instances of each job are on each agent. Updated on dispatch, cleared on agent death/unregister.
+**Placement tracking:** `placed[agentID][jobName] = count` tracks how many instances of each job are on each agent. Updated on dispatch, cleared on agent death/unregister.
 
 **Reconciliation:** After agent changes, `reconcileJob` compares desired vs actual state and dispatches the difference. Single code path for daemon (count=-1) and regular jobs. Skips jobs that are actively being dispatched.
 

@@ -289,7 +289,7 @@ Every 10s a goroutine scans `s.agents`. For each agent with
 
 **Failure mode worth knowing**: an agent could be alive but unable to
 heartbeat (firewall, leader down between failovers). 30s threshold +
-parallel HopRaft re-election handle most of this.
+the parallel hoplock lease race handle most of this.
 
 ---
 

@@ -18,10 +18,21 @@ node:
 
 cluster:
   name: "my-cluster"
-  raft_endpoints:           # HopRaft endpoints
-    - "http://10.0.0.1:7080"
-    - "http://10.0.0.2:7080"
-    - "http://10.0.0.3:7080"
+  lock:                     # Leader election backend (hoplock)
+    type: "hoplockserver"   # "hoplockserver" (default), "s3", of "mem"
+    url: "http://10.0.0.1:8090"   # hoplockserver base URL (type=hoplockserver)
+    api_key: ""             # hoplockserver API key (aparte key, optioneel)
+    # key: ""               # lease object key (default: clusters/<name>/lease.json)
+    # s3:                   # type=s3: AWS / Cloudflare R2 / MinIO / B2
+    #   endpoint: "https://s3.eu-west-1.amazonaws.com"
+    #   bucket: "hop-cluster"
+    #   region: "eu-west-1"
+    #   access_key_id: "..."
+    #   secret_access_key: "..."
+    #   use_path_style: false
+
+api_key: ""                 # Gedeelde secret voor HMAC request-auth (X-Hop-Auth)
+                            # over alle hop endpoints. Leeg = auth uit (dev).
 
 capacity:
   cpu_shares: 14000         # Relatieve CPU capaciteit
@@ -48,10 +59,13 @@ timeouts:
 | Flag | Description | Default |
 |------|-------------|---------|
 | `--config` | Path to config file | (none, uses defaults) |
+| `--node` | Node name/ID (overrides config) | (from config) |
 | `--cluster` | Cluster name | (from config) |
-| `--raft` | HopRaft endpoint | (from config) |
-| `--standalone` | Run without hopraft (single-node mode) | false |
+| `--lock` | hoplockserver URL (overrides config) | (from config) |
+| `--standalone` | Run without a lock backend (single-node, in-memory) | false |
 | `--api-key` | Shared secret for HMAC request auth (X-Hop-Auth); overrides config | (from config) |
+
+No lock backend configured → hop runs standalone automatically.
 
 ## Development Config
 
@@ -64,8 +78,8 @@ node:
 
 cluster:
   name: "dev"
-  raft_endpoints:
-    - "http://127.0.0.1:7080"  # Lokale hopraft instance
+  # Geen lock config → standalone (in-memory).
+  # Multi-node lokaal: lock: { url: "http://127.0.0.1:8090" } + hoplockserver starten.
 
 capacity:
   cpu_shares: 14000

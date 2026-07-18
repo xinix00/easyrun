@@ -1,11 +1,30 @@
 # CLI
 
-## Configuratie
+The CLI binary is `run`. It talks to the leader API and signs every request
+with HMAC (`X-Hop-Auth`) — see [api.md](api.md#authentication-x-hop-auth).
+
+## Configuration
 
 ```bash
-export HOP_LEADER=localhost:9080
-# of
-./bin/run --leader localhost:9080 ...
+export HOP_LEADER=localhost:9080     # or --leader localhost:9080
+export HOP_API_KEY=your-secret-key   # or --api-key your-secret-key
+```
+
+| Flag | Env var | Description |
+|------|---------|-------------|
+| `--leader` | `HOP_LEADER` | Leader address (default `localhost:9080`) |
+| `--api-key` | `HOP_API_KEY` | Shared secret for HMAC request signing (empty = auth disabled) |
+
+## Commands
+
+```
+run [flags] <command> [args]
+
+  apply    Create or update a job (upsert by name)
+  delete   Delete a job and all its tasks
+  status   Show cluster status
+  agents   List agents or show agent details
+  logs     Stream task logs
 ```
 
 ## Cluster Status
@@ -34,13 +53,13 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
 
 ## Jobs
 
-### Job starten of updaten (Upsert)
+### Create or update a job (upsert)
 
-**Same command for deploy and update** — detects automatically based on job name:
+**Same command for create and update** — detected automatically based on job name:
 
 ```bash
-# Deploy process job
-./bin/run deploy \
+# Apply a process job
+./bin/run apply \
     --name api \
     --command "./api-binary" \
     --cpu 2000 \
@@ -48,58 +67,64 @@ Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)`
     --env "LOG_LEVEL=info"
 
 # Output (INSERT):
-# Job 'api' dispatched with ID abc123
+# Job 'api' dispatched
 
-# Update to new version (rolling by default)
-./bin/run deploy \
+# Update to a new version (rolling by default)
+./bin/run apply \
     --name api \
     --command "./api-binary-v2"
 
 # Output (UPDATE):
-# Job 'api' updated (ID def456, policy=rolling)
+# Job 'api' updated (policy=rolling)
 
-# Deploy Docker container (only on nodes with Docker)
-./bin/run deploy --name redis --image redis:7 --affinity node.docker=true
-./bin/run deploy --name my-app --image myapp:v2 --command "python serve.py"
+# Docker container (only on nodes with Docker)
+./bin/run apply --name redis --image redis:7 --affinity node.docker=true
+./bin/run apply --name my-app --image myapp:v2 --command "python serve.py"
 
-# Deploy with affinity (only on arm64 nodes)
-./bin/run deploy --name api --command "./api" --affinity node.arch=arm64
+# With affinity (only on arm64 nodes)
+./bin/run apply --name api --command "./api" --affinity node.arch=arm64
 
-# Pin to specific node
-./bin/run deploy --name monitor --command "./monitor" --affinity node.id=node-1
+# Pin to a specific node
+./bin/run apply --name monitor --command "./monitor" --affinity node.id=node-1
 
 # Platform-specific artifacts (agent picks first matching)
-./bin/run deploy --name tailscale --command "./tailscale" \
+./bin/run apply --name tailscale --command "./tailscale" \
   --artifact "node.arch=amd64::https://pkgs.tailscale.com/stable/tailscale_amd64.tar.gz" \
   --artifact "node.arch=arm64::https://pkgs.tailscale.com/stable/tailscale_arm64.tar.gz"
 
 # Simple artifact (no match = catch-all)
-./bin/run deploy --name app --command "./app" --artifact "https://example.com/app.tar.gz"
+./bin/run apply --name app --command "./app" --artifact "https://example.com/app.tar.gz"
+
+# Service discovery tags (picked up by hoplb)
+./bin/run apply --name web --command "./web" --tag "hoplb-urlprefix=*.example.com"
 ```
 
-### Deploy Flags
+### Apply Flags
 
 | Flag | Description |
 |------|-------------|
 | `--name` | Job name (required, unique key for upsert) |
 | `--command` | Command to execute (required for process jobs, optional for Docker) |
 | `--image` | Docker image (uses Docker instead of process) |
+| `--driver` | Runner: `exec` (default), `docker`, or `hop` (HopOS slot; needs `--artifact`, no command/image) |
 | `--artifact` | Artifact URL (repeatable, with optional match: `key=val::URL`) |
 | `--cpu` | CPU shares |
 | `--memory` | Memory limit (e.g., 512M, 1G) |
 | `--env` | Environment variables (KEY=VALUE, repeatable) |
+| `--tag` | Service discovery tags (KEY=VALUE, repeatable) |
 | `--affinity` | Node affinity constraints (key=value, repeatable, e.g. `node.arch=arm64`) |
+| `--priority` | Scheduling priority (0 = highest; omit to append at the end) |
 | `--update-policy` | Update policy: rolling (default), recreate, or blue-green |
 | `--check-type` | Health check type: `http`, `tcp`, or `file` |
 | `--check-path` | Health check path (HTTP endpoint or file path) |
 | `--check-port` | Health check port name (for http/tcp, default: http) |
 | `--check-failures` | Consecutive failures before unhealthy (default: 3) |
 
-Either `--command` or `--image` (or both) is required.
+Either `--command` or `--image` (or both) is required — except for `--driver hop`,
+which takes only artifacts. `count` is API-only (defaults to 1; POST to `/v1/jobs`
+to set it).
 
 Setting `--check-type` or `--check-path` enables health checks.
-
-**Note:** The API currently always requires `command`. For Docker-only deploys without a command override, pass `--command` with the container's default entrypoint.
 
 ### Update Policies
 
@@ -107,13 +132,13 @@ Control how updates are rolled out:
 
 ```bash
 # Rolling update (default) - zero downtime
-./bin/run deploy --name api --command "./v2" --update-policy rolling
+./bin/run apply --name api --command "./v2" --update-policy rolling
 
 # Recreate - downtime but fast
-./bin/run deploy --name api --command "./v2" --update-policy recreate
+./bin/run apply --name api --command "./v2" --update-policy recreate
 
 # Blue-green - zero downtime, 2x resources during switch
-./bin/run deploy --name api --command "./v2" --update-policy blue-green
+./bin/run apply --name api --command "./v2" --update-policy blue-green
 ```
 
 | Policy | Downtime | Resources | Behavior |
@@ -122,13 +147,13 @@ Control how updates are rolled out:
 | `recreate` | Yes | Minimal | Stop all → start new version |
 | `blue-green` | None | 2x during switch | Start all new → stop all old |
 
-### Job verwijderen
+### Delete a job
 
 ```bash
 ./bin/run delete <job-name>
 ```
 
-Verwijdert de job en stopt alle bijbehorende tasks.
+Deletes the job and stops all of its tasks.
 
 ## Agents
 

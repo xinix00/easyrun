@@ -2,9 +2,44 @@
 
 There are two APIs: the **Leader API** (port+1000) and the **Agent API** (port).
 
+## Authentication (X-Hop-Auth)
+
+All endpoints — leader and agent — **except `GET /health` and `GET /leader`**
+require a valid HMAC signature in the `X-Hop-Auth` header. The shared key
+(`api_key` in config, `--api-key` flag) never travels on the wire; an empty
+key disables auth (dev/standalone).
+
+Canonical string that gets signed:
+
+```
+METHOD \n PATH \n hex(sha256(body))
+```
+
+- `METHOD` = HTTP method, `PATH` = URL path (no query string), `body` = exact
+  request-body bytes (empty body → `sha256("")`)
+- Signature = `hex(HMAC-SHA256(key, canonical))`, sent as `X-Hop-Auth`
+
+Raw curl (the CLI, satellites and GUI sign automatically):
+
+```bash
+KEY="your-secret-key"; M=POST; P=/v1/jobs; BODY='{"name":"api","count":3}'
+BH=$(printf '%s' "$BODY" | openssl dgst -sha256 | awk '{print $2}')
+SIG=$(printf '%s\n%s\n%s' "$M" "$P" "$BH" | openssl dgst -sha256 -hmac "$KEY" | awk '{print $2}')
+curl -X $M "http://127.0.0.1:9080$P" -H "X-Hop-Auth: $SIG" -d "$BODY"
+```
+
+Properties: the key can't be sniffed, requests can't be forged or tampered with
+(method+path+body are bound into the signature), and there is no clock/nonce/
+server state — failover-safe. A verbatim replay of a captured request remains
+possible; see SECURITY.md for the threat model. The agent's proxy forwards the
+caller's signature unchanged (same method/path/body + shared key ⇒ still valid
+at the leader).
+
 ## Leader API
 
-Runs on the node that is leader (via hopraft). Default port: 9080.
+Runs on whichever node currently holds the leader lease (via hoplock — CAS
+over hoplockserver or any S3-compatible store). Default port: 9080 (agent
+port + 1000).
 
 ### Health
 
@@ -44,10 +79,15 @@ For per-job task details (state, pid, restarts), use `GET /v1/jobs/{name}/status
 ### Agents
 
 ```
-GET  /v1/agents            # All registered agents
-POST /v1/agents            # Register agent (with placed counts)
-DELETE /v1/agents/{id}     # Unregister agent (triggers reconciliation)
+GET    /v1/agents                                   # All registered agents
+POST   /v1/agents                                   # Register agent (with placed counts)
+DELETE /v1/agents/{id}                              # Unregister agent (triggers reconciliation)
+GET    /v1/agents/{agent_id}/capacity               # Proxy an agent's /capacity through the leader
+GET    /v1/agents/{agent_id}/logs/{task_id}/{stream} # Proxy an agent's log stream through the leader (SSE)
 ```
+
+The capacity/logs proxies let clients (like the GUI) reach every agent via a
+single connection point, even when only the leader is routable.
 
 #### Register Agent
 
@@ -62,8 +102,8 @@ Called on agent startup and on leader change:
   "endpoint": "http://10.0.0.5:8080",
   "version": "dev",
   "placed": {
-    "job-id-abc": 2,
-    "job-id-def": 1
+    "api": 2,
+    "worker": 1
   }
 }
 ```
@@ -108,9 +148,11 @@ Agents send this every 10s to stay registered:
 ### Jobs
 
 ```
-GET    /v1/jobs            # All jobs
-POST   /v1/jobs            # Run or update job (upsert based on name)
-DELETE /v1/jobs/{name}     # Delete job and all its tasks
+GET    /v1/jobs                     # All jobs
+POST   /v1/jobs                     # Run or update job (upsert based on name)
+DELETE /v1/jobs/{name}              # Delete job and all its tasks
+GET    /v1/jobs/{name}/status       # Per-job task details (see below)
+PATCH  /v1/jobs/{name}/priority     # Update only the job's priority: {"priority": N}
 ```
 
 #### Run or Update Job (Upsert)
@@ -178,8 +220,8 @@ curl -X POST http://localhost:9080/v1/jobs \
 ```
 
 **Fields:**
-- `name` (string, **required**): Job name — **unique key for upsert**
-- `driver` (string): `"exec"` (default) or `"docker"` — auto-derived from `image` if not set
+- `name` (string, **required**): Job name — **the unique key** (jobs have no separate ID)
+- `driver` (string): `"exec"` (default), `"docker"`, or `"hop"` (HopOS slot) — auto-derived from `image` if not set
 - `image` (string): Docker image (sets driver to `"docker"` automatically)
 - `affinity` (map): Node attribute constraints, AND logic (optional). Example: `{"node.arch": "arm64"}`. Agent rejects with 406 if no match.
 - `artifacts` (array): Platform-specific binaries/assets (optional). Agent picks first matching entry.
@@ -188,7 +230,9 @@ curl -X POST http://localhost:9080/v1/jobs \
   - `headers` (map): HTTP headers (Authorization, X-API-Key, etc.)
   - `auth` (map): Credentials (S3: access_key/secret_key/region, HTTP: username/password)
   - `extract` (string): Archive type — `tar.gz`, `tar.bz2`, `zip`, or `""` (raw binary, auto chmod +x)
+  - `filename` (string): Override filename for raw downloads (default: basename from URL)
 - `command` (string, **required**): Command to execute (for Docker, overrides image CMD)
+- `user` (string): Run as this user (default: inherit from the agent)
 - `count` (int): Number of instances (default 1, -1 = all agents)
 - `ports` (map): Process: port name → host port (0=dynamic). Docker: port name → container port (host always dynamic). ENV vars `ER_PORT_<NAME>`
 - `cpu_shares` (int): CPU priority (nice-based)
@@ -203,8 +247,10 @@ curl -X POST http://localhost:9080/v1/jobs \
   - `timeout` (duration): Request/connect timeout (http/tcp, default 5s)
   - `initial_timeout` (duration): Grace period for slow-starting services (default 30s)
   - `failure_threshold` (int): Consecutive failures before restart (default 3)
-- `max_restarts` (int): Max restart attempts (0 = default 5, -1 = unlimited)
+- `max_restarts` (int): Max restart attempts (omit for the default of 5, -1 = unlimited)
+- `restart_window` (duration): Reset the restart count when the last crash is longer ago than this (default 5m)
 - `update_policy` (string): `rolling` (default), `recreate`, or `blue-green`
+- `priority` (int): Scheduling priority — 0 = highest/top, N = Nth position (omit to append at the end)
 
 **Artifact Downloaders:**
 
@@ -218,7 +264,6 @@ URL scheme → downloader:
 **Response (INSERT):**
 ```json
 {
-  "id": "abc123",
   "name": "api",
   "status": "dispatched"
 }
@@ -227,14 +272,13 @@ URL scheme → downloader:
 **Response (UPDATE):**
 ```json
 {
-  "id": "def456",
   "name": "api",
   "status": "updated",
   "policy": "rolling"
 }
 ```
 
-**Note:** When updating, a **new Job ID is generated** (old and new version coexist temporarily during update). Job **name** is the unique key for upsert.
+**Note:** Job **name** is the unique key for upsert — jobs have no separate ID. During an update, old and new instances coexist temporarily according to the update policy.
 
 **Update Policies:**
 
@@ -249,6 +293,11 @@ URL scheme → downloader:
 Runs on each node. Default port: 8080.
 
 Agents also proxy `/v1/*` endpoints to the leader for cluster-wide operations.
+
+CORS is enabled for browser access (the GUI talks to agents directly). The
+agent also answers Chrome's Private Network Access preflight
+(`Access-Control-Allow-Private-Network: true`) so a hosted GUI on a public
+origin can reach agents on private addresses.
 
 ### Health
 
@@ -312,10 +361,20 @@ Returns 406 if affinity mismatch. Returns 503 if no capacity.
 ### Delete (internal, called by leader)
 
 ```
-DELETE /delete/{job_id}
+DELETE /delete/{job_name}
 ```
 
-Deletes a job by ID and cleans up all its tasks on this agent.
+Deletes a job by name and cleans up all its tasks on this agent.
+
+### Stop (internal, called by leader)
+
+```
+POST /stop/{job_name}        # Stop all tasks for a job, keep the job definition
+POST /stop-task/{task_id}    # Stop one specific task by ID
+```
+
+`/stop/` is used for preemption (the definition must remain for rescheduling);
+`/stop-task/` lets rolling and blue-green updates stop precise old instances.
 
 ### Logs (streaming)
 
