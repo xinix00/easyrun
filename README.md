@@ -20,6 +20,7 @@ Lightweight cluster orchestrator in Go. Simple alternative to Nomad.
 - **Resource limits**: CPU shares and memory limiting
 - **State persistence**: Jobs survive agent restarts
 - **Process isolation**: Optional chroot (Linux) / sandbox (macOS)
+- **Web UI**: Hosted dashboard at [gui.gethop.org](https://gui.gethop.org) — talks to your agent directly, no self-hosting required
 
 ## Quick Start
 
@@ -84,6 +85,28 @@ go build -o bin/run ./cmd/cli
 | **rolling** (default) | None | Normal | Standard updates, zero downtime |
 | **recreate** | Yes | Minimal | Database migrations, breaking changes |
 | **blue-green** | None | 2x during switch | Canary testing, instant rollback |
+
+## Web UI
+
+A hosted dashboard lives at **[gui.gethop.org](https://gui.gethop.org)** — you don't
+have to host anything. Open it, enter your agent's address (and API key if auth is
+enabled), and manage jobs, agents, capacity and live logs from the browser.
+
+It's a static page: your browser talks to your agent **directly**, signing each
+request with the same HMAC scheme as the CLI, so your cluster data never passes
+through gethop.org. The agent just needs to be reachable from your browser (CORS is
+already enabled on it).
+
+**Browser note (LAN clusters):** when the hosted GUI (a public origin) reaches a
+private/LAN address, Chrome gates the request behind *Private Network Access* —
+the agent answers the preflight (`Access-Control-Allow-Private-Network: true`),
+and Chrome may show a one-time "access devices on your local network" prompt.
+Since the hosted GUI is served over HTTPS, plain-HTTP LAN endpoints can also be
+blocked as mixed content — in that case use a localhost agent, a TLS-terminated
+endpoint, or self-host the GUI inside the LAN.
+
+Prefer to self-host? The GUI is a single `index.html` + `app.js` (the `hop-gui`
+project) — serve it from anywhere, or open the file locally.
 
 ## Architecture
 

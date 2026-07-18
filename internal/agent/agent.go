@@ -412,6 +412,14 @@ func corsMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Hop-Auth")
 
+		// Chrome Private Network Access: when a public origin (e.g. the
+		// hosted GUI at gui.gethop.org) fetches a private/LAN address,
+		// Chrome sends this preflight header and blocks the request unless
+		// the server explicitly allows it.
+		if r.Header.Get("Access-Control-Request-Private-Network") == "true" {
+			w.Header().Set("Access-Control-Allow-Private-Network", "true")
+		}
+
 		// Handle preflight
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
