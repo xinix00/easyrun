@@ -193,13 +193,25 @@ What reconcile does per job:
 - Regular jobs: sum placed counts across live agents, dispatch missing via round-robin
 - Skips jobs that are actively being dispatched (prevents double dispatch)
 
+**Scale-down of over-placement (on the registration event):**
+Reconcile itself only fills shortfalls (`missing > 0`). Excess is handled where
+it originates — agent (re)registration. When an agent that was evicted re-joins
+(e.g. a partition heals in the 30–70s window) it re-registers with tasks it kept
+running; the leader already re-placed its share elsewhere, so counting them now
+pushes a job over `desired`. `trimReturningAgentSurplus` stops that surplus **on
+the just-returned agent**. This is version-free and safe: the surplus instance
+is at worst a stale version (the agent was absent during any deploy) and never
+irreplaceable (a replacement already exists — that is why we are over desired),
+so stopping it never drops below `desired` and never loses the current version.
+Note this keys on *which agent just re-appeared*, not on task age: the stale
+instance is the oldest task, so "newest task wins" would be exactly backwards.
+
 **Consciously accepted (not bugs):**
-- Reconcile only fills shortfalls (`missing > 0`); it never stops *excess*
-  instances. Over-placement (e.g. a partitioned agent re-joining in the
-  30–70s window with tasks the leader already re-placed elsewhere) is left
-  running. Without per-task version tracking, auto-stopping the "extra" one
-  could kill a healthy current instance instead of the stale one. It surfaces
-  in metrics/monitoring; the operator drains or restarts the offending node.
+- If a returning agent's task fills a real capacity gap (the leader could not
+  re-place while it was away, so the job is *at* desired, not over), it is kept:
+  availability beats version purity, and we never drop below desired. This is
+  the one spot a stale version can linger unseen — closing it would require
+  per-task version tracking, deliberately not built.
 - A purely transient dispatch failure (an agent that returned 503 for a blip
   and then recovered, with no other event following) is retried only at the
   next event — not on a timer. Rare, and self-corrects on the next change.

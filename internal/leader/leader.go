@@ -235,6 +235,10 @@ func (l *Leader) RegisterAgent(id, endpoint, version string, placed map[string]i
 	}
 	if res.reconcile {
 		log.Printf("Agent %s registered, reconciling jobs", id)
+		// A returning agent may bring back tasks the cluster re-placed while it
+		// was away. Stop that surplus on the returning agent (at worst a stale
+		// version, and a replacement already exists) before reconciling.
+		l.trimReturningAgentSurplus(id)
 		l.reconcileJobs()
 	}
 	l.eventBus.Notify("agent:" + id)

@@ -114,6 +114,78 @@ func (l *Leader) trackPlacement(agentID, jobName string) {
 	})
 }
 
+// trimReturningAgentSurplus stops jobs on a just-(re)registered agent that the
+// cluster no longer needs. A returning agent (gone long enough to be evicted,
+// then back) re-registers with the tasks it kept running; the leader re-placed
+// its share elsewhere while it was away, so counting them now pushes a job
+// over its desired count. That surplus instance is at worst a stale version
+// (the agent was absent during any deploy) and never irreplaceable (a
+// replacement already exists — that's why we are over desired), so stopping it
+// on this agent is always safe: we never drop below desired and never lose the
+// current version. This is the version-free scale-down; it runs on the
+// registration event, not a timer.
+//
+// If a job is NOT over desired without this agent (the leader could not
+// re-place — a real capacity gap), its tasks are kept: availability beats
+// version purity. count == -1 daemons are skipped (they belong on every node).
+func (l *Leader) trimReturningAgentSurplus(agentID string) {
+	type jobCount struct {
+		name    string
+		onAgent int
+		total   int
+	}
+	var candidates []jobCount
+	query(l, func(s *leaderState) struct{} {
+		for name, cnt := range s.placed[agentID] {
+			if cnt <= 0 {
+				continue
+			}
+			total := 0
+			for _, jobs := range s.placed {
+				total += jobs[name]
+			}
+			candidates = append(candidates, jobCount{name: name, onAgent: cnt, total: total})
+		}
+		return struct{}{}
+	})
+
+	var redundant []string
+	for _, c := range candidates {
+		job := l.jobStore.GetJob(c.name)
+		if job == nil || job.Count == -1 {
+			continue
+		}
+		desired := job.Count
+		if desired <= 0 {
+			desired = 1
+		}
+		if c.total-c.onAgent >= desired {
+			redundant = append(redundant, c.name)
+		}
+	}
+	if len(redundant) == 0 {
+		return
+	}
+
+	// Drop from our books first so the follow-up reconcile sees the truth,
+	// then stop the jobs on the returning agent.
+	l.do(func(s *leaderState) {
+		if jobs := s.placed[agentID]; jobs != nil {
+			for _, name := range redundant {
+				delete(jobs, name)
+			}
+		}
+	})
+	agent := l.agentForTask(agentID)
+	for _, name := range redundant {
+		if agent != nil {
+			log.Printf("Trimming returning agent %s: stopping redundant job %s (enough instances elsewhere)", agentID, name)
+			l.stopTasksOnAgent(agent, name)
+		}
+		l.eventBus.Notify("job:" + name)
+	}
+}
+
 // dispatchToAvailableAgent tries agents until one accepts the job.
 // First pass: round-robin over all agents.
 // Second pass: preemption — evict lowest-priority job from capacity-failed agents.
