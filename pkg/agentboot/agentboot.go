@@ -131,7 +131,12 @@ func Run(ctx context.Context, o Options) error {
 		// naast de lease en laadt hij hem bij boot terug — een reboot
 		// herplaatst de jobs (declaratief). Object weghalen = schoon booten.
 		cleanBoot := true
-		if st := discovery.StateStoreFromConfig(cfg); st != nil {
+		// clustered-gate: agentboot doet alleen in-memory of S3-election, nooit
+		// hoplockserver. Zonder deze check zou een hoplockserver-URL in de config
+		// wél een gedeelde state-store opleveren terwijl election in-memory is —
+		// meerdere nodes clobberen dan één snapshot. (cmd/agent doet wél
+		// hoplockserver-election en krijgt de state-store daar.)
+		if st := discovery.StateStoreFromConfig(cfg); clustered && st != nil {
 			l.SetStatePersister(st)
 			loaded, err := l.LoadCommittedState(leaderCtx)
 			if err != nil {

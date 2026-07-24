@@ -90,6 +90,15 @@ func S3Backend(cfg S3BackendConfig, clusterName string) hoplock.Backend {
 	}
 }
 
+// StatePersister is the committed-state contract used by the leader. It is
+// defined here (structurally identical to leader.StatePersister) so
+// discovery can build stores and hand them to the leader without importing
+// the leader package.
+type StatePersister interface {
+	Save(ctx context.Context, snapshot []byte) error
+	Load(ctx context.Context) (snapshot []byte, ok bool, err error)
+}
+
 // S3StateStore persists the leader's committed cluster state as a plain
 // object at "state/<cluster>", next to the election lease — same bucket,
 // same credentials, same signer (leader.StatePersister). Renaming or
@@ -117,26 +126,33 @@ func NewS3StateStore(cfg S3BackendConfig, clusterName string) *S3StateStore {
 }
 
 // StateStoreFromConfig geeft de committed-state-store voor deze cluster-
-// config, of nil wanneer de S3-sectie niet bruikbaar is (bucket én endpoint
-// vereist — het s3-backend weigert een lege endpoint). Dit is bewust de
-// ENIGE gate: cmd/agent en agentboot hadden elk hun eigen variant
-// (Type=="s3" zonder endpoint-check vs. bucket+endpoint zonder type) en
-// liepen uit elkaar. Een gevulde S3-sectie betekent: S3 is de bron van
-// waarheid — voor de lease én voor de gecommitte staat.
-func StateStoreFromConfig(cfg *config.Config) *S3StateStore {
-	s3c := cfg.Cluster.Lock.S3
-	if s3c.Bucket == "" || s3c.Endpoint == "" {
-		return nil
+// config, of nil wanneer er geen durable backend is (standalone / mem). Dit
+// is bewust de ENIGE gate zodat cmd/agent en agentboot niet uit elkaar lopen.
+//
+// De backend die de LEASE houdt, houdt ook de STAAT — één bron van waarheid:
+//   - Een bruikbare S3-sectie ⇒ S3 (lease én state in dezelfde bucket).
+//   - Anders een hoplockserver-URL ⇒ dezelfde server, object "state/<cluster>"
+//     naast "leases/<cluster>". Zo krijgt de default (gratis, selfhosted)
+//     modus óók durable desired state — een nieuwe leader verliest na failover
+//     geen jobs meer die elders draaiden.
+//   - mem / standalone ⇒ nil: in-process, geen netwerk-state nodig (de agent
+//     bewaart z'n lokale state.json).
+func StateStoreFromConfig(cfg *config.Config) StatePersister {
+	if s3c := cfg.Cluster.Lock.S3; s3c.Bucket != "" && s3c.Endpoint != "" {
+		return NewS3StateStore(S3BackendConfig{
+			Endpoint:        s3c.Endpoint,
+			Bucket:          s3c.Bucket,
+			Region:          s3c.Region,
+			AccessKeyID:     s3c.AccessKeyID,
+			SecretAccessKey: s3c.SecretAccessKey,
+			SessionToken:    s3c.SessionToken,
+			UsePathStyle:    s3c.UsePathStyle,
+		}, cfg.Cluster.Name)
 	}
-	return NewS3StateStore(S3BackendConfig{
-		Endpoint:        s3c.Endpoint,
-		Bucket:          s3c.Bucket,
-		Region:          s3c.Region,
-		AccessKeyID:     s3c.AccessKeyID,
-		SecretAccessKey: s3c.SecretAccessKey,
-		SessionToken:    s3c.SessionToken,
-		UsePathStyle:    s3c.UsePathStyle,
-	}, cfg.Cluster.Name)
+	if lc := cfg.Cluster.Lock; (lc.Type == "" || lc.Type == "hoplockserver") && lc.URL != "" {
+		return NewHoplockServerStateStore(lc.URL, lc.APIKey, cfg.Cluster.Name)
+	}
+	return nil
 }
 
 // Save overschrijft de snapshot (enige schrijver: de leaseholder).
@@ -146,6 +162,37 @@ func (s *S3StateStore) Save(ctx context.Context, snapshot []byte) error {
 
 // Load leest de snapshot; ok=false = geen object = schone boot.
 func (s *S3StateStore) Load(ctx context.Context) ([]byte, bool, error) {
+	return s.b.GetObject(ctx, s.key)
+}
+
+// HoplockServerStateStore persists the committed cluster state on the same
+// hoplockserver that holds the election lease: a plain object at
+// "state/<cluster>" next to "leases/<cluster>". No S3, no extra process —
+// the default self-hosted backend now has durable desired state. Deleting
+// that object on the server is the operator's "boot clean" switch, exactly
+// like S3StateStore.
+type HoplockServerStateStore struct {
+	b   *client.Backend
+	key string
+}
+
+// NewHoplockServerStateStore wires the state object for the given cluster on
+// the hoplockserver at serverURL (same URL and API key as the lease backend).
+func NewHoplockServerStateStore(serverURL, apiKey, clusterName string) *HoplockServerStateStore {
+	key := "state/" + clusterName
+	return &HoplockServerStateStore{
+		b:   &client.Backend{URL: serverURL, Key: key, APIKey: apiKey},
+		key: key,
+	}
+}
+
+// Save overschrijft de snapshot (enige schrijver: de leaseholder).
+func (s *HoplockServerStateStore) Save(ctx context.Context, snapshot []byte) error {
+	return s.b.PutObject(ctx, s.key, snapshot, "application/json")
+}
+
+// Load leest de snapshot; ok=false = geen object = schone boot.
+func (s *HoplockServerStateStore) Load(ctx context.Context) ([]byte, bool, error) {
 	return s.b.GetObject(ctx, s.key)
 }
 
