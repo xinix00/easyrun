@@ -5,7 +5,7 @@ Nomad. One binary runs the cluster: agent, leader and HTTP API in a single
 process. Jobs run as plain processes (`exec`), Docker containers (`docker`),
 or native app images on HopOS metal (`hop`).
 
-## Start here
+## Quick start
 
 ```bash
 # Build

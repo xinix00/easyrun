@@ -223,10 +223,10 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	// A HopOS app runs on whole cores (slots): cpu_shares picks the SMP width and
 	// a fractional request can't map onto a partial slot. Round up to the next
 	// whole core (min one) so HOP's accounting matches exactly what HopOS
-	// allocates — HOP helps HopOS. The capacity check below then counts SLOTS (on
-	// a HopOS node CPUCores == NumSlots, agentboot), so a full node rejects HERE,
+	// allocates — HOP helps HopOS. The capacity check below counts CORES (on a
+	// HopOS node CPUCores == NumCores, agentboot), so a full node rejects HERE,
 	// before a slot is allocated, instead of accepting and then failing in the
-	// runner when no slot is free.
+	// runner when no core is free.
 	if job.Driver == types.DriverHop {
 		cores := (job.CPUShares + 1023) / 1024
 		if cores < 1 {
@@ -240,7 +240,15 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	// The task in state IS the capacity reservation — no separate reservation needed.
 	added := query(a, func(s *agentState) bool {
 		usedCPU, usedMem := s.resourceUsage()
-		if job.CPUShares > 0 && usedCPU+job.CPUShares > a.effectiveCPUShares() {
+		// Een sharegroup-lid dat een AL draaiende pool joint kost geen extra
+		// cores: het deelt de al-gereserveerde pool (HopOS stapelt het erbij).
+		// Alleen de eerste van een groep — of een dedicated/SMP-app — claimt
+		// cores. Zo matcht de admissie wat PlaceCage op de node werkelijk doet.
+		newCPU := job.CPUShares
+		if grp := job.Tags["sharegroup"]; grp != "" && s.sharegroupRunning(grp) {
+			newCPU = 0
+		}
+		if job.CPUShares > 0 && usedCPU+newCPU > a.effectiveCPUShares() {
 			return false
 		}
 		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.effectiveMemoryBytes() {

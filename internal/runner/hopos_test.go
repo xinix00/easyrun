@@ -20,6 +20,10 @@ type fakeSlotManager struct {
 
 	num     int
 	classes map[int]string
+
+	// Laatste sharegroup-plaatsing (voor assertions in de core-deling-test).
+	lastSharegroup string
+	lastPoolCores  int
 }
 
 type fakeSlot struct {
@@ -55,7 +59,7 @@ func newFakeSlotManager(num int) *fakeSlotManager {
 	}
 }
 
-func (f *fakeSlotManager) NumSlots() int             { return f.num }
+func (f *fakeSlotManager) NumCores() int             { return f.num }
 func (f *fakeSlotManager) CoreClass(slot int) string { return f.classes[slot] }
 
 // StartLoader is phase 1: it loads the (embedded) apploader and simulates it —
@@ -63,7 +67,10 @@ func (f *fakeSlotManager) CoreClass(slot int) string { return f.classes[slot] }
 // core+netstack and signals SlotStaged. The fake fetches that image and parks
 // the slot at SlotStaged; StartStaged then promotes it (phase 2). This mirrors
 // the real two-phase "app downloads its own image" flow.
-func (f *fakeSlotManager) StartLoader(slot int, memLimit uint64, env map[string]string) error {
+func (f *fakeSlotManager) StartLoader(slot int, memLimit uint64, sharegroup string, poolCores int, env map[string]string) error {
+	f.mu.Lock()
+	f.lastSharegroup, f.lastPoolCores = sharegroup, poolCores
+	f.mu.Unlock()
 	url := env["HOP_IMAGE_URL"]
 	if url == "" {
 		return fmt.Errorf("fake: apploader started without HOP_IMAGE_URL")
@@ -327,6 +334,41 @@ func TestHopRunnerSMPCores(t *testing.T) {
 	}
 }
 
+func TestHopRunnerSharegroup(t *testing.T) {
+	srv := imageServer(t, []byte("img"))
+	sm := newFakeSlotManager(11)
+	r := NewHopRunner(sm, nil)
+	// sharegroup-tag + CPUShares 2048: een POOL van 2 hele cores, gedeeld door
+	// gelijk-getagde apps. Anders dan SMP reserveert HOP hier maar ÉÉN kooi
+	// (HopOS stapelt de apps op de pool) en draait de app zelf op één core.
+	job := hopJob(srv.URL)
+	job.CPUShares = 2048
+	job.Tags = map[string]string{"sharegroup": "web"}
+	task := &types.Task{ID: "t-sg"}
+	if err := r.Run(job, task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Naam + poolgrootte doorgegeven aan de SlotManager (uit tag + CPUShares).
+	if sm.lastSharegroup != "web" || sm.lastPoolCores != 2 {
+		t.Fatalf("StartLoader kreeg sharegroup=%q poolCores=%d, want web/2", sm.lastSharegroup, sm.lastPoolCores)
+	}
+	// De app draait op ÉÉN core (de 2 is de poolgrootte, niet de app-breedte).
+	if s := sm.slot(task.Pid); s.cores != 1 {
+		t.Fatalf("app-cores = %d, want 1", s.cores)
+	}
+	// Slechts één kooi bezet (niet 2 aaneengesloten zoals SMP): er blijft ruimte
+	// voor een mede-bewoner.
+	busy := 0
+	for _, id := range r.inUse {
+		if id == task.ID {
+			busy++
+		}
+	}
+	if busy != 1 {
+		t.Fatalf("sharegroup-app bezet %d kooien, want 1", busy)
+	}
+}
+
 func TestHopRunnerRejections(t *testing.T) {
 	srv := imageServer(t, []byte("img"))
 	sm := newFakeSlotManager(2)
@@ -342,13 +384,21 @@ func TestHopRunnerRejections(t *testing.T) {
 		}
 	}
 
-	// Slot exhaustion: 2 slots, third Run must fail.
-	for i := 0; i < 2; i++ {
+	// Cages are not capped to the core count: HopOS stacks more cages than it
+	// has cores (sharegroups), and the node — not the runner — rejects an
+	// unplaceable job. So on a 2-core fake a third unconstrained Run still
+	// allocates; capacity is enforced by admission + PlaceCage, not here.
+	for i := 0; i < 3; i++ {
 		if err := r.Run(hopJob(srv.URL), &types.Task{ID: string(rune('a' + i))}); err != nil {
 			t.Fatalf("Run %d: %v", i, err)
 		}
 	}
-	if err := r.Run(hopJob(srv.URL), &types.Task{ID: "overflow"}); err == nil {
-		t.Fatal("expected no-free-slot error")
+
+	// A class-constrained job stays bounded by real cores: the 2-core fake has
+	// only "small" cores, so a "big" request has nowhere to land.
+	big := hopJob(srv.URL)
+	big.Tags = map[string]string{"core-class": "big"}
+	if err := r.Run(big, &types.Task{ID: "big"}); err == nil {
+		t.Fatal("expected rejection: no big core on a small-only node")
 	}
 }

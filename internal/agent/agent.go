@@ -586,13 +586,50 @@ func (a *Agent) SaveState() {
 // resourceUsage returns total CPU shares and memory used by running/stopping tasks.
 // Stopping tasks count because they still consume resources until fully stopped.
 func (s *agentState) resourceUsage() (cpu int, mem uint64) {
+	// CPU telt in HELE cores (CPUShares; 1024 = 1 core). Sharegroup-leden delen
+	// één pool cores, dus dat pool-CPU telt ÉÉN keer — niet per lid. Zonder deze
+	// collapse zou "2 apps in sharegroup web (pool 2)" als 4 cores tellen i.p.v.
+	// 2, en zou de node onterecht "vol" melden (HopOS stapelt ze op 2 cores).
+	// Geheugen telt WÉL per lid: elke app heeft z'n eigen partitie, sharegroups
+	// delen cores, geen RAM.
+	seenGroup := map[string]bool{}
 	for _, task := range s.tasks {
-		if task.State == types.TaskRunning || task.State == types.TaskStopping {
-			cpu += task.CPUShares
-			mem += task.MemoryLimit
+		if task.State != types.TaskRunning && task.State != types.TaskStopping {
+			continue
 		}
+		mem += task.MemoryLimit
+		if grp := s.sharegroupOf(task); grp != "" {
+			if seenGroup[grp] {
+				continue // pool al geteld — dit lid deelt de cores
+			}
+			seenGroup[grp] = true
+		}
+		cpu += task.CPUShares
 	}
 	return
+}
+
+// sharegroupOf geeft de sharegroup-tag van de job achter een task ("" = geen).
+// De poolgrootte zit in de CPUShares van diezelfde job (hele cores).
+func (s *agentState) sharegroupOf(task *types.Task) string {
+	if job := s.jobs[task.JobName]; job != nil {
+		return job.Tags["sharegroup"]
+	}
+	return ""
+}
+
+// sharegroupRunning meldt of er al een levende task in sharegroup grp draait —
+// dan is de pool-CPU al gereserveerd en kost een nieuw lid er geen cores bij.
+func (s *agentState) sharegroupRunning(grp string) bool {
+	for _, task := range s.tasks {
+		if task.State != types.TaskRunning && task.State != types.TaskStopping {
+			continue
+		}
+		if s.sharegroupOf(task) == grp {
+			return true
+		}
+	}
+	return false
 }
 
 // allocatePortsForJob allocates host ports appropriate for the job type.

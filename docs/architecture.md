@@ -89,6 +89,16 @@ sequenceDiagram
 - Without usable S3 config there is no committed state: a new leader then
   only knows the jobs in its own local store.
 
+### Init jobs (clean boot → baseline)
+
+A leader that starts with **no snapshot and an empty job store** seeds the
+jobs from `cluster.init_jobs` (config) once, through the normal dispatch
+path. This is how a blank node (Pi, HopOS) comes up with its baseline
+without anyone running `run apply`. It is one-shot, not enforcement:
+deleting a seeded job sticks until the next clean boot, and a store *error*
+never triggers a seed (an S3 outage must not reset the cluster). See
+`internal/leader/init.go` and [configuration.md](configuration.md#init-jobs).
+
 ## Registration Protocol
 
 ```mermaid

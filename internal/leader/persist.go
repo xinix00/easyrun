@@ -63,21 +63,23 @@ func (l *Leader) SetStatePersister(p StatePersister) {
 // LoadCommittedState populates the job store from the committed snapshot.
 // Call once at boot, before Run/reconciliation. An absent object is a
 // clean boot; a corrupt object is an error (better loud than half-loaded).
-func (l *Leader) LoadCommittedState(ctx context.Context) error {
+// Returns whether a snapshot was found — callers use !loaded (with a nil
+// error) to detect a clean boot for init-job seeding (see init.go).
+func (l *Leader) LoadCommittedState(ctx context.Context) (loaded bool, err error) {
 	if l.persister == nil {
-		return nil
+		return false, nil
 	}
 	data, ok, err := l.persister.Load(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if !ok {
 		log.Printf("No committed state found — clean boot")
-		return nil
+		return false, nil
 	}
 	var st persistedState
 	if err := json.Unmarshal(data, &st); err != nil {
-		return err
+		return false, err
 	}
 	// De snapshot is de ENIGE waarheid — niet meer, niet minder (Derek,
 	// 18-07). De store is bij boot niet per se leeg: de agent laadde al zijn
@@ -97,7 +99,7 @@ func (l *Leader) LoadCommittedState(ctx context.Context) error {
 	}
 	l.jobStore.SyncJobs(st.Jobs, st.Updated)
 	log.Printf("Loaded %d jobs from committed state (updated %s)", len(st.Jobs), st.Updated.Format(time.RFC3339))
-	return nil
+	return true, nil
 }
 
 func (l *Leader) markStateDirty() {

@@ -44,8 +44,13 @@ type SlotStatus struct {
 // SlotManager abstracts HopOS' slot primitives (hop-os/metal/slots). The
 // bare-metal implementation calls that package directly; tests use a fake.
 type SlotManager interface {
-	// NumSlots returns the number of app slots (cores) on this node.
-	NumSlots() int
+	// NumCores is the node's usable app-core count — the only capacity HOP
+	// schedules and reports against (a 4-core Pi with core 0 running HOP => 3).
+	// The number of cages (slot IDs) a node can hold is deliberately NOT in
+	// this contract: sharegroups stack more cages than cores, HopOS enforces
+	// its own hard ceiling, and HOP simply tries to place a job — the node
+	// accepts it or it doesn't.
+	NumCores() int
 	// CoreClass returns the core class of a slot ("big", "mid" or "small").
 	CoreClass(slot int) string
 	// StartLoader is phase 1 of the two-phase load: it loads the universal
@@ -56,7 +61,15 @@ type SlotManager interface {
 	// moves off the node's single netstack: one connection per app core instead
 	// of every image funnelling through core 0 (which OOM'd the kernel heap).
 	// memLimit sizes the partition the real app reuses in phase 2.
-	StartLoader(slot int, memLimit uint64, env map[string]string) error
+	//
+	// sharegroup + poolCores drive cooperative core-sharing (HopOS-only; other
+	// drivers ignore it). sharegroup == "" places the slot on its own dedicated
+	// core (the default — whole cores, no sharing). A non-empty sharegroup packs
+	// this slot onto a pool of poolCores whole cores shared with same-named
+	// slots; poolCores is the pool size in whole cores (first job of a group
+	// wins). It comes from the job's "sharegroup" tag and CPUShares — HopOS does
+	// the packing, HOP just forwards the intent.
+	StartLoader(slot int, memLimit uint64, sharegroup string, poolCores int, env map[string]string) error
 	// StartStaged is phase 2: the apploader has staged the real image in the top
 	// of its own partition (SlotStaged). StartStaged places it over the loader
 	// and re-dispatches the parked core on the real app, with the real cores,

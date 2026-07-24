@@ -30,6 +30,10 @@ cluster:
     #   access_key_id: "..."
     #   secret_access_key: "..."
     #   use_path_style: false
+  # init_jobs:              # Baseline die een leeg cluster bij clean boot krijgt
+  #   - name: hopdns        # (zie "Init jobs" hieronder)
+  #     command: /usr/local/bin/hopdns
+  #     count: -1
 
 api_key: ""                 # Gedeelde secret voor HMAC request-auth (X-Hop-Auth)
                             # over alle hop endpoints. Leeg = auth uit (dev).
@@ -53,6 +57,47 @@ timeouts:
   node_dead_threshold: 30s
   leader_lease: 30s
 ```
+
+## Init jobs
+
+`cluster.init_jobs` is de baseline die een **leeg** cluster automatisch krijgt.
+Een leader die start zonder committed snapshot én zonder lokale jobs (een
+"clean boot") seedt deze jobs eenmalig via het normale upsert-pad — alsof een
+operator ze met `run apply` indiende. Zo komt een kale node (Pi, HopOS) uit de
+doos met zijn taken, zonder dat iemand iets hoeft te deployen.
+
+```yaml
+cluster:
+  name: "my-cluster"
+  init_jobs:
+    - name: hopdns
+      command: /usr/local/bin/hopdns
+      count: -1               # op elke node
+      ports:
+        dns: 5353
+    - name: my-app
+      image: myapp:v1
+      count: 2
+```
+
+**Semantiek:**
+
+- Veldnamen zijn het **job JSON-schema** (zelfde als `POST /v1/jobs` /
+  [data-structures.md](data-structures.md)) — een spec is copy-pastbaar
+  tussen config en API.
+- **Alleen bij clean boot**: geen snapshot in de state store (of geen store
+  geconfigureerd) én een lege job store. Init jobs zijn géén continue
+  enforcement — een geseedde job verwijderen blijft verwijderd tot de
+  volgende clean boot (deletion is absence).
+- **Storing ≠ leeg**: is de state store onbereikbaar, dan wordt er nooit
+  geseed — anders zou een S3-storing het cluster naar de baseline resetten.
+- Een bestaande jobnaam wordt overgeslagen; een seed overschrijft nooit
+  operator-state.
+- Typo's zijn boot-fouten: onbekende velden, een ontbrekende `name` of een
+  job zonder `command`/`image` stoppen de agent bij het starten.
+- **Factory reset**: verwijder het `state/<cluster>`-object uit de bucket
+  (en op de node z'n lokale state) → volgende leader-start is een clean
+  boot → de baseline komt terug.
 
 ## CLI Flags
 

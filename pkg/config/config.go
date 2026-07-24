@@ -35,6 +35,14 @@ type NodeConfig struct {
 type ClusterConfig struct {
 	Name string     `yaml:"name"`
 	Lock LockConfig `yaml:"lock"`
+
+	// InitJobs seed the cluster on a clean boot: a leader that starts with
+	// no committed snapshot and no local jobs schedules these once, through
+	// the normal upsert path. They are NOT continuously enforced — deleting
+	// a seeded job sticks until the next clean boot (deletion is absence).
+	// Field names follow the job JSON schema (same as POST /v1/jobs), so a
+	// spec is copy-pastable between config and API.
+	InitJobs []map[string]any `yaml:"init_jobs"`
 }
 
 // LockConfig configures the hoplock backend used for leader election. The

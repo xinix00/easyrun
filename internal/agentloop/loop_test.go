@@ -1,7 +1,6 @@
-package main
+package agentloop
 
 import (
-	"context"
 	"errors"
 	"testing"
 
@@ -12,26 +11,26 @@ import (
 // ---- mocks ----
 
 type mockDiscoverer struct {
-	leader          string
-	becomeLeaderOK  bool
-	renewLeaseOK    bool
-	tryBecomeLeaderCalls int
+	leader                 string
+	becomeLeaderOK         bool
+	renewLeaseOK           bool
+	tryBecomeLeaderCalls   int
 	releaseLeadershipCalls int
 }
 
-func (m *mockDiscoverer) GetLeader() string       { return m.leader }
-func (m *mockDiscoverer) RenewLease() bool         { return m.renewLeaseOK }
-func (m *mockDiscoverer) ReleaseLeadership()       { m.releaseLeadershipCalls++ }
+func (m *mockDiscoverer) GetLeader() string  { return m.leader }
+func (m *mockDiscoverer) RenewLease() bool   { return m.renewLeaseOK }
+func (m *mockDiscoverer) ReleaseLeadership() { m.releaseLeadershipCalls++ }
 func (m *mockDiscoverer) TryBecomeLeader() bool {
 	m.tryBecomeLeaderCalls++
 	return m.becomeLeaderOK
 }
 
 type mockAgent struct {
-	id             string
-	endpoint       string
-	placed         map[string]int
-	stopAllCalls   int
+	id           string
+	endpoint     string
+	placed       map[string]int
+	stopAllCalls int
 }
 
 func (m *mockAgent) ID() string                          { return m.id }
@@ -67,22 +66,21 @@ func okHeartbeat() func(_, _, _, _ string) error {
 	}
 }
 
-func nopBecomeLeader() (func(), leaderAPI) {
+func nopBecomeLeader() (func(), LeaderAPI) {
 	return func() {}, nil
 }
 
-func newTestLoop(disc *mockDiscoverer, ag *mockAgent) *agentLoop {
+func newTestLoop(disc *mockDiscoverer, ag *mockAgent) *Loop {
 	cfg := config.DefaultConfig()
 	cfg.Node.IP = "127.0.0.1"
 	cfg.Node.Port = 8080
-	return &agentLoop{
-		ctx:            context.Background(),
-		cfg:            cfg,
-		ag:             ag,
-		disc:           disc,
-		doRegister:     okRegister(),
-		doHeartbeat:    okHeartbeat(),
-		doBecomeLeader: nopBecomeLeader,
+	return &Loop{
+		Cfg:            cfg,
+		Ag:             ag,
+		Disc:           disc,
+		DoRegister:     okRegister(),
+		DoHeartbeat:    okHeartbeat(),
+		DoBecomeLeader: nopBecomeLeader,
 	}
 }
 
@@ -94,7 +92,7 @@ func TestTick_NoLeader_TriggersAfter4(t *testing.T) {
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 
 	for i := range 4 {
-		loop.tick()
+		loop.Tick()
 		if loop.failCount != i+1 {
 			t.Fatalf("tick %d: failCount = %d, want %d", i+1, loop.failCount, i+1)
 		}
@@ -111,7 +109,7 @@ func TestTick_NoLeader_NotYetAt3(t *testing.T) {
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 
 	for range 3 {
-		loop.tick()
+		loop.Tick()
 	}
 
 	if disc.tryBecomeLeaderCalls != 0 {
@@ -123,10 +121,10 @@ func TestTick_NoLeader_NotYetAt3(t *testing.T) {
 func TestTick_RegisterFails_TriggersAfter4(t *testing.T) {
 	disc := &mockDiscoverer{leader: "leader:9080"}
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
-	loop.doRegister = errRegister(errors.New("connection refused"))
+	loop.DoRegister = errRegister(errors.New("connection refused"))
 
 	for range 4 {
-		loop.tick()
+		loop.Tick()
 	}
 
 	if disc.tryBecomeLeaderCalls != 1 {
@@ -139,10 +137,10 @@ func TestTick_RegisterFails7_StopsAllTasks(t *testing.T) {
 	disc := &mockDiscoverer{leader: "leader:9080", becomeLeaderOK: false}
 	ag := &mockAgent{id: "a1"}
 	loop := newTestLoop(disc, ag)
-	loop.doRegister = errRegister(errors.New("connection refused"))
+	loop.DoRegister = errRegister(errors.New("connection refused"))
 
 	for range 7 {
-		loop.tick()
+		loop.Tick()
 	}
 
 	if ag.stopAllCalls != 1 {
@@ -160,7 +158,7 @@ func TestTick_RegisterSuccess_ResetsState(t *testing.T) {
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 	loop.failCount = 2 // simulated prior failures
 
-	loop.tick()
+	loop.Tick()
 
 	if !loop.registered {
 		t.Error("expected registered = true")
@@ -179,10 +177,10 @@ func TestTick_HeartbeatFails_TriggersAfter4(t *testing.T) {
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 	loop.registered = true
 	loop.lastLeaderAddr = "leader:9080"
-	loop.doHeartbeat = errHeartbeat(errors.New("timeout"))
+	loop.DoHeartbeat = errHeartbeat(errors.New("timeout"))
 
 	for range 4 {
-		loop.tick()
+		loop.Tick()
 	}
 
 	if disc.tryBecomeLeaderCalls != 1 {
@@ -196,9 +194,9 @@ func TestTick_HeartbeatNotRegistered_Reregisters(t *testing.T) {
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 	loop.registered = true
 	loop.lastLeaderAddr = "leader:9080"
-	loop.doHeartbeat = errHeartbeat(errNotRegistered)
+	loop.DoHeartbeat = errHeartbeat(ErrNotRegistered)
 
-	loop.tick()
+	loop.Tick()
 
 	if loop.registered {
 		t.Error("expected registered = false after 404")
@@ -224,8 +222,8 @@ func TestTick_HeartbeatSuccess_ResetsFailCount(t *testing.T) {
 	loop.lastLeaderAddr = "leader:9080"
 	loop.failCount = 2 // simulated prior failures
 
-	loop.doHeartbeat = okHeartbeat()
-	loop.tick()
+	loop.DoHeartbeat = okHeartbeat()
+	loop.Tick()
 
 	if loop.failCount != 0 {
 		t.Errorf("failCount = %d, want 0", loop.failCount)
@@ -238,13 +236,13 @@ func TestTick_TakeoverSucceeds_SetsStopLeader(t *testing.T) {
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 
 	stopCalled := false
-	loop.doBecomeLeader = func() (func(), leaderAPI) {
+	loop.DoBecomeLeader = func() (func(), LeaderAPI) {
 		return func() { stopCalled = true }, &mockLeader{}
 	}
 
 	// 4 ticks → takeover (~30s)
 	for range 4 {
-		loop.tick()
+		loop.Tick()
 	}
 
 	if loop.stopLeader == nil {
@@ -267,7 +265,7 @@ func TestTick_PartialFailureThenSuccess_Resets(t *testing.T) {
 	loop := newTestLoop(disc, &mockAgent{id: "a1"})
 
 	callCount := 0
-	loop.doRegister = func(_, _, _ string, _ map[string]int, _ string) error {
+	loop.DoRegister = func(_, _, _ string, _ map[string]int, _ string) error {
 		callCount++
 		if callCount < 3 {
 			return errors.New("not ready")
@@ -275,9 +273,9 @@ func TestTick_PartialFailureThenSuccess_Resets(t *testing.T) {
 		return nil
 	}
 
-	loop.tick() // fail 1
-	loop.tick() // fail 2
-	loop.tick() // success
+	loop.Tick() // fail 1
+	loop.Tick() // fail 2
+	loop.Tick() // success
 
 	if !loop.registered {
 		t.Error("expected registered = true after eventual success")
@@ -297,7 +295,7 @@ func TestTick_LeaderRaftDown_StaysLeader(t *testing.T) {
 	loop.stopLeader = func() {}
 	loop.l = &mockLeader{agents: []*types.Agent{{ID: "follower1"}}}
 
-	loop.tick()
+	loop.Tick()
 
 	if loop.stopLeader == nil {
 		t.Error("should still be leader when agents are connected")
@@ -313,7 +311,7 @@ func TestTick_LeaderRaftDown_NoAgents_LosesLeadership(t *testing.T) {
 	loop.stopLeader = func() { stopCalled = true }
 	loop.l = &mockLeader{agents: []*types.Agent{}}
 
-	loop.tick()
+	loop.Tick()
 
 	if !stopCalled {
 		t.Error("should have called stopLeader")
@@ -332,14 +330,14 @@ func TestTick_LeaderRaftRecovers_ResetsFailCount(t *testing.T) {
 	loop.failCount = 3
 
 	// Raft down: stays leader, failCount unchanged
-	loop.tick()
+	loop.Tick()
 	if loop.failCount != 3 {
 		t.Fatalf("failCount should stay %d during raft-down, got %d", 3, loop.failCount)
 	}
 
 	// Raft recovers
 	disc.renewLeaseOK = true
-	loop.tick()
+	loop.Tick()
 	if loop.failCount != 0 {
 		t.Errorf("failCount should reset to 0 after raft recovery, got %d", loop.failCount)
 	}
@@ -353,12 +351,12 @@ func TestTick_UsesCachedLeaderAddr(t *testing.T) {
 	loop.lastLeaderAddr = "cached:9080"
 
 	var calledAddr string
-	loop.doHeartbeat = func(addr, _, _, _ string) error {
+	loop.DoHeartbeat = func(addr, _, _, _ string) error {
 		calledAddr = addr
 		return nil
 	}
 
-	loop.tick()
+	loop.Tick()
 
 	if calledAddr != "cached:9080" {
 		t.Errorf("heartbeat sent to %q, want cached %q", calledAddr, "cached:9080")

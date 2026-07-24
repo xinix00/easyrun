@@ -3,13 +3,10 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -17,11 +14,11 @@ import (
 	"time"
 
 	"hop/internal/agent"
+	"hop/internal/agentloop"
 	"hop/internal/api"
 	"hop/internal/discovery"
 	"hop/internal/leader"
 	"hop/pkg/config"
-	"hop/pkg/httputil"
 
 	"github.com/google/uuid"
 	"github.com/xinix00/hoplock"
@@ -68,6 +65,11 @@ func main() {
 	}
 	if cfg.Cluster.Name == "" {
 		log.Fatal("cluster name required (use --cluster or config file)")
+	}
+	// Validate init_jobs up front: a config typo should stop the agent at
+	// boot, not surface at the first clean-boot leader takeover.
+	if _, err := leader.DecodeInitJobs(cfg.Cluster.InitJobs); err != nil {
+		log.Fatalf("cluster.init_jobs: %v", err)
 	}
 
 	// Use cluster-specific state file to avoid conflicts when running multiple clusters
@@ -120,9 +122,6 @@ func main() {
 	run(ctx, cfg, nodeID, *standalone)
 }
 
-// httpClient is reused for all heartbeat/register calls (connection pooling)
-var httpClient = &http.Client{Timeout: 5 * time.Second}
-
 func run(ctx context.Context, cfg *config.Config, nodeID string, standalone bool) {
 	backend, err := buildBackend(cfg, standalone)
 	if err != nil {
@@ -153,39 +152,26 @@ func run(ctx context.Context, cfg *config.Config, nodeID string, standalone bool
 		log.Printf("Warning: failed to load state: %v", err)
 	}
 
-	loop := &agentLoop{
-		ctx:         ctx,
-		cfg:         cfg,
-		ag:          ag,
-		disc:        disc,
-		doRegister:  registerAgent,
-		doHeartbeat: sendHeartbeat,
-		doBecomeLeader: func() (func(), leaderAPI) {
+	loop := &agentloop.Loop{
+		Cfg:  cfg,
+		Ag:   ag,
+		Disc: disc,
+		DoRegister: func(leaderAddr, id, ep string, placed map[string]int, key string) error {
+			return agentloop.Register(leaderAddr, id, ep, version, placed, key)
+		},
+		DoHeartbeat: func(leaderAddr, id, ep, key string) error {
+			return agentloop.Heartbeat(leaderAddr, id, ep, version, key)
+		},
+		DoBecomeLeader: func() (func(), agentloop.LeaderAPI) {
 			var l *leader.Leader
 			stop := becomeLeader(ctx, cfg, ag, &l, cfg.APIKey)
 			return stop, l
 		},
 	}
 
-	// Main loop: heartbeat to leader, handle leader election
-	go func() {
-		loop.tick()
-
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ctx.Done():
-				if loop.stopLeader != nil {
-					disc.ReleaseLeadership()
-				}
-				return
-			case <-ticker.C:
-				loop.tick()
-			}
-		}
-	}()
+	// Main loop: heartbeat to leader, handle leader election (gedeeld met
+	// agentboot — internal/agentloop, de fase-2-extractie).
+	go loop.Run(ctx.Done(), 10*time.Second)
 
 	// Run agent HTTP server
 	if err := ag.Run(ctx); err != nil {
@@ -264,10 +250,16 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 	// zijn gewenste staat naast de lease en laadt een verse leader hem
 	// terug — failover zonder state-merging (zelfde gate als agentboot,
 	// zie discovery.StateStoreFromConfig).
+	cleanBoot := true
 	if st := discovery.StateStoreFromConfig(cfg); st != nil {
 		(*l).SetStatePersister(st)
-		if err := (*l).LoadCommittedState(leaderCtx); err != nil {
+		loaded, err := (*l).LoadCommittedState(leaderCtx)
+		if err != nil {
 			log.Printf("committed state not loaded: %v", err)
+			// Store onbereikbaar ≠ store leeg: nooit seeden op een storing.
+			cleanBoot = false
+		} else {
+			cleanBoot = !loaded
 		}
 	}
 
@@ -289,59 +281,21 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 
 	log.Printf("Leader initialized with %d placed jobs from local agent", len(ag.GetPlacedTaskCounts()))
 
+	// Clean boot (geen snapshot én lege job store) → seed de init jobs.
+	// Tijdens settle worden ze alleen gestored; reconcile dispatcht daarna.
+	if cleanBoot && len(cfg.Cluster.InitJobs) > 0 && len((*l).GetJobs()) == 0 {
+		jobs, err := leader.DecodeInitJobs(cfg.Cluster.InitJobs)
+		if err != nil {
+			log.Printf("cluster.init_jobs: %v", err) // al gevalideerd bij boot; hooguit theoretisch
+		} else {
+			(*l).SeedInitJobs(jobs)
+		}
+	}
+
 	return func() {
 		srv.Stop() // release :9080 synchronously
 		cancel()   // stop leader state loop
 	}
-}
-
-// postJSON sends a POST request with JSON body and API key to the leader.
-func postJSON(path string, payload any, apiKey string) (*http.Response, error) {
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", path, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	httputil.SignRequest(req, apiKey, body)
-	return httpClient.Do(req)
-}
-
-func registerAgent(leaderAddr, agentID, agentEndpoint string, placed map[string]int, apiKey string) error {
-	resp, err := postJSON(fmt.Sprintf("http://%s/v1/agents", leaderAddr), map[string]any{
-		"id": agentID, "endpoint": agentEndpoint, "version": version, "placed": placed,
-	}, apiKey)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("leader returned %d", resp.StatusCode)
-	}
-	return nil
-}
-
-var errNotRegistered = errors.New("not registered with leader")
-
-// sendHeartbeat is puur een levensteken; de job-lijsten die hier vroeger
-// meereisden zijn gesloopt (16-07) — gewenste staat heeft één auteur (de
-// leader, gecommit naar S3; zie internal/leader/persist.go).
-func sendHeartbeat(leaderAddr, agentID, agentEndpoint, apiKey string) error {
-	resp, err := postJSON(fmt.Sprintf("http://%s/v1/heartbeat", leaderAddr), map[string]any{
-		"id": agentID, "endpoint": agentEndpoint, "version": version,
-	}, apiKey)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return errNotRegistered
-	}
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("leader returned %d", resp.StatusCode)
-	}
-	return nil
 }
 
 // getOrCreateNodeID returns a stable node ID (config > persisted > generated)

@@ -9,6 +9,39 @@ import (
 	"hop/internal/types"
 )
 
+// TestResourceUsageCollapsesSharegroup bewijst dat de capaciteit sharegroup-
+// leden tot hun pool collapst: twee apps in dezelfde sharegroup (pool 2) tellen
+// als 2 cores samen, niet 2×2. Zonder collapse zou een 3-core node onterecht
+// "vol" melden bij het tweede lid (de dubbeltelling-bug).
+func TestResourceUsageCollapsesSharegroup(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	agent.do(func(s *agentState) {
+		// Sharegroup "web", pool = 2 cores (CPUShares 2048), twee leden.
+		s.jobs["web"] = &types.Job{Name: "web", CPUShares: 2048, Tags: map[string]string{"sharegroup": "web"}}
+		s.tasks["w1"] = &types.Task{ID: "w1", JobName: "web", CPUShares: 2048, MemoryLimit: 64 << 20, State: types.TaskRunning}
+		s.tasks["w2"] = &types.Task{ID: "w2", JobName: "web", CPUShares: 2048, MemoryLimit: 64 << 20, State: types.TaskRunning}
+		// Eén dedicated app van 1 core.
+		s.jobs["solo"] = &types.Job{Name: "solo", CPUShares: 1024}
+		s.tasks["s1"] = &types.Task{ID: "s1", JobName: "solo", CPUShares: 1024, MemoryLimit: 64 << 20, State: types.TaskRunning}
+	})
+
+	cpu := query(agent, func(s *agentState) int { c, _ := s.resourceUsage(); return c })
+	// web-pool één keer (2048) + solo (1024) = 3072 — NIET 2048+2048+1024=5120.
+	if cpu != 3072 {
+		t.Fatalf("resourceUsage CPU = %d, want 3072 (pool één keer geteld)", cpu)
+	}
+	// Geheugen telt WÉL per lid (eigen partitie): 3 × 64MB.
+	mem := query(agent, func(s *agentState) uint64 { _, m := s.resourceUsage(); return m })
+	if mem != 3*(64<<20) {
+		t.Fatalf("resourceUsage mem = %d, want 3×64MB (per lid)", mem)
+	}
+}
+
 // ============== BASIC AGENT TESTS ==============
 
 func TestAgentNew(t *testing.T) {

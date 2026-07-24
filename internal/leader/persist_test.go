@@ -108,8 +108,12 @@ func TestCommittedState_BootLoad(t *testing.T) {
 	l := New("n1", store, nil)
 	f := &fakePersister{loadData: snap, loadOK: true}
 	l.SetStatePersister(f)
-	if err := l.LoadCommittedState(context.Background()); err != nil {
+	loaded, err := l.LoadCommittedState(context.Background())
+	if err != nil {
 		t.Fatalf("LoadCommittedState: %v", err)
+	}
+	if !loaded {
+		t.Fatalf("snapshot bestond — loaded hoort true te zijn")
 	}
 	if l.jobStore.GetJob("terug") == nil {
 		t.Fatalf("job 'terug' niet geladen uit de snapshot")
@@ -122,8 +126,12 @@ func TestCommittedState_BootLoad(t *testing.T) {
 	l2 := New("n2", NewMockJobStore(), nil)
 	f2 := &fakePersister{loadOK: false}
 	l2.SetStatePersister(f2)
-	if err := l2.LoadCommittedState(context.Background()); err != nil {
+	loaded2, err := l2.LoadCommittedState(context.Background())
+	if err != nil {
 		t.Fatalf("schone boot hoort geen fout te geven: %v", err)
+	}
+	if loaded2 {
+		t.Fatalf("geen snapshot — loaded hoort false te zijn (clean boot)")
 	}
 	if jobs := l2.jobStore.GetJobs(); len(jobs) != 0 {
 		t.Fatalf("schone boot hoort leeg te zijn, kreeg %d jobs", len(jobs))

@@ -183,7 +183,13 @@ func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// hop driver: the artifact IS the program (a native app image); there is
-	// no command (exec) or container image (docker).
+	// no command (exec) or container image (docker). One artifact and no
+	// command/image can only mean the hop driver — default it, the same
+	// shorthand DecodeInitJobs accepts (a launcher POSTs catalog entries
+	// verbatim, so both paths must agree).
+	if job.Driver == "" && job.Command == "" && job.Image == "" && len(job.Artifacts) == 1 {
+		job.Driver = types.DriverHop
+	}
 	hopImage := job.Driver == types.DriverHop && len(job.Artifacts) == 1
 	if job.Command == "" && job.Image == "" && !hopImage {
 		httputil.WriteError(w, http.StatusBadRequest, "command or image required (or driver \"hop\" with one artifact)")

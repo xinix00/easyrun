@@ -114,19 +114,32 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 		cores = 1
 	}
 
-	// Slot EERST alloceren, dán pas downloaden: op een volle node reject dit
-	// meteen (geen vrije slot) zonder één byte te trekken. Zo kan een storm
-	// van jobs nooit meer images tegelijk laten downloaden dan er slots zijn
+	// Sharegroup (tag): coöperatieve core-deling op HopOS. Zonder de tag is elke
+	// app een eigen SMP-eenheid die `cores` aaneengesloten cores dedicated pakt
+	// (het bestaande gedrag). Mét de tag deelt de app een POOL van `cores` hele
+	// cores met gelijk-getagde apps: dan reserveren we hier maar één kooi (HopOS
+	// stapelt ze op de pool), draait de app zelf op één core, en is `cores` de
+	// poolgrootte. Andere drivers (exec/docker) negeren de tag.
+	sharegroup := job.Tags["sharegroup"]
+	appCores, poolCores, allocCages := cores, 1, cores
+	if sharegroup != "" {
+		appCores, poolCores, allocCages = 1, cores, 1
+	}
+
+	// Kooi EERST alloceren, dán pas downloaden: op een volle node reject dit
+	// meteen (geen vrije kooi) zonder één byte te trekken. Zo kan een storm
+	// van jobs nooit meer images tegelijk laten downloaden dan er kooien zijn
 	// — en met StartStream landt elke download rechtstreeks in de eigen
 	// partitie i.p.v. de HOP-kern (geen core-0-OOM meer, gemeten 14-07).
 	r.mu.Lock()
-	slot, err := r.allocateSlotLocked(job.Tags["core-class"], cores)
+	slot, err := r.allocateSlotLocked(job.Tags["core-class"], allocCages)
 	if err != nil {
 		r.mu.Unlock()
 		return err
 	}
-	// Alle cores van de app (primair + secundairen) als bezet vastleggen.
-	for c := slot; c < slot+cores; c++ {
+	// De kooi(en) van deze app als bezet vastleggen (SMP: primair + secundairen;
+	// sharegroup: één kooi — de pool-cores beheert HopOS, niet HOP's kooi-tabel).
+	for c := slot; c < slot+allocCages; c++ {
 		r.inUse[c] = task.ID
 	}
 	r.slots[task.ID] = slot
@@ -138,7 +151,7 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 	// her-dispatcht de core. Zo draagt de node-netstack nooit alle downloads
 	// tegelijk (geen core-0-OOM bij een storm) en raakt een kapotte image hooguit
 	// dat ene slot. runViaLoader geeft de slot bij een fout al vrij.
-	started, err := r.runViaLoader(job, task, slot, cores, env)
+	started, err := r.runViaLoader(job, task, slot, appCores, sharegroup, poolCores, env)
 	if err != nil {
 		return err
 	}
@@ -174,7 +187,7 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 // plaatst de echte app (StartStaged) over de loader heen en her-dispatcht de core.
 // started=false (zonder fout) betekent: task tijdens staging verwijderd — de
 // slot is dan al vrijgegeven en de aanroeper mag NIETS meer aan de slot koppelen.
-func (r *HopRunner) runViaLoader(job *types.Job, task *types.Task, slot, cores int, env map[string]string) (started bool, err error) {
+func (r *HopRunner) runViaLoader(job *types.Job, task *types.Task, slot, cores int, sharegroup string, poolCores int, env map[string]string) (started bool, err error) {
 	// Fase 1: de apploader (1 core, geen mounts) met de echte image-URL in de
 	// env. Hij deelt de partitie die straks de echte app krijgt (op MemoryLimit
 	// gealloceerd — de echte app-parameters volgen in fase 2).
@@ -183,7 +196,7 @@ func (r *HopRunner) runViaLoader(job *types.Job, task *types.Task, slot, cores i
 		lenv[k] = v
 	}
 	lenv["HOP_IMAGE_URL"] = job.Artifacts[0].URL
-	if err := r.sm.StartLoader(slot, job.MemoryLimit, lenv); err != nil {
+	if err := r.sm.StartLoader(slot, job.MemoryLimit, sharegroup, poolCores, lenv); err != nil {
 		r.release(task.ID)
 		return false, fmt.Errorf("hop driver: start apploader slot %d: %w", slot, err)
 	}
@@ -383,8 +396,17 @@ func (r *HopRunner) Cleanup() error { return nil }
 // For cores == 1 this is just the first free slot; for an SMP app the run is
 // the primary plus its secondary cores. Caller holds r.mu.
 func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error) {
-	n := r.sm.NumSlots()
-	for slot := 1; slot+cores-1 <= n; slot++ {
+	// Cage IDs are not a leader-facing capacity: HopOS stacks more cages than it
+	// has cores (sharegroups) and enforces its own hard ceiling, so HOP just
+	// hands out the next free ID and lets the node place it or reject — the real
+	// core/RAM walls live in admission (agent) and PlaceCage (node). A
+	// class-constrained job is the exception: a class only maps to real cores,
+	// so it is bounded by the node's core count.
+	limit := -1 // unbounded — the first free run always terminates the search
+	if coreClass != "" {
+		limit = r.sm.NumCores()
+	}
+	for slot := 1; limit < 0 || slot+cores-1 <= limit; slot++ {
 		ok := true
 		for c := slot; c < slot+cores; c++ {
 			if _, busy := r.inUse[c]; busy {
@@ -400,10 +422,7 @@ func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error)
 			return slot, nil
 		}
 	}
-	if coreClass != "" {
-		return 0, fmt.Errorf("hop driver: no %d contiguous free %q slots", cores, coreClass)
-	}
-	return 0, fmt.Errorf("hop driver: no %d contiguous free slots", cores)
+	return 0, fmt.Errorf("hop driver: no %d contiguous free %q cores", cores, coreClass)
 }
 
 func (r *HopRunner) release(taskID string) {
