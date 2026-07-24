@@ -170,16 +170,39 @@ it would dispatch everything → duplicates.
 - Leader stays unaware of node attributes (KISS)
 
 **Daemon Scheduling (count=-1):**
-- Uses reconcile-based dispatch (same code path as periodic reconciliation)
+- Uses reconcile-based dispatch (same code path as regular reconciliation)
 - Checks which agents already run the job, dispatches to missing agents
 - Rebuilds placement atomically
 
-**Reconciliation:**
-- Triggered after agent death, new agent registration, or agent unregister
-- Skips jobs that are actively being dispatched (prevents double dispatch)
-- `reconcileJob` is the single function for both daemon and regular job reconciliation
+**Reconciliation is event-driven — there is no periodic timer, by design.**
+`reconcileJob` runs only when the inputs it acts on actually change:
+- an agent dies (capacity/placement changed)
+- an agent registers or unregisters (capacity changed)
+- a job is submitted, updated, deleted, or re-prioritised (desired state changed)
+- the settle period ends after a leader takeover (first look at the cluster)
+
+Rationale: reconciliation is a pure function of (desired jobs, live agents,
+placed counts). If none of those change, re-running it produces the same
+result — a periodic loop would burn cycles to reach the identical conclusion.
+Every event that *can* change the outcome already triggers it. A job that
+cannot be placed (no capacity) stays pending until something changes, and that
+change is one of the events above.
+
+What reconcile does per job:
 - Daemon jobs: check all agents, dispatch to missing, rebuild placement atomically
 - Regular jobs: sum placed counts across live agents, dispatch missing via round-robin
+- Skips jobs that are actively being dispatched (prevents double dispatch)
+
+**Consciously accepted (not bugs):**
+- Reconcile only fills shortfalls (`missing > 0`); it never stops *excess*
+  instances. Over-placement (e.g. a partitioned agent re-joining in the
+  30–70s window with tasks the leader already re-placed elsewhere) is left
+  running. Without per-task version tracking, auto-stopping the "extra" one
+  could kill a healthy current instance instead of the stale one. It surfaces
+  in metrics/monitoring; the operator drains or restarts the offending node.
+- A purely transient dispatch failure (an agent that returned 503 for a blip
+  and then recovered, with no other event following) is retried only at the
+  next event — not on a timer. Rare, and self-corrects on the next change.
 
 ### Agent
 - Runs on each node (including leader node)
