@@ -91,6 +91,13 @@ type Job struct {
 	RestartWindow time.Duration     `json:"restart_window,omitempty"` // 0 = default (5m), reset restart count if last crash was longer ago
 	UpdatePolicy  UpdatePolicy      `json:"update_policy,omitempty"`  // rolling (default) | recreate | blue-green
 	Priority      *int              `json:"priority,omitempty"`       // nil=auto(end), 0=top, N=Nth position
+
+	// Deploying is true while an update is rolling out, cleared when it
+	// finishes. If the rollout fails — or the leader dies mid-way — it stays
+	// set and rides along in the committed snapshot. That is the honest truth
+	// ("rollout did not finish", the fleet may be mixed) instead of a false
+	// "healthy". Nothing auto-heals it: re-applying the job clears it.
+	Deploying bool `json:"deploying,omitempty"`
 }
 
 // Task represents a running instance of a Job

@@ -60,6 +60,12 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 
 	log.Printf("Updating job %s with policy=%s", newJob.Name, policy)
 
+	// Mark the rollout in progress. Each policy stores newJob, so this rides
+	// into the committed snapshot: cleared on success below, but left set on
+	// failure or a mid-rollout leader death — so a new leader (and any status
+	// reader) sees the honest truth instead of a false "healthy".
+	newJob.Deploying = true
+
 	var err error
 	switch policy {
 	case types.UpdateRolling:
@@ -70,6 +76,11 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 		err = l.updateBlueGreen(newJob)
 	default:
 		return fmt.Errorf("unknown update policy: %s", policy)
+	}
+
+	if err == nil {
+		newJob.Deploying = false
+		l.jobStore.StoreJob(newJob)
 	}
 
 	l.normalizePriorities(l.jobStore.GetJobs())
