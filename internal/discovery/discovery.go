@@ -217,6 +217,25 @@ func (d *Discovery) GetLeader() string {
 	return state.Owner
 }
 
+// tryClaim performs one acquire/renew attempt. A nil error means we now hold
+// the lease. hoplock.ErrLeaseHeld means another node holds a live lease (we
+// are displaced); any other error is a backend/transport problem.
+func (d *Discovery) tryClaim(ctx context.Context) error {
+	state, handle, err := d.backend.Read(ctx)
+	switch {
+	case errors.Is(err, hoplock.ErrNoLease):
+		return d.refresh(ctx, "", 1)
+	case err != nil:
+		return err
+	case state.Owner == d.owner:
+		return d.refresh(ctx, handle, state.Generation)
+	case d.now().After(state.ExpiresAt):
+		return d.refresh(ctx, handle, state.Generation+1)
+	default:
+		return hoplock.ErrLeaseHeld // someone else holds a live lease
+	}
+}
+
 // TryBecomeLeader attempts to claim the lease. Returns true if we now
 // hold it. Three success paths: create from no-lease, refresh while we
 // already own it, or take over an expired lease.
@@ -226,27 +245,28 @@ func (d *Discovery) TryBecomeLeader() bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), backendTimeout)
 	defer cancel()
-
-	state, handle, err := d.backend.Read(ctx)
-	switch {
-	case errors.Is(err, hoplock.ErrNoLease):
-		return d.refresh(ctx, "", 1)
-	case err != nil:
-		return false
-	case state.Owner == d.owner:
-		return d.refresh(ctx, handle, state.Generation)
-	case d.now().After(state.ExpiresAt):
-		return d.refresh(ctx, handle, state.Generation+1)
-	default:
-		return false
-	}
+	return d.tryClaim(ctx) == nil
 }
 
-// RenewLease refreshes our hold on the lease. Currently identical to
-// TryBecomeLeader — same code path handles the "renew our own claim"
-// case explicitly.
-func (d *Discovery) RenewLease() bool {
-	return d.TryBecomeLeader()
+// RenewLease refreshes our hold on the lease. renewed is true on success.
+// When renewed is false, displaced tells the two failure kinds apart:
+//   - displaced=true: the store reports another owner (ErrLeaseHeld / 412) —
+//     we have genuinely lost leadership and must step down now.
+//   - displaced=false: the store was unreachable (a connectivity blip) — the
+//     caller may keep leading while it still sees agents, so a working LAN
+//     survives an internet/lock-store outage without losing the cluster
+//     (no one else can take the lease while the store is unreachable to them).
+func (d *Discovery) RenewLease() (renewed, displaced bool) {
+	if d.backend == nil {
+		return false, false
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), backendTimeout)
+	defer cancel()
+	err := d.tryClaim(ctx)
+	if err == nil {
+		return true, false
+	}
+	return false, errors.Is(err, hoplock.ErrLeaseHeld)
 }
 
 // ReleaseLeadership best-effort deletes the lease, allowing another
@@ -272,7 +292,7 @@ func (d *Discovery) IsLeader() bool {
 	return d.GetLeader() == d.owner
 }
 
-func (d *Discovery) refresh(ctx context.Context, prevHandle string, gen int64) bool {
+func (d *Discovery) refresh(ctx context.Context, prevHandle string, gen int64) error {
 	state := &hoplock.State{
 		Generation: gen,
 		ExpiresAt:  d.now().Add(d.ttl),
@@ -280,13 +300,13 @@ func (d *Discovery) refresh(ctx context.Context, prevHandle string, gen int64) b
 	}
 	newHandle, err := d.backend.Write(ctx, prevHandle, state)
 	if err != nil {
-		// Surface the backend error so operators can tell a transient
-		// network blip from a real ErrLeaseHeld / 412 PreconditionFailed.
+		// Surface the backend error so callers can tell a transient network
+		// blip from a real ErrLeaseHeld / 412 PreconditionFailed.
 		log.Printf("lock refresh failed (prevHandle=%q, gen=%d): %v", prevHandle, gen, err)
-		return false
+		return err
 	}
 	d.mu.Lock()
 	d.handle = newHandle
 	d.mu.Unlock()
-	return true
+	return nil
 }

@@ -1,12 +1,56 @@
 package discovery
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/xinix00/hoplock"
 	"github.com/xinix00/hoplock/mem"
 )
+
+// errBackend is a hoplock.Backend that is always unreachable (transport
+// error, never ErrLeaseHeld) — models an isolated node during a lock-store
+// outage.
+type errBackend struct{}
+
+func (errBackend) Read(context.Context) (*hoplock.State, string, error) {
+	return nil, "", errors.New("unreachable")
+}
+func (errBackend) Write(context.Context, string, *hoplock.State) (string, error) {
+	return "", errors.New("unreachable")
+}
+func (errBackend) Delete(context.Context, string) error { return errors.New("unreachable") }
+
+// TestRenewLeaseDistinguishesDisplacedFromUnreachable is the split-brain
+// guard: a renew that fails because another node holds the lease must report
+// displaced=true (step down), while an unreachable store must report
+// displaced=false (connectivity blip — safe to keep leading).
+func TestRenewLeaseDistinguishesDisplacedFromUnreachable(t *testing.T) {
+	backend := mem.New()
+	a := New(backend, "10.0.0.1", 8080, 30*time.Second)
+	b := New(backend, "10.0.0.2", 8080, 30*time.Second)
+
+	if !a.TryBecomeLeader() {
+		t.Fatal("a should acquire the lease")
+	}
+
+	// b cannot renew — a holds a live lease → genuinely displaced.
+	if renewed, displaced := b.RenewLease(); renewed || !displaced {
+		t.Fatalf("b: renewed=%v displaced=%v, want false/true (displaced)", renewed, displaced)
+	}
+	// a still renews fine.
+	if renewed, displaced := a.RenewLease(); !renewed || displaced {
+		t.Fatalf("a: renewed=%v displaced=%v, want true/false", renewed, displaced)
+	}
+
+	// Unreachable store → renew fails but NOT displaced (blip, keep leading).
+	c := New(errBackend{}, "10.0.0.3", 8080, 30*time.Second)
+	if renewed, displaced := c.RenewLease(); renewed || displaced {
+		t.Fatalf("c: renewed=%v displaced=%v, want false/false (unreachable)", renewed, displaced)
+	}
+}
 
 func TestDiscoveryNew(t *testing.T) {
 	d := New(mem.New(), "192.168.1.10", 8080, 30*time.Second)
@@ -85,7 +129,7 @@ func TestRenewKeepsHandle(t *testing.T) {
 		t.Fatal("acquire")
 	}
 	for i := 0; i < 3; i++ {
-		if !d.RenewLease() {
+		if renewed, _ := d.RenewLease(); !renewed {
 			t.Fatalf("renew %d failed", i)
 		}
 	}
@@ -127,7 +171,7 @@ func TestGenerationMonotonic(t *testing.T) {
 	}
 
 	// a renews — generation stays the same.
-	if !a.RenewLease() {
+	if renewed, _ := a.RenewLease(); !renewed {
 		t.Fatal("renew")
 	}
 	state, _, _ = backend.Read(t.Context())

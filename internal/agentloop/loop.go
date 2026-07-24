@@ -25,7 +25,7 @@ import (
 type Discoverer interface {
 	GetLeader() string
 	TryBecomeLeader() bool
-	RenewLease() bool
+	RenewLease() (renewed, displaced bool)
 	ReleaseLeadership()
 }
 
@@ -133,12 +133,31 @@ func (s *Loop) Tick() {
 
 	if s.stopLeader != nil {
 		// We are leader — renew the lock lease.
-		if !s.Disc.RenewLease() {
+		renewed, displaced := s.Disc.RenewLease()
+		switch {
+		case renewed:
+			s.failCount = 0
+		case displaced:
+			// The lock store reports another leader — we have genuinely been
+			// replaced, not just cut off. Step down NOW, regardless of connected
+			// agents, or we would be a second leader writing to the same cluster.
+			log.Println("Lost leadership: lock store reports another leader (stepping down)")
+			s.registered = false
+			s.lastLeaderAddr = ""
+			s.stopLeader()
+			s.stopLeader = nil
+			s.l = nil
+			return
+		default:
+			// Store unreachable (connectivity blip): keep leading while we still
+			// see agents. A working LAN survives an internet/lock-store outage
+			// without abandoning the cluster — and no one else can take the lease
+			// while the store is unreachable to them too. No split-brain.
 			agents := s.l.GetAgents()
 			if len(agents) > 0 {
-				log.Printf("Lock backend renew failed but %d agents still connected, staying leader", len(agents))
+				log.Printf("Lock store unreachable but %d agents still connected, staying leader", len(agents))
 			} else {
-				log.Println("Lost leadership (lock renew failed + no agents)")
+				log.Println("Lost leadership (lock store unreachable + no agents)")
 				s.registered = false
 				s.lastLeaderAddr = ""
 				s.stopLeader()
@@ -146,8 +165,6 @@ func (s *Loop) Tick() {
 				s.l = nil
 				return
 			}
-		} else {
-			s.failCount = 0
 		}
 		// Self-heartbeat: puur liveness (LastSeen); job-sync is gesloopt —
 		// gewenste staat heeft één auteur (leader → S3, leader/persist.go).

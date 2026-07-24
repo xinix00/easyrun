@@ -14,12 +14,15 @@ type mockDiscoverer struct {
 	leader                 string
 	becomeLeaderOK         bool
 	renewLeaseOK           bool
+	renewLeaseDisplaced    bool
 	tryBecomeLeaderCalls   int
 	releaseLeadershipCalls int
 }
 
-func (m *mockDiscoverer) GetLeader() string  { return m.leader }
-func (m *mockDiscoverer) RenewLease() bool   { return m.renewLeaseOK }
+func (m *mockDiscoverer) GetLeader() string { return m.leader }
+func (m *mockDiscoverer) RenewLease() (bool, bool) {
+	return m.renewLeaseOK, m.renewLeaseDisplaced
+}
 func (m *mockDiscoverer) ReleaseLeadership() { m.releaseLeadershipCalls++ }
 func (m *mockDiscoverer) TryBecomeLeader() bool {
 	m.tryBecomeLeaderCalls++
