@@ -234,7 +234,7 @@ curl -X POST http://localhost:9080/v1/jobs \
 - `command` (string, **required**): Command to execute (for Docker, overrides image CMD)
 - `user` (string): Run as this user (default: inherit from the agent)
 - `count` (int): Number of instances (default 1, -1 = all agents)
-- `ports` (map): Process: port name → host port (0=dynamic). Docker: port name → container port (host always dynamic). ENV vars `ER_PORT_<NAME>`
+- `ports` (map): port name → host port (0=dynamic, >0=fixed); same for process and Docker (Docker maps host=container=same port). App reads ENV vars `ER_PORT_<NAME>`
 - `cpu_shares` (int): CPU priority (nice-based)
 - `memory_limit` (uint64): Memory limit in bytes
 - `env` (map): Environment variables (note: node attributes are auto-injected as `ER_ATTR_<KEY>`, user env takes priority)

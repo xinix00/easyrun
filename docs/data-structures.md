@@ -14,7 +14,7 @@ type Job struct {
     User          string            // Run as this user (default: inherit from agent)
     Command       string            // Command to execute (required for process, optional for Docker)
     Count         int               // Number of instances (see below)
-    Ports         map[string]int    // Process: port name → host port (0=dynamic). Docker: port name → container port
+    Ports         map[string]int    // port name → host port (0=dynamic, >0=fixed); Docker maps host=container=same port. App reads ER_PORT_<NAME>
     CPUShares     int               // Relative CPU priority (0 = no limiting)
     MemoryLimit   uint64            // Bytes (0 = no limiting)
     Env           map[string]string // Extra environment variables
@@ -43,7 +43,7 @@ Run a Docker container instead of a process:
 
 - If `image` is set, the agent uses the DockerRunner instead of ExecRunner
 - `command` is optional for Docker (overrides the image's CMD if provided)
-- `ports` values are **container ports** (host ports are always dynamically allocated)
+- `ports` behave identically to exec: the value is the **host port** (`>0` fixed, `0` dynamic) and Docker maps host = container = the same port (no remapping). The app reads `ER_PORT_<NAME>`.
 - All other fields (env, volumes, cpu_shares, memory_limit, tags, health_check) work identically
 
 ### Affinity (Node Targeting)
@@ -120,7 +120,7 @@ Ports can be dynamic (assigned at runtime) or fixed:
 
 **Fixed ports (process jobs):** If the specified port is already in use, the job will be rejected with an error.
 
-**Docker jobs:** Port values are container ports. Host ports are always dynamically allocated. Example: `{"http": 80}` → `-p <random>:80`.
+**Docker jobs:** Ports behave exactly like process jobs — the value is the host port, and Docker maps it to the same container port. Example: `{"http": 8080}` → `-p 8080:8080`; `{"http": 0}` → `-p <dynamic>:<dynamic>`. The container app reads `ER_PORT_HTTP` and listens on it (a stock image that listens on a fixed internal port should use that port as the value).
 
 **Environment variables:** Task gets `ER_PORT_HTTP`, `ER_PORT_GRPC`, etc. for all ports (host ports), and `ER_ATTR_NODE_OS`, `ER_ATTR_NODE_ARCH`, etc. for all node attributes (dots/dashes become underscores, uppercased).
 
