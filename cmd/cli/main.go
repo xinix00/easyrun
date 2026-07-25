@@ -329,15 +329,11 @@ func showAgentDetails(agent *types.Agent) error {
 	fmt.Printf("LastSeen: %s\n", agent.LastSeen.Format("15:04:05"))
 	fmt.Println()
 
-	capResp, err := http.Get(agent.Endpoint + "/capacity")
+	// Signed, via the leader proxy — never an unsigned direct hit to the agent
+	// (that 401s on any cluster with an API key).
+	capBytes, err := doRequest("GET", "/v1/agents/"+agent.ID+"/capacity", nil)
 	if err != nil {
 		fmt.Printf("Capacity: (unavailable - %v)\n", err)
-		return nil
-	}
-	defer capResp.Body.Close()
-
-	if capResp.StatusCode != http.StatusOK {
-		fmt.Printf("Capacity: (unavailable - status %d)\n", capResp.StatusCode)
 		return nil
 	}
 
@@ -349,7 +345,7 @@ func showAgentDetails(agent *types.Agent) error {
 		TasksRunning    int               `json:"tasks_running"`
 		Attributes      map[string]string `json:"attributes"`
 	}
-	if err := json.NewDecoder(capResp.Body).Decode(&cap); err != nil {
+	if err := json.Unmarshal(capBytes, &cap); err != nil {
 		fmt.Printf("Capacity: (unavailable - %v)\n", err)
 		return nil
 	}
