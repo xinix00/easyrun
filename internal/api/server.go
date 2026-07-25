@@ -69,6 +69,10 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 	s.server = &http.Server{
 		Addr:    addr,
 		Handler: mux,
+		// Slowloris guard: headers (incl. the X-Hop-Auth signature) must arrive
+		// promptly. No WriteTimeout — /v1/events is a long-lived SSE stream.
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	return s

@@ -67,6 +67,28 @@ func TestRequireHMAC_ValidSignatureWithBody(t *testing.T) {
 	}
 }
 
+func TestRequireHMAC_BodyTooLarge(t *testing.T) {
+	called := false
+	handler := RequireHMAC("secret123", func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Oversized body with no valid signature: the cap must trip during the
+	// read, before auth is even checked — that is the pre-auth DoS guard.
+	big := bytes.Repeat([]byte("a"), maxBodyBytes+1)
+	req := httptest.NewRequest("POST", "/v1/jobs", bytes.NewReader(big))
+	rec := httptest.NewRecorder()
+	handler(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", rec.Code)
+	}
+	if called {
+		t.Error("handler must not run for an oversized body")
+	}
+}
+
 func TestRequireHMAC_MissingSignature(t *testing.T) {
 	handler := RequireHMAC("secret123", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

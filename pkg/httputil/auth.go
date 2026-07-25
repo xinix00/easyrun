@@ -5,9 +5,17 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"net/http"
 )
+
+// maxBodyBytes caps the request body RequireHMAC buffers to verify the
+// signature. The body MUST be read before auth can be checked (the signature
+// covers sha256(body) — there is no key on the wire to check first), so this
+// is the guard against a pre-auth memory DoS. Set far above any real payload
+// (a job spec is kilobytes); it only trips on an absurd body, returning 413.
+const maxBodyBytes = 8 << 20 // 8 MiB
 
 // AuthHeader carries the request signature. The shared key never travels on
 // the wire; only this HMAC does.
@@ -58,9 +66,15 @@ func RequireHMAC(key string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var body []byte
 		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 			b, err := io.ReadAll(r.Body)
 			if err != nil {
-				WriteError(w, http.StatusBadRequest, "failed to read body")
+				var maxErr *http.MaxBytesError
+				if errors.As(err, &maxErr) {
+					WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
+				} else {
+					WriteError(w, http.StatusBadRequest, "failed to read body")
+				}
 				return
 			}
 			body = b
