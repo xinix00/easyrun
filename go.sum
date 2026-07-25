@@ -1,5 +1,9 @@
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
+github.com/xinix00/hoplock v0.2.0 h1:JD1S2wLyaYrTXP9KTNAASEOtEOZrg8J9L4GwKHxclOA=
+github.com/xinix00/hoplock v0.2.0/go.mod h1:cOs6dvSyw5Xvgv+x4J/ixXLFUmK6rFxkV+7OG5w5a5M=
+github.com/xinix00/hoplockserver v0.1.1 h1:RA3+ZueDLYmATaUyg8FpqLiAbNafQY0u1hPqODAQFQE=
+github.com/xinix00/hoplockserver v0.1.1/go.mod h1:ut1TtQ4m3KT6iCLsHWV9ziMGhTxK61GMWdtCbGGo2aA=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=
