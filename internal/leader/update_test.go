@@ -383,8 +383,8 @@ func TestFindJobByName(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Store jobs via DispatchJob so store is populated
-	leader.DispatchJob(&types.Job{Name: "app-1", Command: "echo"})
-	leader.DispatchJob(&types.Job{Name: "app-2", Command: "echo"})
+	_ = leader.DispatchJob(&types.Job{Name: "app-1", Command: "echo"})
+	_ = leader.DispatchJob(&types.Job{Name: "app-2", Command: "echo"})
 
 	// Find by name via store (name is the unique key)
 	job := store.GetJob("app-1")

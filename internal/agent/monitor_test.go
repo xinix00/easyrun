@@ -461,7 +461,7 @@ func TestCheckHealthTCP(t *testing.T) {
 	}()
 
 	var port int
-	fmt.Sscanf(ln.Addr().String(), "127.0.0.1:%d", &port)
+	_, _ = fmt.Sscanf(ln.Addr().String(), "127.0.0.1:%d", &port)
 
 	cfg := testConfig()
 	agent := New(cfg, "test-agent", NewMockRunner())
@@ -528,7 +528,7 @@ func TestCheckHealthFile(t *testing.T) {
 
 	// Touch the file to update mtime
 	time.Sleep(10 * time.Millisecond)
-	os.Chtimes(f.Name(), time.Now(), time.Now())
+	_ = os.Chtimes(f.Name(), time.Now(), time.Now())
 
 	if !agent.checkHealth(task, hc) {
 		t.Error("FILE health check should succeed when file was recently modified")

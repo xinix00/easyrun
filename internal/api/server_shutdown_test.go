@@ -29,7 +29,7 @@ func TestServerPortNotReleasedWithoutStop(t *testing.T) {
 	leaderCtx, leaderCancel := context.WithCancel(ctx)
 	srv := NewServer(l, addr, "", "test")
 	_ = srv
-	go srv.Run(leaderCtx)
+	go func() { _ = srv.Run(leaderCtx) }()
 	waitForPort(t, addr)
 
 	// Cancel context (like "Lost leadership") — port release is async
@@ -70,7 +70,7 @@ func TestServerPortReleasedWithExplicitStop(t *testing.T) {
 	// Start server in goroutine (like becomeLeader does)
 	leaderCtx, leaderCancel := context.WithCancel(ctx)
 	srv := NewServer(l, addr, "", "test")
-	go srv.Run(leaderCtx)
+	go func() { _ = srv.Run(leaderCtx) }()
 	waitForPort(t, addr)
 
 	// Explicit Stop (synchronous) + cancel context
@@ -82,7 +82,7 @@ func TestServerPortReleasedWithExplicitStop(t *testing.T) {
 	leaderCtx2, leaderCancel2 := context.WithCancel(ctx)
 	defer leaderCancel2()
 
-	go srv2.Run(leaderCtx2)
+	go func() { _ = srv2.Run(leaderCtx2) }()
 	waitForPort(t, addr)
 
 	// Verify new server is serving

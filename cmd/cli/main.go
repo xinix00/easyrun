@@ -115,7 +115,7 @@ func runApply(args []string) error {
 		}
 	}
 
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	if *name == "" {
 		return fmt.Errorf("--name is required")
@@ -377,7 +377,7 @@ func showAgentDetails(agent *types.Agent) error {
 func runLogs(args []string) error {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	stream := fs.String("stream", "stdout", "Log stream (stdout or stderr)")
-	fs.Parse(args)
+	_ = fs.Parse(args)
 
 	taskID := fs.Arg(0)
 	if taskID == "" {

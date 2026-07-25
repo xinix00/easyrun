@@ -21,9 +21,9 @@ func mockAgentServer() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/tasks":
-			json.NewEncoder(w).Encode([]interface{}{})
+			_ = json.NewEncoder(w).Encode([]interface{}{})
 		case r.URL.Path == "/run":
-			json.NewEncoder(w).Encode(map[string]string{"status": "ok", "task_id": "bench-task"})
+			_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "task_id": "bench-task"})
 		default:
 			w.WriteHeader(200)
 		}

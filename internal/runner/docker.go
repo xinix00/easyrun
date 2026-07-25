@@ -106,7 +106,7 @@ func (r *DockerRunner) Run(job *types.Job, task *types.Task) error {
 	if err != nil {
 		return fmt.Errorf("docker pull failed: %w", err)
 	}
-	io.Copy(io.Discard, resp.Body)
+	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 
 	// Build port bindings and exposed ports
@@ -324,9 +324,9 @@ func (r *DockerRunner) startLogStreaming(taskID, containerName string) {
 				return
 			}
 			if header[0] == 1 {
-				stdoutB.Write(payload)
+				_, _ = stdoutB.Write(payload)
 			} else {
-				stderrB.Write(payload)
+				_, _ = stderrB.Write(payload)
 			}
 		}
 	}()
