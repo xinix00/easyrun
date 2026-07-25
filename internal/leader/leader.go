@@ -260,7 +260,8 @@ func (l *Leader) GetAgents() []*types.Agent {
 	return query(l, func(s *leaderState) []*types.Agent {
 		agents := make([]*types.Agent, 0, len(s.agents))
 		for _, a := range s.agents {
-			agents = append(agents, a)
+			cp := *a // copy: callers marshal/read this off the state loop while Heartbeat mutates LastSeen/Version
+			agents = append(agents, &cp)
 		}
 		return agents
 	})

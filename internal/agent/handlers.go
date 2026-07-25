@@ -188,7 +188,8 @@ func (a *Agent) handleTasks(w http.ResponseWriter, r *http.Request) {
 	tasks := query(a, func(s *agentState) []*types.Task {
 		result := make([]*types.Task, 0, len(s.tasks))
 		for _, t := range s.tasks {
-			result = append(result, t)
+			cp := *t // copy: marshalled on this HTTP goroutine while the monitor writes State/CPU/Mem
+			result = append(result, &cp)
 		}
 		return result
 	})
