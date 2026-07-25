@@ -12,6 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -137,22 +139,91 @@ func NewS3StateStore(cfg S3BackendConfig, clusterName string) *S3StateStore {
 //     geen jobs meer die elders draaiden.
 //   - mem / standalone ⇒ nil: in-process, geen netwerk-state nodig (de agent
 //     bewaart z'n lokale state.json).
-func StateStoreFromConfig(cfg *config.Config) StatePersister {
-	if s3c := cfg.Cluster.Lock.S3; s3c.Bucket != "" && s3c.Endpoint != "" {
-		return NewS3StateStore(S3BackendConfig{
-			Endpoint:        s3c.Endpoint,
-			Bucket:          s3c.Bucket,
-			Region:          s3c.Region,
-			AccessKeyID:     s3c.AccessKeyID,
-			SecretAccessKey: s3c.SecretAccessKey,
-			SessionToken:    s3c.SessionToken,
-			UsePathStyle:    s3c.UsePathStyle,
-		}, cfg.Cluster.Name)
+func StateStoreFromConfig(cfg *config.Config, standalone bool) StatePersister {
+	// The backend that holds the lease holds the state. Mirror buildBackend:
+	// a distributed lock (S3 / hoplockserver) → the matching remote store; an
+	// in-process lock (standalone / mem / no remote) → a local crash-safe file.
+	// Same StatePersister interface either way — only the backend differs, so
+	// there is one write path and never a nil persister (the leader always has
+	// a durable home for desired state).
+	if !standalone {
+		if s3c := cfg.Cluster.Lock.S3; s3c.Bucket != "" && s3c.Endpoint != "" {
+			return NewS3StateStore(S3BackendConfig{
+				Endpoint:        s3c.Endpoint,
+				Bucket:          s3c.Bucket,
+				Region:          s3c.Region,
+				AccessKeyID:     s3c.AccessKeyID,
+				SecretAccessKey: s3c.SecretAccessKey,
+				SessionToken:    s3c.SessionToken,
+				UsePathStyle:    s3c.UsePathStyle,
+			}, cfg.Cluster.Name)
+		}
+		if lc := cfg.Cluster.Lock; (lc.Type == "" || lc.Type == "hoplockserver") && lc.URL != "" {
+			return NewHoplockServerStateStore(lc.URL, lc.APIKey, cfg.Cluster.Name)
+		}
 	}
-	if lc := cfg.Cluster.Lock; (lc.Type == "" || lc.Type == "hoplockserver") && lc.URL != "" {
-		return NewHoplockServerStateStore(lc.URL, lc.APIKey, cfg.Cluster.Name)
+	return NewFileStateStore(cfg.Paths.StateFile)
+}
+
+// FileStateStore persists the committed cluster state to a local file. It is
+// the StatePersister for single-node / standalone mode, where the lease lives
+// in-process and the state has nowhere remote to go. Writes are crash-safe:
+// tmp file + fsync + atomic rename + directory fsync, so a crash or a full
+// disk never leaves a half-written or truncated state file (unlike a plain
+// truncate-in-place write).
+type FileStateStore struct {
+	path string
+}
+
+// NewFileStateStore wires the state file at path.
+func NewFileStateStore(path string) *FileStateStore {
+	return &FileStateStore{path: path}
+}
+
+// Save atomically overwrites the state file.
+func (s *FileStateStore) Save(_ context.Context, snapshot []byte) error {
+	dir := filepath.Dir(s.path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("state file: mkdir %s: %w", dir, err)
+	}
+	tmp, err := os.CreateTemp(dir, ".state-*.tmp")
+	if err != nil {
+		return fmt.Errorf("state file: temp: %w", err)
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if _, err := tmp.Write(snapshot); err != nil {
+		tmp.Close()
+		return fmt.Errorf("state file: write: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return fmt.Errorf("state file: fsync: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("state file: close: %w", err)
+	}
+	if err := os.Rename(tmpName, s.path); err != nil {
+		return fmt.Errorf("state file: rename: %w", err)
+	}
+	// fsync the directory so the rename itself is durable across a crash.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		_ = d.Close()
 	}
 	return nil
+}
+
+// Load reads the state file; ok=false when it does not exist (clean boot).
+func (s *FileStateStore) Load(_ context.Context) ([]byte, bool, error) {
+	data, err := os.ReadFile(s.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("state file: read %s: %w", s.path, err)
+	}
+	return data, true, nil
 }
 
 // Save overschrijft de snapshot (enige schrijver: de leaseholder).

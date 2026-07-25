@@ -221,36 +221,6 @@ func TestAgentStateTimeUpdatesOnStoreJob(t *testing.T) {
 	}
 }
 
-func TestAgentSaveStateDoesNotChangeStateTime(t *testing.T) {
-	cfg := testConfig()
-	mockRunner := NewMockRunner()
-	agent := New(cfg, "test-agent", mockRunner)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go agent.stateLoop(ctx)
-
-	time.Sleep(10 * time.Millisecond)
-
-	// StoreJob to set a stateTime
-	agent.StoreJob(&types.Job{Name: "test", Command: "echo"})
-	time.Sleep(10 * time.Millisecond)
-
-	beforeSave := agent.GetStateTime()
-
-	// SaveState should NOT change stateTime (only persist it)
-	time.Sleep(50 * time.Millisecond) // Wait a bit so time.Now() would be different
-	agent.SaveState()
-	time.Sleep(10 * time.Millisecond)
-
-	afterSave := agent.GetStateTime()
-
-	// StateTime should remain the same after SaveState
-	if !afterSave.Equal(beforeSave) {
-		t.Errorf("SaveState changed stateTime from %v to %v", beforeSave, afterSave)
-	}
-}
-
 // ============== CONCURRENT ACCESS TESTS ==============
 
 func TestAgentConcurrentStateAccess(t *testing.T) {

@@ -2,17 +2,13 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"hop/internal/runner"
@@ -20,12 +16,6 @@ import (
 	"hop/pkg/config"
 	"hop/pkg/httputil"
 )
-
-// State represents persisted state
-type State struct {
-	Jobs    []*types.Job `json:"jobs"`
-	Updated time.Time    `json:"updated"`
-}
 
 const (
 	defaultMaxRestarts     = 5
@@ -61,7 +51,6 @@ type Agent struct {
 	apiKey     string        // API key for authenticating with leader and protecting local endpoints
 	shutdownCh chan struct{} // closed by shutdown() — long-running goroutines select on this
 
-	needsSave   atomic.Bool            // flag for debounced persistence
 	checkStates map[string]*checkState // health check state per task (monitor goroutine only)
 }
 
@@ -354,7 +343,6 @@ func (a *Agent) stopTasks(tasks []*types.Task) {
 		}(task)
 	}
 	wg.Wait()
-	a.scheduleSave()
 }
 
 // markRunningAsStopping returns every task that needs stopping. Already-
@@ -496,7 +484,6 @@ func (a *Agent) DeleteJob(name string) {
 		delete(s.jobs, name)
 		s.stateTime = time.Now()
 	})
-	a.scheduleSave()
 }
 
 // GetStateTime returns when state was last updated
@@ -506,7 +493,8 @@ func (a *Agent) GetStateTime() time.Time {
 	})
 }
 
-// SyncJobs updates local jobs from leader and persists to disk
+// SyncJobs updates local jobs from leader (used only while this node is leader;
+// durable persistence is the leader's StatePersister, not a per-agent file).
 func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 	a.do(func(s *agentState) {
 		for _, job := range jobs {
@@ -514,77 +502,6 @@ func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 		}
 		s.stateTime = updated
 	})
-	a.scheduleSave()
-}
-
-// scheduleSave signals that state should be persisted (debounced by monitor loop)
-func (a *Agent) scheduleSave() {
-	a.needsSave.Store(true)
-}
-
-// LoadState loads jobs from state.json on startup
-func (a *Agent) LoadState() error {
-	path := a.config.Paths.StateFile
-	data, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("No state file found at %s, starting fresh", path)
-			return nil
-		}
-		return err
-	}
-
-	var state State
-	if err := json.Unmarshal(data, &state); err != nil {
-		return err
-	}
-
-	a.do(func(s *agentState) {
-		for _, job := range state.Jobs {
-			s.jobs[job.Name] = job
-		}
-		s.stateTime = state.Updated
-	})
-
-	log.Printf("Loaded %d jobs from %s (updated %s)", len(state.Jobs), path, state.Updated.Format(time.RFC3339))
-	return nil
-}
-
-// SaveState persists jobs to state.json
-func (a *Agent) SaveState() {
-	type snapshot struct {
-		jobs    []*types.Job
-		updated time.Time
-	}
-	snap := query(a, func(s *agentState) snapshot {
-		jobs := make([]*types.Job, 0, len(s.jobs))
-		for _, j := range s.jobs {
-			jobs = append(jobs, j)
-		}
-		return snapshot{jobs, s.stateTime}
-	})
-
-	state := State{
-		Jobs:    snap.jobs,
-		Updated: snap.updated,
-	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		log.Printf("Failed to marshal state: %v", err)
-		return
-	}
-
-	path := a.config.Paths.StateFile
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		log.Printf("Failed to create state dir: %v", err)
-		return
-	}
-
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		log.Printf("Failed to save state: %v", err)
-	}
 }
 
 // resourceUsage returns total CPU shares and memory used by running/stopping tasks.

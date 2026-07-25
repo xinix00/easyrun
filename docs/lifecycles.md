@@ -53,7 +53,9 @@ goes through an ops channel served by exactly one goroutine.
      taskdirs** ([process.go:381](../internal/runner/process.go#L381)) —
      just ensures `/tmp/hop` exists and is 0777. Stale dirs from a crashed
      predecessor stay; operator reboots if they care.
-   - `ag.LoadState()` — read `state.json`, restore jobs (not tasks).
+   - No local state load: the agent starts with an empty job store. If this
+     node becomes leader it loads desired state from the `StatePersister`
+     (`LoadCommittedState`); a pure agent is (re)dispatched by the leader.
    - Start the heartbeat loop in a goroutine (ticker every 10s).
    - `ag.Run(ctx)` — HTTP server + monitor goroutine. Blocks.
 

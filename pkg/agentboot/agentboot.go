@@ -46,9 +46,10 @@ type Options struct {
 }
 
 // Run boots the agent (+ leader zodra deze node de election wint) and blocks
-// until ctx is cancelled or the agent's HTTP server stops. Init/LoadState are
+// until ctx is cancelled or the agent's HTTP server stops. Init is
 // intentionally skipped: HopOS boots from a clean slate ("niets is
 // persistent") and the exec/docker cleanup paths assume a POSIX filesystem.
+// Desired state, when durable, lives in the leader's StatePersister.
 func Run(ctx context.Context, o Options) error {
 	cfg, sm := o.Config, o.Slots
 	if cfg == nil || sm == nil || o.NodeID == "" {
@@ -131,12 +132,12 @@ func Run(ctx context.Context, o Options) error {
 		// naast de lease en laadt hij hem bij boot terug — een reboot
 		// herplaatst de jobs (declaratief). Object weghalen = schoon booten.
 		cleanBoot := true
-		// clustered-gate: agentboot doet alleen in-memory of S3-election, nooit
-		// hoplockserver. Zonder deze check zou een hoplockserver-URL in de config
-		// wél een gedeelde state-store opleveren terwijl election in-memory is —
-		// meerdere nodes clobberen dan één snapshot. (cmd/agent doet wél
-		// hoplockserver-election en krijgt de state-store daar.)
-		if st := discovery.StateStoreFromConfig(cfg); clustered && st != nil {
+		// The persister follows the lock backend: S3 in cluster mode, else a
+		// local crash-safe file (!clustered). agentboot only does in-memory or
+		// S3 election, so a hoplockserver URL in the config must NOT become a
+		// shared remote store here (independent in-memory leaders would clobber
+		// it) — passing !clustered forces the local file for that case.
+		if st := discovery.StateStoreFromConfig(cfg, !clustered); st != nil {
 			l.SetStatePersister(st)
 			loaded, err := l.LoadCommittedState(leaderCtx)
 			if err != nil {

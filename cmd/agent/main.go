@@ -147,11 +147,6 @@ func run(ctx context.Context, cfg *config.Config, nodeID string, standalone bool
 		log.Fatalf("Failed to initialize agent: %v", err)
 	}
 
-	// Load persisted state (jobs from last run)
-	if err := ag.LoadState(); err != nil {
-		log.Printf("Warning: failed to load state: %v", err)
-	}
-
 	loop := &agentloop.Loop{
 		Cfg:  cfg,
 		Ag:   ag,
@@ -164,7 +159,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string, standalone bool
 		},
 		DoBecomeLeader: func() (func(), agentloop.LeaderAPI) {
 			var l *leader.Leader
-			stop := becomeLeader(ctx, cfg, ag, &l, cfg.APIKey)
+			stop := becomeLeader(ctx, cfg, ag, &l, cfg.APIKey, standalone)
 			return stop, l
 		},
 	}
@@ -232,7 +227,7 @@ func buildBackend(cfg *config.Config, standalone bool) (hoplock.Backend, error) 
 	}
 }
 
-func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, apiKey string) func() {
+func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, apiKey string, standalone bool) func() {
 	log.Println("Became leader!")
 
 	// Leader gets its own context — cancelled on leadership loss (not just shutdown)
@@ -251,7 +246,7 @@ func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **
 	// terug — failover zonder state-merging (zelfde gate als agentboot,
 	// zie discovery.StateStoreFromConfig).
 	cleanBoot := true
-	if st := discovery.StateStoreFromConfig(cfg); st != nil {
+	if st := discovery.StateStoreFromConfig(cfg, standalone); st != nil {
 		(*l).SetStatePersister(st)
 		loaded, err := (*l).LoadCommittedState(leaderCtx)
 		if err != nil {

@@ -49,7 +49,7 @@ go build -o bin/run ./cmd/cli
 - **Settle period**: 30s after becoming leader, no reconciliation during this time
 - **Committed state**: leader snapshots desired state to S3 object `state/<cluster>` (next to the election lease, debounced ~1s); a new leader loads it at takeover — the snapshot is the ONLY truth (deletion is absence). See internal/leader/persist.go
 - **Init jobs**: `cluster.init_jobs` in config seeds a baseline on a clean boot (no snapshot AND empty job store) — one-shot via the normal dispatch path, never continuous enforcement; store errors never trigger a seed. See internal/leader/init.go
-- **State persistence (local)**: ./data/state-{cluster}.json (debounced save, 5s)
+- **State persistence**: one path — the leader's `StatePersister`. Backend follows the lock: S3 or hoplockserver (remote) in a cluster, a local crash-safe file (`paths.state_file`, tmp+fsync+rename) in standalone/mem. Agents keep no statefile; a rebooted agent is re-dispatched by the leader (nodes are stateless in cluster mode).
 - **Node ID**: persisted in data/node-id, survives restarts
 - **MaxRestarts**: *int — nil/omitted = default 5, 0 = no restarts, -1 = unlimited
 - **Version**: injected at build time via `-ldflags "-X main.version=..."` (default: "dev")

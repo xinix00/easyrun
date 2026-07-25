@@ -45,7 +45,7 @@ Multi-node lokaal? Start hoplockserver en geef elke agent `--lock`:
     /agent/
         agent.go           # Agent state loop, JobStore, state persistence
         handlers.go        # Agent HTTP handlers, proxy to leader, CORS
-        monitor.go         # Task monitoring (health checks, restarts, debounced save)
+        monitor.go         # Task monitoring (health checks, restarts)
         sysinfo.go         # System info interface
         sysinfo_darwin.go  # macOS: CPU/memory detection
         sysinfo_linux.go   # Linux: CPU/memory detection

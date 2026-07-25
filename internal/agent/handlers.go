@@ -358,7 +358,6 @@ func (a *Agent) handleStopTask(w http.ResponseWriter, r *http.Request) {
 		a.do(func(s *agentState) {
 			delete(s.tasks, taskID)
 		})
-		a.scheduleSave()
 	}()
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]string{"stopped": taskID})
@@ -467,7 +466,6 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 		_ = a.runnerFor(job.Driver).Stop(task)
 		return nil
 	}
-	a.scheduleSave()
 
 	log.Printf("Started task %s (job %s) with ports %v, pid %d", task.ID, job.Name, ports, task.Pid)
 	if job.HealthCheck != nil {
@@ -659,7 +657,6 @@ func (a *Agent) deleteJob(jobName string) int {
 		}
 		return tasks
 	})
-	a.scheduleSave()
 
 	a.stopTasks(tasks)
 	for _, task := range tasks {
