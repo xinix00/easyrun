@@ -75,6 +75,7 @@ func runApply(args []string) error {
 	command := fs.String("command", "", "Command to run")
 	image := fs.String("image", "", "Docker image")
 	driver := fs.String("driver", "", "Driver: exec (default), docker, or hop (HopOS slot; needs --artifact, no command/image)")
+	count := fs.Int("count", 0, "Number of instances (default 1, -1 = all agents)")
 	cpu := fs.Int("cpu", 0, "CPU shares")
 	memory := fs.String("memory", "", "Memory limit (e.g., 512M, 1G)")
 	priorityFlag := fs.Int("priority", -1, "Scheduling priority (0=highest, omit to append at end)")
@@ -129,7 +130,7 @@ func runApply(args []string) error {
 		return fmt.Errorf("either --command or --image is required")
 	}
 
-	job := buildJob(*name, *command, *image, *driver, *cpu, *memory, *priorityFlag,
+	job := buildJob(*name, *command, *image, *driver, *count, *cpu, *memory, *priorityFlag,
 		envFlags, artifactFlags, affinityFlags, tagFlags,
 		*checkType, *checkPath, *checkPort, *checkFailures, *updatePolicy)
 
@@ -155,7 +156,7 @@ func runApply(args []string) error {
 }
 
 // buildJob constructs a Job from CLI flags
-func buildJob(name, command, image, driver string, cpu int, memory string, priorityFlag int,
+func buildJob(name, command, image, driver string, count, cpu int, memory string, priorityFlag int,
 	envFlags, artifactFlags, affinityFlags, tagFlags []string,
 	checkType, checkPath, checkPort string, checkFailures int,
 	updatePolicy string) types.Job {
@@ -165,6 +166,7 @@ func buildJob(name, command, image, driver string, cpu int, memory string, prior
 		Command:      command,
 		Image:        image,
 		Driver:       driver,
+		Count:        count,
 		CPUShares:    cpu,
 		UpdatePolicy: types.UpdatePolicy(updatePolicy),
 	}
@@ -390,48 +392,24 @@ func runLogs(args []string) error {
 		return fmt.Errorf("stream must be stdout or stderr")
 	}
 
-	// Find which agent has this task via cluster status
-	resp, err := doRequest("GET", "/v1/status", nil)
+	// Resolve which agent runs this task. tasks_by_agent lives in the per-job
+	// status endpoint (/v1/jobs/<name>/status), NOT /v1/status — so scan jobs.
+	agentID, err := findTaskAgent(taskID)
 	if err != nil {
 		return err
 	}
 
-	var status struct {
-		TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
-	}
-	if err := json.Unmarshal(resp, &status); err != nil {
-		return err
-	}
-
-	var agentEndpoint string
-	for agent, tasks := range status.TasksByAgent {
-		for _, task := range tasks {
-			if task.ID == taskID {
-				agentEndpoint = agent
-				break
-			}
-		}
-		if agentEndpoint != "" {
-			break
-		}
-	}
-
-	if agentEndpoint == "" {
-		return fmt.Errorf("task %s not found", taskID)
-	}
-
-	url := fmt.Sprintf("http://%s/logs/%s/%s", agentEndpoint, taskID, *stream)
-	resp2, err := http.Get(url)
+	// Stream through the SIGNED leader proxy — never an unsigned direct hit.
+	resp, err := signedGet(fmt.Sprintf("/v1/agents/%s/logs/%s/%s", agentID, taskID, *stream))
 	if err != nil {
-		return fmt.Errorf("failed to connect to agent: %w", err)
+		return fmt.Errorf("failed to connect to leader: %w", err)
 	}
-	defer resp2.Body.Close()
-
-	if resp2.StatusCode != http.StatusOK {
-		return fmt.Errorf("agent returned status %d", resp2.StatusCode)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("leader returned status %d", resp.StatusCode)
 	}
 
-	scanner := bufio.NewScanner(resp2.Body)
+	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
 		if strings.HasPrefix(line, "data: ") {
@@ -439,6 +417,53 @@ func runLogs(args []string) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// findTaskAgent returns the ID of the agent running taskID, by scanning each
+// job's status (which reports tasks_by_agent, keyed by agent ID).
+func findTaskAgent(taskID string) (string, error) {
+	jobsResp, err := doRequest("GET", "/v1/jobs", nil)
+	if err != nil {
+		return "", err
+	}
+	var jobs []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(jobsResp, &jobs); err != nil {
+		return "", err
+	}
+	for _, j := range jobs {
+		st, err := doRequest("GET", "/v1/jobs/"+j.Name+"/status", nil)
+		if err != nil {
+			continue
+		}
+		var status struct {
+			TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
+		}
+		if err := json.Unmarshal(st, &status); err != nil {
+			continue
+		}
+		for agentID, tasks := range status.TasksByAgent {
+			for _, t := range tasks {
+				if t.ID == taskID {
+					return agentID, nil
+				}
+			}
+		}
+	}
+	return "", fmt.Errorf("task %s not found", taskID)
+}
+
+// signedGet issues a signed GET to the leader and returns the live response
+// (the caller streams and closes the body). Used for log streaming, which
+// doRequest cannot do because it buffers the whole body.
+func signedGet(path string) (*http.Response, error) {
+	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s%s", leaderAddr, path), nil)
+	if err != nil {
+		return nil, err
+	}
+	httputil.SignRequest(req, apiKey, nil)
+	return http.DefaultClient.Do(req)
 }
 
 // parseKV parses "k=v,k2=v2" into a map
