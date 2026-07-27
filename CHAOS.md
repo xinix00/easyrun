@@ -244,19 +244,21 @@ hop_job_instances_running < hop_job_instances_expected
 - Clock skew between nodes
 - DNS failures
 - TLS certificate expiry
-- HopRaft leader election edge cases
+- hoplock lease-election edge cases
 
 ## Known Limitations
 
 **Single leader = SPOF:**
 - If leader dies, no dispatching until failover
 - Existing tasks keep running (agents are autonomous)
-- Failover typically <5 seconds with HopRaft
+- Failover ~60s worst case: 3×10s failure detection + 30s settle (see the
+  leader failover timeline in the monorepo CLAUDE.md)
 - New leader needs settle period (30s) before reconciling
 
 **No quorum:**
 - Unlike k8s (etcd quorum), hop survives with 1 node
-- Leader election requires HopRaft quorum (3+ nodes)
+- Leader election is lease-based (hoplock CAS over a blob store) — no quorum,
+  no log replication; the lock backend (hoplockserver/S3) is the source of truth
 
 **State eventually consistent:**
 - 10 second heartbeat interval = 10s propagation delay
@@ -274,8 +276,8 @@ hop_job_instances_running < hop_job_instances_expected
 
 ```
 3 nodes minimum for HA:
-- HopRaft elects leader
-- If leader dies, new leader in <5s
+- Agents race for the hoplock lease; the CAS winner is leader
+- If leader dies, a survivor wins the expired lease (~60s worst case)
 - Settle period (30s) for agents to register
 - Reconciliation restores desired state
 ```

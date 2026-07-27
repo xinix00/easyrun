@@ -10,7 +10,7 @@ go build -o ../bin/agent ./cmd/agent
 go build -o ../bin/run ./cmd/cli
 ```
 
-## Standalone Mode (No Raft)
+## Standalone Mode (single-node)
 
 ```bash
 # Single-node dev/testing - agent becomes leader automatically
@@ -20,7 +20,7 @@ go build -o ../bin/run ./cmd/cli
 # Starting hop agent dev
 # Node a1b2c3d4 on 192.168.1.5:8080
 # Cluster: dev
-# Running in standalone mode (no raft)
+# Running in standalone mode (in-memory lock backend)
 # Became leader!
 ```
 
@@ -41,12 +41,16 @@ export HOP_LEADER=localhost:9080
 
 ## Multi-Node Cluster
 
-```bash
-# 1. Start HopRaft (leader election)
-# See hopraft/ for setup
+Leader election runs over a shared lock backend (hoplockserver, or any
+S3-compatible object store). Point every agent at the same backend.
 
-# 2. Start agents on each node
-../bin/agent --cluster=my-cluster --raft http://raft-server:7080
+```bash
+# 1. Start hoplockserver (lease store for leader election)
+#    See hoplockserver/README.md for setup — or use S3/R2 instead.
+../bin/hoplockserver -listen :8090 -data ./data/lock
+
+# 2. Start agents on each node, all pointing at the same lock backend
+../bin/agent --cluster=my-cluster --lock http://lock-server:8090
 
 # 3. Deploy a job
 ../bin/run deploy --name api --command "./server"
@@ -60,8 +64,9 @@ Only needed for custom requirements:
 # config.yaml
 cluster:
   name: "my-cluster"
-  raft_endpoints:
-    - "http://10.0.0.1:7080"
+  lock:
+    type: "hoplockserver"   # "" (default) | "hoplockserver" | "s3" | "mem"
+    url: "http://10.0.0.1:8090"
 
 node:
   port: 8080
@@ -87,7 +92,7 @@ After=network.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/agent --cluster=my-cluster --raft http://raft-server:7080
+ExecStart=/usr/local/bin/agent --cluster=my-cluster --lock http://lock-server:8090
 Restart=always
 RestartSec=5
 

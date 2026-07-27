@@ -42,7 +42,8 @@ sequenceDiagram
     M->>M: getOrCreateNodeID(cfg)
     M->>M: getOutboundIP()
 
-    M->>D: discovery.New(cluster, ip, port, raftEndpoints, lease)
+    M->>M: buildBackend(cfg) → hoplock.Backend (hoplockserver / S3 / mem)
+    M->>D: discovery.New(backend, ip, leaderPort, leaseTTL)
     D-->>M: disc
 
     M->>A: agent.New(cfg, nodeID, nil)
@@ -86,7 +87,7 @@ sequenceDiagram
     participant SL as stateLoop
 
     M->>D: TryBecomeLeader()
-    D->>D: POST /leader/{cluster} naar HopRaft
+    D->>D: conditional CAS write van de lease-blob (PUT If-None-Match) → lock backend
     D-->>M: true (success)
 
     M->>M: becomeLeader()
@@ -136,13 +137,13 @@ sequenceDiagram
 
     alt Wij zijn leader
         T->>D: RenewLease()
-        D->>D: POST /leader/{cluster} naar HopRaft
-        alt Raft bereikbaar
+        D->>D: CAS renew van de lease-blob (PUT If-Match op laatste ETag) → lock backend
+        alt Lock backend bereikbaar
             D-->>T: true
             T->>T: failCount = 0
             T->>API: sendHeartbeat(self)
             Note over T: Leader heartbeat naar zichzelf
-        else Raft onbereikbaar
+        else Lock backend onbereikbaar
             D-->>T: false
             alt Agents nog connected
                 T->>L: GetAgents()
@@ -557,7 +558,7 @@ sequenceDiagram
     participant A1 as Agent A (was follower)
     participant A2 as Agent B (was follower)
     participant OLD as Old Leader (crashed)
-    participant RAFT as HopRaft
+    participant LK as Lock backend (hoplockserver/S3)
     participant NL as New Leader (A1)
 
     Note over OLD: T=0s: Leader crasht
@@ -570,8 +571,8 @@ sequenceDiagram
 
     Note over A1: T≈30s: failCount >= 3
 
-    A1->>RAFT: TryBecomeLeader()
-    RAFT-->>A1: success!
+    A1->>LK: TryBecomeLeader() — CAS write op de verlopen lease
+    LK-->>A1: success!
     A1->>A1: becomeLeader()
 
     A1->>NL: leader.New() + EnableSettle()
@@ -586,10 +587,10 @@ sequenceDiagram
     A2->>OLD: POST /v1/heartbeat
     OLD--xA2: Connection refused
     A2->>A2: failCount >= 3
-    A2->>RAFT: TryBecomeLeader()
-    RAFT-->>A2: false (A1 is al leader)
-    A2->>RAFT: GetLeader()
-    RAFT-->>A2: A1 address
+    A2->>LK: TryBecomeLeader() — CAS write op de lease
+    LK-->>A2: false (lease al gehouden door A1)
+    A2->>LK: GetLeader()
+    LK-->>A2: A1 address
 
     Note over A2: T≈50s: A2 heartbeat naar A1
     A2->>NL: POST /v1/heartbeat
@@ -653,7 +654,7 @@ sequenceDiagram
 
     Note over A: failCount >= 3: Try become leader
     A->>D: TryBecomeLeader()
-    D--xA: Raft onbereikbaar
+    D--xA: Lock backend onbereikbaar
     D-->>A: false
 
     Note over A: failCount >= 6: ISOLATION MODE

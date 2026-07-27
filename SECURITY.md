@@ -252,7 +252,7 @@ graph LR
         ED[hopdns]
         EL[hoplb]
         EP[hopprom]
-        RF[hopraft]
+        LS[hoplockserver]
     end
 
     subgraph K8s["Kubernetes (15+ components)"]
@@ -375,7 +375,7 @@ groups:
 
 - [ ] Dedicated VLAN configured
 - [ ] Network ACLs (Tailscale/UniFi/firewall) defined and reviewed
-- [ ] hopraft API key generated and secured
+- [ ] hoplockserver API key (`cluster.lock.api_key`) generated and secured
 - [ ] Secrets injected via 1Password/Vault (never in job configs)
 - [ ] Disk encryption enabled on all nodes (LUKS/FileVault)
 - [ ] hopprom + Prometheus alerting configured
