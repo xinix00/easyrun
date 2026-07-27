@@ -93,6 +93,13 @@ func Run(ctx context.Context, o Options) error {
 	clustered := cfg.Cluster.Lock.Type == "s3" &&
 		cfg.Cluster.Lock.S3.Endpoint != "" && cfg.Cluster.Lock.S3.Bucket != ""
 	if clustered {
+		// De cluster-naam is de namespace op de gedeelde store: lease op
+		// "leases/<naam>", committed state op "state/<naam>". Leeg zou twee
+		// naamloze clusters op één bucket dezelfde lease én snapshot laten
+		// delen — stille clobber. cmd/agent weigert dit ook (bij boot).
+		if cfg.Cluster.Name == "" {
+			return fmt.Errorf("agentboot: cluster name required with an s3 lock backend (it namespaces leases/<name> and state/<name> on the shared bucket)")
+		}
 		s3 := cfg.Cluster.Lock.S3
 		backend = discovery.S3Backend(discovery.S3BackendConfig{
 			Endpoint:        s3.Endpoint,
