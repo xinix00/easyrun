@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"hop/internal/runner"
 	"hop/internal/types"
 )
 
@@ -1181,5 +1184,55 @@ func TestMaxRestartsOneAllowsExactlyOneRestart(t *testing.T) {
 	})
 	if failed != 1 {
 		t.Errorf("Expected 1 failed task in state, got %d", failed)
+	}
+}
+
+// TestUnplaceableJobIsNotRestarted pins the anti-storm rule: a job the node
+// cannot PLACE (runner.ErrNoCapacity — no free core, or the sharegroup pool does
+// not fit) must be handed back to the leader, not restarted. Before the fix the
+// agent treated it as a crash and retried with backoff (1s, 2s, 4s, 8s…) while
+// the leader kept re-dispatching, so one unplaceable app pegged a whole node
+// and starved the tasks that did run (measured 26-07 on a 3-core QEMU node).
+func TestUnplaceableJobIsNotRestarted(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+
+	var mu sync.Mutex
+	runs := 0
+	mockRunner.onRun = func(*types.Job) error {
+		mu.Lock()
+		runs++
+		mu.Unlock()
+		return fmt.Errorf("hop driver: start apploader slot 5: %w", runner.ErrNoCapacity)
+	}
+
+	agent := New(cfg, "test-agent", mockRunner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{Name: "browser", Command: "./browser"}
+	task := newTask(job)
+	agent.do(func(s *agentState) {
+		s.jobs[job.Name] = job
+		s.tasks[task.ID] = task
+	})
+
+	agent.restartTask(task)
+
+	// Exactly one attempt: no backoff ladder, no recursion.
+	mu.Lock()
+	got := runs
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("runner.Run called %d times, want 1 (an unplaceable job must not be retried)", got)
+	}
+
+	// And the task is gone, so the capacity accounting is restored and the next
+	// dispatch is refused up front by admission instead of failing in the runner.
+	left := query(agent, func(s *agentState) int { return len(s.tasks) })
+	if left != 0 {
+		t.Fatalf("%d task(s) left in state, want 0 (task must be handed back to the leader)", left)
 	}
 }

@@ -506,6 +506,20 @@ func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 
 // resourceUsage returns total CPU shares and memory used by running/stopping tasks.
 // Stopping tasks count because they still consume resources until fully stopped.
+// resourceUsage totals what this node has handed out. The rule is the task map
+// itself: **every task in s.tasks holds its reservation, whatever its state.**
+// A task is inserted when it is admitted (the record IS the reservation) and
+// deleted the moment it truly lets go — stop, delete, preemption, shutdown, the
+// restart swap, or an unplaceable hand-back. So presence is the question; state
+// is not.
+//
+// That is why there is no state filter here. Filtering on state is how this
+// drifted before: Failed was treated as free, so a crashed task's core was
+// handed to a new job while its own restart was about to reclaim it, and the two
+// then fought over one core (26-07: an unplaceable app slipped in during a
+// restart flap and stormed a 3-core node). A crashing task has not given
+// anything back — it is about to be restarted right here, or it is waiting for
+// an operator.
 func (s *agentState) resourceUsage() (cpu int, mem uint64) {
 	// CPU telt in HELE cores (CPUShares; 1024 = 1 core). Sharegroup-leden delen
 	// één pool cores, dus dat pool-CPU telt ÉÉN keer — niet per lid. Zonder deze
@@ -515,9 +529,6 @@ func (s *agentState) resourceUsage() (cpu int, mem uint64) {
 	// delen cores, geen RAM.
 	seenGroup := map[string]bool{}
 	for _, task := range s.tasks {
-		if task.State != types.TaskRunning && task.State != types.TaskStopping {
-			continue
-		}
 		mem += task.MemoryLimit
 		if grp := s.sharegroupOf(task); grp != "" {
 			if seenGroup[grp] {
@@ -543,9 +554,6 @@ func (s *agentState) sharegroupOf(task *types.Task) string {
 // dan is de pool-CPU al gereserveerd en kost een nieuw lid er geen cores bij.
 func (s *agentState) sharegroupRunning(grp string) bool {
 	for _, task := range s.tasks {
-		if task.State != types.TaskRunning && task.State != types.TaskStopping {
-			continue
-		}
 		if s.sharegroupOf(task) == grp {
 			return true
 		}

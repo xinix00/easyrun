@@ -42,6 +42,66 @@ func TestResourceUsageCollapsesSharegroup(t *testing.T) {
 	}
 }
 
+// TestEveryTaskInStateHoldsItsReservation pins the accounting rule: capacity is
+// decided by PRESENCE in the task map, not by task state. A task is inserted
+// when it is admitted (the record IS the reservation) and deleted the moment it
+// really lets go — stop, delete, preemption, shutdown, the restart swap, an
+// unplaceable hand-back. So a crashed or crashing task still holds its core:
+// it is about to be restarted right here, or waiting for an operator.
+//
+// Filtering on state is how this drifted before: Failed counted as free, so a
+// new job was admitted into a core that the pending restart was about to
+// reclaim, and the two fought over it (26-07: an unplaceable app slipped in
+// during a restart flap and stormed a 3-core node).
+func TestEveryTaskInStateHoldsItsReservation(t *testing.T) {
+	cfg := testConfig()
+	agent := New(cfg, "test-agent", NewMockRunner())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+
+	states := []types.TaskState{
+		types.TaskRunning,
+		types.TaskStopping, // crashed, restart in flight
+		types.TaskFailed,   // out of restarts, waiting for an operator
+		types.TaskStopped,  // never set on a live record, but presence is the rule
+	}
+	agent.do(func(s *agentState) {
+		for i, st := range states {
+			name := fmt.Sprintf("job-%d", i)
+			s.jobs[name] = &types.Job{Name: name, CPUShares: 1024}
+			s.tasks[name] = &types.Task{ID: name, JobName: name, CPUShares: 1024, MemoryLimit: 64 << 20, State: st}
+		}
+	})
+
+	want := len(states) * 1024
+	cpu := query(agent, func(s *agentState) int { c, _ := s.resourceUsage(); return c })
+	if cpu != want {
+		t.Fatalf("resourceUsage CPU = %d, want %d — every task in state holds its core, whatever its state", cpu, want)
+	}
+	mem := query(agent, func(s *agentState) uint64 { _, m := s.resourceUsage(); return m })
+	if mem != uint64(len(states))*(64<<20) {
+		t.Fatalf("resourceUsage mem = %d, want %d", mem, uint64(len(states))*(64<<20))
+	}
+
+	// Same rule for a sharegroup: a failed member keeps the pool reserved, so a
+	// joining member is still free instead of paying for the pool twice.
+	agent.do(func(s *agentState) {
+		s.jobs["grp"] = &types.Job{Name: "grp", CPUShares: 2048, Tags: map[string]string{"sharegroup": "pool"}}
+		s.tasks["g1"] = &types.Task{ID: "g1", JobName: "grp", CPUShares: 2048, MemoryLimit: 64 << 20, State: types.TaskFailed}
+	})
+	if !query(agent, func(s *agentState) bool { return s.sharegroupRunning("pool") }) {
+		t.Fatal("sharegroupRunning = false with a failed member, want true (the pool stays reserved)")
+	}
+
+	// And releasing is deletion, not a state change: drop the record and the
+	// core comes back.
+	agent.do(func(s *agentState) { delete(s.tasks, "job-0") })
+	if cpu := query(agent, func(s *agentState) int { c, _ := s.resourceUsage(); return c }); cpu != want-1024+2048 {
+		t.Fatalf("after deleting one task CPU = %d, want %d (deletion is what frees a core)", cpu, want-1024+2048)
+	}
+}
+
 // ============== BASIC AGENT TESTS ==============
 
 func TestAgentNew(t *testing.T) {

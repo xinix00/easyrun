@@ -181,6 +181,17 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 	return nil
 }
 
+// placementErr maps HopOS' "cannot place the cage" (hopos.ErrNoCapacity, raised
+// by the node's PlaceCage) onto the driver-agnostic runner.ErrNoCapacity, so the
+// agent can act on it without importing the HopOS contract: this driver knows
+// HopOS, the agent only knows runners. Anything else passes through untouched.
+func placementErr(err error) error {
+	if errors.Is(err, hopos.ErrNoCapacity) {
+		return fmt.Errorf("%w: %v", ErrNoCapacity, err)
+	}
+	return err
+}
+
 // runViaLoader realiseert "de app downloadt zijn eigen image": HOP laadt de
 // universele apploader (ingebakken in de node) in de slot met de echte URL in de
 // env; de loader fetcht op zíjn eigen core+netstack, seint "staged", en HOP
@@ -198,7 +209,7 @@ func (r *HopRunner) runViaLoader(job *types.Job, task *types.Task, slot, cores i
 	lenv["HOP_IMAGE_URL"] = job.Artifacts[0].URL
 	if err := r.sm.StartLoader(slot, job.MemoryLimit, sharegroup, poolCores, lenv); err != nil {
 		r.release(task.ID)
-		return false, fmt.Errorf("hop driver: start apploader slot %d: %w", slot, err)
+		return false, fmt.Errorf("hop driver: start apploader slot %d: %w", slot, placementErr(err))
 	}
 	// Fase 2: wachten tot de loader de echte image gestaged heeft (of de task
 	// mid-download verwijderd is), dan de echte app plaatsen — met de ÉCHTE

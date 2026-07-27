@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -277,6 +278,10 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	// Start process in background (task already in state for capacity reservation)
 	go func() {
 		if err := a.startJob(&job, task); err != nil {
+			if errors.Is(err, runner.ErrNoCapacity) {
+				a.releaseUnplaceable(job.Name, task, err)
+				return
+			}
 			log.Printf("Failed to start job %s: %v", job.Name, err)
 			a.do(func(s *agentState) {
 				if t := s.tasks[task.ID]; t != nil {
@@ -508,6 +513,24 @@ func isPortAvailable(port int) bool {
 	return true
 }
 
+// releaseUnplaceable handles a task the node accepted but cannot PLACE
+// (runner.ErrNoCapacity: no free core, or the sharegroup pool doesn't fit).
+// That is not a crash, so restarting is exactly wrong — every retry
+// re-downloads the image and fails again, and the churn starves the tasks that
+// DO run (measured 26-07: one unplaceable app pegged a whole 3-core node while
+// the leader kept re-dispatching it).
+//
+// The task never ran and the runner already released its cage, so we drop it
+// from state. That also restores the capacity accounting, which is what stops
+// the storm: the next attempt is refused up front by the admission check (503),
+// so the leader either places the job on another node or leaves it pending for
+// reconciliation — "ask everyone, drop it where one says yes".
+func (a *Agent) releaseUnplaceable(jobName string, task *types.Task, err error) {
+	log.Printf("Job %s cannot be placed on this node (%v) — task %.8s handed back to the leader, not restarted", jobName, err, task.ID)
+	a.do(func(s *agentState) { delete(s.tasks, task.ID) })
+	a.notifyLeader(jobName, "unplaceable")
+}
+
 // restartTask restarts a failed task
 func (a *Agent) restartTask(task *types.Task) {
 	job := a.GetJob(task.JobName)
@@ -626,6 +649,12 @@ func (a *Agent) restartTask(task *types.Task) {
 	}
 
 	if err := a.runnerFor(runJob.Driver).Run(runJob, replacement); err != nil {
+		if errors.Is(err, runner.ErrNoCapacity) {
+			// The node filled up while this task was down: retrying here would
+			// spin (see releaseUnplaceable). Hand it back to the leader instead.
+			a.releaseUnplaceable(job.Name, replacement, err)
+			return
+		}
 		log.Printf("Failed to restart task %s: %v", task.ID, err)
 		// Retry via restartTask (maxRestarts check prevents infinite recursion)
 		a.do(func(s *agentState) {

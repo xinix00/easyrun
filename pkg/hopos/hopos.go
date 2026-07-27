@@ -4,7 +4,19 @@
 // implement it (hop-os/metal/slotmgr wraps metal/slots).
 package hopos
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrNoCapacity is what StartLoader/StartStaged wrap when the node cannot
+// PLACE the cage: no free app core for a dedicated job, or not enough free
+// cores to open the requested sharegroup pool. It is emphatically not a crash
+// — the job is fine and will run as soon as a core frees up (or right away on
+// another node), so HOP must reject it back to pending instead of restart-
+// looping it. Restarting an unplaceable job is a storm: every retry re-downloads
+// the image and re-fails, and the churn starves the tasks that DO run.
+var ErrNoCapacity = errors.New("hopos: no free core to place the cage")
 
 // App status values, mirroring hop-os/metal/layout control-page states.
 const (

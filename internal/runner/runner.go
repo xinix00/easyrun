@@ -1,11 +1,24 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"hop/internal/types"
 )
+
+// ErrNoCapacity is what a runner reports when it cannot PLACE a task for lack of
+// room — on HopOS: no free app core, or the sharegroup pool doesn't fit. It is
+// not a crash: the task is fine and belongs on another node, or here once
+// something frees up, so the agent hands it back to the leader instead of
+// restarting it (restarting an unplaceable task is a storm — every retry
+// re-downloads the image and fails again).
+//
+// Driver-agnostic on purpose: the agent talks to runners, not to HopOS. The hop
+// driver is the only place that knows hopos.ErrNoCapacity and translates it
+// onto this one.
+var ErrNoCapacity = errors.New("runner: no capacity to place the task")
 
 // envKey converts a name to an uppercase environment variable key
 // (e.g. "node.os" → "NODE_OS", "http-port" → "HTTP_PORT")
