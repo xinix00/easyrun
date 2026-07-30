@@ -44,10 +44,14 @@ func DecodeInitJobs(specs []map[string]any) ([]*types.Job, error) {
 		if job.Driver == "" && job.Command == "" && job.Image == "" && len(job.Artifacts) == 1 {
 			job.Driver = types.DriverHop
 		}
-		// Same validity rule as the API's apply handler.
-		hopImage := job.Driver == types.DriverHop && len(job.Artifacts) == 1
+		// Same validity rule as the API's apply handler. One artifact is the
+		// common case; several is how one job spans architectures — each gets a
+		// `match` on node attributes and the agent resolves it per node
+		// (resolveJobForRun), so a hop job with two artifacts is valid here and
+		// arrives at every runner as exactly the one that fits that node.
+		hopImage := job.Driver == types.DriverHop && len(job.Artifacts) >= 1
 		if job.Command == "" && job.Image == "" && !hopImage {
-			return nil, fmt.Errorf("init job %q: command or image required (or driver \"hop\" with one artifact)", job.Name)
+			return nil, fmt.Errorf("init job %q: command or image required (or driver \"hop\" with at least one artifact)", job.Name)
 		}
 		jobs = append(jobs, &job)
 	}

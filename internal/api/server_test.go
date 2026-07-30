@@ -743,3 +743,45 @@ func (ma *testMockAgent) URL() string {
 func (ma *testMockAgent) Close() {
 	ma.server.Close()
 }
+
+// Een hop-job mag meerdere artifacts hebben: zo dekt één job meerdere
+// architecturen. Elk artifact draagt een `match` op node-attributen en de agent
+// kiest per node (resolveJobForRun), dus de runner ziet er alsnog één. De
+// validatie eiste eerst exact één en gaf 400 — dat brak de multi-arch
+// init-regel van HopOS' boot-config.
+func TestRunJobHopDriverMultipleArtifacts(t *testing.T) {
+	server, store, cancel := setupTestServer(t)
+	defer cancel()
+
+	w := doRequest(server, "POST", "/v1/jobs", types.Job{
+		Name:   "welcome",
+		Driver: types.DriverHop,
+		Artifacts: []types.Artifact{
+			{URL: "https://example.com/welcome-arm64.elf", Match: map[string]string{"node.arch": "arm64"}},
+			{URL: "https://example.com/welcome-riscv64.elf", Match: map[string]string{"node.arch": "riscv64"}},
+		},
+		MemoryLimit: 67108864,
+		Ports:       map[string]int{"http": 80},
+	})
+
+	if w.Code != 201 {
+		t.Fatalf("Status = %d, want 201 — body %s", w.Code, w.Body.String())
+	}
+	jobs := store.GetJobs()
+	if len(jobs) != 1 || len(jobs[0].Artifacts) != 2 {
+		t.Fatalf("expected 1 stored job with 2 artifacts, got %+v", jobs)
+	}
+}
+
+// Zonder command, image én artifacts blijft het een fout: er is niets om te
+// draaien. Dat is de andere kant van dezelfde regel.
+func TestRunJobHopDriverWithoutArtifacts(t *testing.T) {
+	server, _, cancel := setupTestServer(t)
+	defer cancel()
+
+	w := doRequest(server, "POST", "/v1/jobs", types.Job{Name: "leeg", Driver: types.DriverHop})
+
+	if w.Code != 400 {
+		t.Errorf("Status = %d, want 400", w.Code)
+	}
+}

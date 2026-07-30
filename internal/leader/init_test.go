@@ -135,3 +135,43 @@ func TestSeedInitJobs(t *testing.T) {
 		t.Fatalf("priorities horen de configvolgorde te volgen: dns=%d app=%d", *dns.Priority, *app.Priority)
 	}
 }
+
+// Eén init-job, meerdere artifacts: zo overspant één regel meerdere
+// architecturen — elk artifact draagt een `match` op node-attributen en de
+// agent kiest per node (resolveJobForRun), dus de runner ziet er alsnog precies
+// één. De validatie mocht dat eerst niet en keurde de job af met "command or
+// image required"; deze test is de wacht bij dat gat.
+func TestDecodeInitJobs_MeerdereArtifactsPerArchitectuur(t *testing.T) {
+	jobs, err := DecodeInitJobs([]map[string]any{{
+		"name":   "welcome",
+		"driver": "hop",
+		"artifacts": []any{
+			map[string]any{"url": "https://example.com/welcome-arm64.elf", "match": map[string]any{"node.arch": "arm64"}},
+			map[string]any{"url": "https://example.com/welcome-riscv64.elf", "match": map[string]any{"node.arch": "riscv64"}},
+		},
+		"memory_limit": 67108864,
+		"ports":        map[string]any{"http": 80},
+	}})
+	if err != nil {
+		t.Fatalf("DecodeInitJobs: %v", err)
+	}
+	if len(jobs) != 1 || len(jobs[0].Artifacts) != 2 {
+		t.Fatalf("verwacht 1 job met 2 artifacts, kreeg %+v", jobs)
+	}
+	if jobs[0].Artifacts[1].Match["node.arch"] != "riscv64" {
+		t.Errorf("match niet gedecodeerd: %+v", jobs[0].Artifacts[1])
+	}
+
+	// Zonder driver blijft de shorthand gelden voor precies één artifact; met
+	// twee moet de driver expliciet zijn, anders is het geen hop-job en heeft
+	// hij een command of image nodig.
+	if _, err := DecodeInitJobs([]map[string]any{{
+		"name": "welcome",
+		"artifacts": []any{
+			map[string]any{"url": "https://example.com/a.elf"},
+			map[string]any{"url": "https://example.com/b.elf"},
+		},
+	}}); err == nil {
+		t.Error("twee artifacts zonder driver: verwacht een fout, kreeg nil")
+	}
+}

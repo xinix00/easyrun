@@ -194,9 +194,12 @@ func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 	if job.Driver == "" && job.Command == "" && job.Image == "" && len(job.Artifacts) == 1 {
 		job.Driver = types.DriverHop
 	}
-	hopImage := job.Driver == types.DriverHop && len(job.Artifacts) == 1
+	// Several artifacts is how one job spans architectures: each carries a
+	// `match` on node attributes and the agent resolves it per node
+	// (resolveJobForRun), so the runner still sees exactly one.
+	hopImage := job.Driver == types.DriverHop && len(job.Artifacts) >= 1
 	if job.Command == "" && job.Image == "" && !hopImage {
-		httputil.WriteError(w, http.StatusBadRequest, "command or image required (or driver \"hop\" with one artifact)")
+		httputil.WriteError(w, http.StatusBadRequest, "command or image required (or driver \"hop\" with at least one artifact)")
 		return
 	}
 
