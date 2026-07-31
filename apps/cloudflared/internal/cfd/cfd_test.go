@@ -2,9 +2,7 @@ package cfd
 
 import (
 	"errors"
-	"io"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -190,66 +188,5 @@ func TestBridgeSetsOnlyWhatIsThere(t *testing.T) {
 	if got := Bridge(envOf(map[string]string{"TUNNEL_TOKEN": "tok"}),
 		func(string, string) error { return errors.New("nope") }); len(got) != 0 {
 		t.Errorf("gefaalde set gerapporteerd als gezet: %q", got)
-	}
-}
-
-func TestPumpForwardsLinesUntilEOF(t *testing.T) {
-	// Dit is het pad waarlangs de quick-tunnel-URL in `hop logs` belandt.
-	r, w := io.Pipe()
-	var mu sync.Mutex
-	var got []string
-	done := make(chan struct{})
-	go func() {
-		Pump(r, func(format string, args ...any) {
-			mu.Lock()
-			got = append(got, args[0].(string))
-			mu.Unlock()
-		})
-		close(done)
-	}()
-
-	io.WriteString(w, "INF Registered tunnel connection\n")
-	io.WriteString(w, "\n") // lege regels overslaan
-	io.WriteString(w, "INF https://random-words.trycloudflare.com\r\n")
-	io.WriteString(w, "half line without newline")
-	w.Close()
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	want := []string{
-		"INF Registered tunnel connection",
-		"INF https://random-words.trycloudflare.com",
-		"half line without newline",
-	}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Errorf("Pump gaf\n  %q\nwil\n  %q", got, want)
-	}
-}
-
-func TestPumpTruncatesAnOutlier(t *testing.T) {
-	r, w := io.Pipe()
-	var mu sync.Mutex
-	var got string
-	done := make(chan struct{})
-	go func() {
-		Pump(r, func(_ string, args ...any) {
-			mu.Lock()
-			got = args[0].(string)
-			mu.Unlock()
-		})
-		close(done)
-	}()
-	io.WriteString(w, strings.Repeat("x", maxLogLine*3)+"\n")
-	w.Close()
-	<-done
-
-	mu.Lock()
-	defer mu.Unlock()
-	if len(got) > maxLogLine+32 {
-		t.Errorf("regel niet afgekapt: %d bytes", len(got))
-	}
-	if !strings.HasSuffix(got, "(truncated)") {
-		t.Error("afkappen wordt niet gemeld")
 	}
 }

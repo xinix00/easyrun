@@ -40,7 +40,7 @@ applies verbatim.
 | `TUNNEL_TOKEN` | named tunnel; ingress comes from the Cloudflare dashboard. Empty ⇒ quick tunnel |
 | `TUNNEL_URL` | the local service to expose. Default `http://$HOPOS_HOST` |
 | `TUNNEL_TRANSPORT_PROTOCOL` | `http2` (our default) or `quic` |
-| `TUNNEL_LOGLEVEL` | `info` by default (but see *Still open* — cloudflared's own lines do not reach the ring) |
+| `TUNNEL_LOGLEVEL` | `info` by default |
 | `TUNNEL_METRICS` | where the metrics/readiness server binds. Default `<own-ip>:20241` |
 | `CFD_EXTRA_ARGS` | free-form extra flags, split on spaces |
 
@@ -71,13 +71,15 @@ by default this puts the [welcome](../welcome/) page on the public internet.
  "env":{"TUNNEL_TOKEN":"eyJhIjoi…"}}
 ```
 
-`hop logs cloudflared` shows the app's own lines — mode, protocol, own IP, the
-target, and any fatal error including its stack. It does **not** show
-cloudflared's zerolog output, so a quick tunnel's public URL is not in there:
-that bridge needs `os.Pipe`, which tamago does not implement
-([internal/cfd/pump.go](internal/cfd/pump.go) is ready for the day it does, and
-the app logs which of the two you got). Until then, read the tunnel's state from
-the metrics server: `/ready`, `/metrics` and `/quicktunnel`.
+`hop logs cloudflared` shows everything: the app's own lines (mode, protocol, own
+IP, target) *and* cloudflared's own zerolog output, a quick tunnel's public URL
+included. That is not this app's doing — HopOS provides the floor. A write to fd
+1/2 goes through `runtime.write1` → `goos.Printk`, and `board/hopslot` hands that
+to the sink `applib` installs at `Init`: this app's task log. So nothing here
+redirects anything.
+
+The tunnel's state is also on the metrics server (`/ready`, `/metrics`,
+`/quicktunnel`) for whatever wants to poll rather than read.
 
 ## Why a patch, and why it is two files
 
@@ -120,25 +122,30 @@ turns that into `0.0.0.0:0`, which the stack rejects with `bind: bad local
 address`. It needs a **concrete address and a concrete port**, so the app passes
 `--metrics <own-ip>:20241` (see `DefaultMetricsPort`; `TUNNEL_METRICS` overrides).
 
-**3. Why neither was visible.** `board/hopslot`'s `printk` is deliberately a
-no-op — a caged core has no UART MMIO — so runtime panics *and* cloudflared's
-zerolog output are dropped, and HOP only reported `exit code 2`. Three things now
-make a slot debuggable, and they are worth copying into any HopOS app:
+**3. Why neither was visible — since fixed in HopOS itself.** `board/hopslot`'s
+`printk` used to be a no-op (a caged core has no UART MMIO), so runtime panics
+*and* anything on stdout/stderr were dropped and HOP reported only `exit code 2`.
+It now forwards to `appboard.PrintkSink`, which `applib` points at the task log —
+so a panic is simply the last log line of the task, and app output lands in the
+app's own log where it belongs. What this app still does, and what it no longer
+needs to:
 
 - `recover()` logs the panic and its stack into the ring, with the **summary
   last**, because the last ring line is what HOP echoes in its exit message
   (`last="…"`). Reason on the console, stack in `hop logs`.
-- `cli.ErrWriter` and `cli.OsExiter` are redirected into the ring. Those were the
-  invisible exits: urfave/cli writes the fatal error to `ErrWriter` (default
-  `os.Stderr`, a black hole here) and then goes straight to `os.Exit`, so `Run`
-  never returns. This is what finally surfaced the metrics error.
-- `os.Pipe` does **not** exist on tamago (`pipe: not implemented`), so the
-  stdout/stderr bridge cannot work; the app says so in a log line instead of
-  failing silently.
-
-**Still open: cloudflared's own log lines** (including a quick tunnel's public
-URL) do not reach `hop logs`, because of that missing pipe. Publish the metrics
-port and read `/ready`, `/metrics` or `/quicktunnel` instead.
+- `cli.ErrWriter` and `cli.OsExiter` still point at the ring. These were the
+  invisible exits: urfave/cli writes the fatal error to `ErrWriter` and then goes
+  straight to `os.Exit`, so `Run` never returns — which is how the metrics error
+  stayed hidden. `ErrWriter` would now land in the task log by itself (its default
+  is `os.Stderr`, and that reaches the sink), so it is belt and braces: one clean
+  ring line instead of byte-wise printk. `OsExiter` still earns its keep — it
+  names the exit code and leaves through `app.Exit`.
+- **Gone**: an `os.Pipe` that redirected stdout/stderr into the ring, and a
+  `CFD_HOLD_ON_PANIC` env that parked a crashed app so its stack could be fetched
+  before the task disappeared. The printk sink retired the first (`os.Pipe` does
+  not exist on tamago anyway — "pipe: not implemented"), and HOP keeping a
+  finished task's logs for five minutes retired the second. Both were scaffolding
+  around a missing floor; the floor exists now.
 
 Remaining unknowns, in order:
 

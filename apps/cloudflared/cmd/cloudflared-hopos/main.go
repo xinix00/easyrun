@@ -34,7 +34,6 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
-	"time"
 
 	"github.com/urfave/cli/v2"
 
@@ -75,28 +74,18 @@ func main() {
 	log.SetFlags(0)      // de ring stempelt zelf
 	log.SetOutput(ringWriter{app: app})
 
-	// Een panic in een slot is STIL: board/hopslot's printk is bewust een
-	// no-op (een gekooide core heeft geen UART-MMIO, een poke zou een
-	// cage-fault zijn), dus runtime-output valt weg en HOP ziet alleen "exit
-	// code 2" — de code waarmee de Go-runtime fataal afsluit. Zonder dit is een
-	// crashende app-image dus niet te debuggen. Wat wij kunnen opvangen, gaat
-	// hier de logring in; een panic in een child-goroutine blijft onvindbaar.
+	// Een panic in de main-goroutine als één leesbare regel, met de stack erboven
+	// en de samenvatting als LAATSTE — dat is de regel die HOP bij het afsluiten
+	// op de node-console echoot (last="…"). Runtime-output zelf komt sinds
+	// HopOS' printk-sink óók in dit task-log terecht (applib hangt hem bij Init
+	// in appboard), dus dit is geen nooduitgang meer maar alleen nettere vorm:
+	// de reden vóór de stack in plaats van een afgekapte frame-regel.
 	defer func() {
 		if r := recover(); r != nil {
 			for _, line := range strings.Split(strings.TrimRight(string(debug.Stack()), "\n"), "\n") {
 				app.Logf("  %s", strings.ReplaceAll(line, "\t", "    "))
 			}
-			// De samenvatting als LAATSTE regel, want dát is de regel die HOP
-			// bij het afsluiten op de node-console echoot (last="…"). De stack
-			// staat erboven in de ring voor wie `hop logs` haalt.
 			app.Logf("cloudflared: PANIC: %v", r)
-			// Debug-uitweg: de logs-endpoint bedient alleen een lévende task, en
-			// een crashende app is binnen een seconde weg. Met CFD_HOLD_ON_PANIC
-			// blijft hij staan zodat de stack op te halen is.
-			if app.Env("CFD_HOLD_ON_PANIC") != "" {
-				app.Logf("cloudflared: holding for 10m (CFD_HOLD_ON_PANIC) — fetch `hop logs cloudflared`")
-				time.Sleep(10 * time.Minute)
-			}
 			app.Exit(2)
 		}
 	}()
@@ -107,17 +96,15 @@ func main() {
 		app.Exit(1)
 	}
 
-	// stdout/stderr naar de logring, zodat cloudflared's eigen regels — de
-	// quick-tunnel-URL incluis — in `hop logs cloudflared` staan. Beide uitkomsten
-	// krijgen een logregel: mislukt de pipe, dan is zoekgeraakte cloudflared-
-	// uitvoer anders een raadsel (een slot heeft geen console, zie printk).
-	if r, w, err := os.Pipe(); err == nil {
-		os.Stdout, os.Stderr = w, w
-		go cfd.Pump(r, app.Logf)
-		app.Logf("cloudflared: stdout/stderr bridged to the log ring")
-	} else {
-		app.Logf("cloudflared: no pipe (%v) — cloudflared's own logs are LOST (a slot has no console)", err)
-	}
+	// Hier stond een os.Pipe die stdout/stderr naar de logring omleidde, omdat
+	// cloudflared met zerolog naar os.Stderr schrijft en dat in een slot nergens
+	// heen ging. Dat hoeft niet meer en het hóórt ook niet hier: HopOS levert de
+	// bodem zelf. Een write naar fd 1/2 gaat via runtime.write1 → goos.Printk, en
+	// board/hopslot geeft die door aan de sink die applib bij Init installeert —
+	// oftewel het task-log van deze app. Dus alles wat cloudflared zegt, de
+	// publieke URL van een quick tunnel incluis, staat gewoon in
+	// `hop logs cloudflared`, zonder dat deze app iets omlegt.
+	// (Op tamago bestond os.Pipe trouwens toch niet: "pipe: not implemented".)
 
 	cfg := cfd.Load(app.Env, ip)
 	args, err := cfg.Args()
