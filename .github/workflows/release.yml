@@ -49,6 +49,14 @@ jobs:
             done
 
             tar czf "${dir}.tar.gz" -C dist "$(basename $dir)"
+
+            # Same bytes under a version-less name. GitHub's
+            # /releases/latest/download/<file> only resolves for a filename that
+            # is constant across releases, and gethop.org links exactly that so
+            # the download page never goes stale. The versioned name stays for
+            # anyone pinning a release.
+            cp "${dir}.tar.gz" "dist/hop-${os}-${arch}.tar.gz"
+
             rm -rf "$dir"
           done
 
