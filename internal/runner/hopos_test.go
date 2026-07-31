@@ -455,3 +455,78 @@ func TestHopRunnerRejections(t *testing.T) {
 		t.Fatal("expected rejection: no big core on a small-only node")
 	}
 }
+
+// De logs van een AFGELOPEN task blijven nog opvraagbaar: dat is het hele punt
+// van de retentie. Zonder dit was de log weg op het moment dat je hem nodig had
+// — release() gooide de broadcaster meteen weg, dus wie een gevallen task om zijn
+// logs vroeg kreeg "task not found".
+func TestHopRunnerLogsBlijvenNaHetEinde(t *testing.T) {
+	srv := imageServer(t, []byte("ELF-achtige bytes"))
+	sm := newFakeSlotManager(11)
+	r := NewHopRunner(sm, map[string]string{"node.os": "hopos"})
+	task := &types.Task{ID: "t-retire", JobName: "demo", Driver: types.DriverHop}
+
+	if err := r.Run(hopJob(srv.URL), task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := r.GetStdout(task.ID)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(out.Tail()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	before := out.Tail()
+	if len(before) == 0 {
+		t.Fatal("geen logregel vóór de stop")
+	}
+
+	if err := r.Stop(task); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	// Nog opvraagbaar, met dezelfde inhoud.
+	after := r.GetStdout(task.ID)
+	if after == nil {
+		t.Fatal("logs zijn weg direct na de stop — de retentie doet niets")
+	}
+	if got, want := len(after.Tail()), len(before); got != want {
+		t.Fatalf("tail na de stop = %d regels, want %d", got, want)
+	}
+
+	// En een lezer die nu abonneert krijgt de geschiedenis én een dicht kanaal:
+	// de task is voorbij, dus zijn logstroom is voorbij. Zonder dat zou opvragen
+	// blijven hangen, en dat leest als een vastgelopen node.
+	ch := after.Subscribe()
+	n := 0
+	for range ch {
+		n++
+	}
+	if n != len(before) {
+		t.Fatalf("Subscribe gaf %d regels, want %d — en het kanaal moet sluiten", n, len(before))
+	}
+}
+
+// Voorbij de retentietermijn is de geschiedenis wél weg: een node die dagen
+// restart-lussen draait mag geen logs opstapelen.
+func TestHopRunnerLogsVerlopenNaDeTermijn(t *testing.T) {
+	srv := imageServer(t, []byte("ELF-achtige bytes"))
+	sm := newFakeSlotManager(11)
+	r := NewHopRunner(sm, map[string]string{"node.os": "hopos"})
+	task := &types.Task{ID: "t-expire", JobName: "demo", Driver: types.DriverHop}
+
+	if err := r.Run(hopJob(srv.URL), task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := r.Stop(task); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	// De klok terugzetten i.p.v. vijf minuten wachten.
+	r.mu.Lock()
+	rl := r.retired[task.ID]
+	rl.at = time.Now().Add(-logRetention - time.Second)
+	r.retired[task.ID] = rl
+	r.mu.Unlock()
+
+	if r.GetStdout(task.ID) != nil {
+		t.Fatal("logs zijn na de retentietermijn nog opvraagbaar")
+	}
+}

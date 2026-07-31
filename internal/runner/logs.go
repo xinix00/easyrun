@@ -15,6 +15,7 @@ type LogBroadcaster struct {
 	tail      [tailSize]string
 	tailPos   int
 	tailCount int
+	closed    bool
 	mu        sync.RWMutex
 }
 
@@ -61,6 +62,11 @@ func (b *LogBroadcaster) Tail() []string {
 
 // Subscribe adds a new listener and returns a channel for log lines.
 // The tail buffer is pushed first so the subscriber sees recent history.
+//
+// On a finished task the channel is closed right after that history: the task is
+// over, so its log stream is over too. Without this, asking a dead task for its
+// logs would hand over the history and then hang until the client gave up —
+// which reads like a stalled node instead of a completed one.
 func (b *LogBroadcaster) Subscribe() chan string {
 	ch := make(chan string, 100)
 
@@ -70,7 +76,11 @@ func (b *LogBroadcaster) Subscribe() chan string {
 	for i := range b.tailCount {
 		ch <- b.tail[(start+i)%tailSize]
 	}
-	b.listeners = append(b.listeners, ch)
+	if b.closed {
+		close(ch)
+	} else {
+		b.listeners = append(b.listeners, ch)
+	}
 	b.mu.Unlock()
 
 	return ch
@@ -99,6 +109,9 @@ func (b *LogBroadcaster) Close() {
 		close(ch)
 	}
 	b.listeners = nil
+	// The tail stays readable — that is the whole point of keeping a finished
+	// task's logs around. closed only means "no more lines will come".
+	b.closed = true
 }
 
 // PipeReader reads from reader and broadcasts to broadcaster until EOF

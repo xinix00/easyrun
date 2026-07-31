@@ -61,6 +61,25 @@ type HopRunner struct {
 	// agent-state-loop en hier raw pollen was een data race. Gewist in
 	// release, samen met de andere task-maps.
 	stopping map[string]bool
+	// retired houdt de logs van een AFGELOPEN task nog even vast, zodat je na
+	// een crash of een restart-lus nog kunt zien wat hij zei. Zonder dit was de
+	// log weg op precies het moment dat je hem nodig had: release() gooide de
+	// broadcaster meteen weg, dus wie een gevallen task om zijn logs vroeg kreeg
+	// "task not found" — en op een headless node bestond de reden dan nergens
+	// meer.
+	retired map[string]retiredLogs
+}
+
+// logRetention is hoe lang de logs van een afgelopen task opvraagbaar blijven.
+// Lang genoeg om ná de melding "task failed" te gaan kijken, kort genoeg dat een
+// node die dagen restart-lussen draait geen geschiedenis opstapelt.
+const logRetention = 5 * time.Minute
+
+// retiredLogs zijn de bewaarde logs van een afgelopen task.
+type retiredLogs struct {
+	stdout *LogBroadcaster
+	stderr *LogBroadcaster
+	at     time.Time
 }
 
 // NewHopRunner creates a runner on top of a SlotManager. nodeAttrs are
@@ -75,6 +94,7 @@ func NewHopRunner(sm hopos.SlotManager, nodeAttrs map[string]string) *HopRunner 
 		stderrLog:   make(map[string]*LogBroadcaster),
 		faultLogged: make(map[string]bool),
 		stopping:    make(map[string]bool),
+		retired:     make(map[string]retiredLogs),
 	}
 }
 
@@ -399,18 +419,33 @@ func (r *HopRunner) Usage(task *types.Task) (cpuPct float64, memBytes uint64, ok
 	return float64(s.CPUPct), s.MemSys, s.MemSys != 0
 }
 
-// GetStdout returns the log broadcaster fed by the slot's hop-ABI log ring.
+// GetStdout returns the log broadcaster fed by the slot's hop-ABI log ring, or
+// the retired one of a task that has already finished (see retired) — asking a
+// crashed task what it said is the whole reason those are kept.
 func (r *HopRunner) GetStdout(taskID string) *LogBroadcaster {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.stdoutLog[taskID]
+	if b, ok := r.stdoutLog[taskID]; ok {
+		return b
+	}
+	if rl, ok := r.retired[taskID]; ok && time.Since(rl.at) <= logRetention {
+		return rl.stdout
+	}
+	return nil
 }
 
-// GetStderr returns an empty broadcaster (hop apps have a single log stream).
+// GetStderr returns an empty broadcaster (hop apps have a single log stream),
+// retired ones included — same reason as GetStdout.
 func (r *HopRunner) GetStderr(taskID string) *LogBroadcaster {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.stderrLog[taskID]
+	if b, ok := r.stderrLog[taskID]; ok {
+		return b
+	}
+	if rl, ok := r.retired[taskID]; ok && time.Since(rl.at) <= logRetention {
+		return rl.stderr
+	}
+	return nil
 }
 
 // Cleanup is a no-op: every HopOS start loads a fresh image into the slot
@@ -461,10 +496,33 @@ func (r *HopRunner) release(taskID string) {
 		}
 	}
 	delete(r.slots, taskID)
+	// De logs gaan niet weg maar met pensioen: nog logRetention opvraagbaar (zie
+	// retired). Close() sluit lopende tails netjes af — er komt geen regel meer
+	// bij — maar laat de tail leesbaar.
+	if out, ok := r.stdoutLog[taskID]; ok {
+		out.Close()
+		errLog := r.stderrLog[taskID]
+		if errLog != nil {
+			errLog.Close()
+		}
+		r.retired[taskID] = retiredLogs{stdout: out, stderr: errLog, at: time.Now()}
+	}
 	delete(r.stdoutLog, taskID)
 	delete(r.stderrLog, taskID)
 	delete(r.faultLogged, taskID)
 	delete(r.stopping, taskID)
+	r.purgeRetiredLocked()
+}
+
+// purgeRetiredLocked gooit de gepensioneerde logs weg die hun termijn voorbij
+// zijn. Aanroepen met r.mu vast. Geen achtergrond-timer: opruimen gebeurt bij de
+// volgende release, en dat is precies wanneer er weer iets bij komt.
+func (r *HopRunner) purgeRetiredLocked() {
+	for id, rl := range r.retired {
+		if time.Since(rl.at) > logRetention {
+			delete(r.retired, id)
+		}
+	}
 }
 
 // stagingCancelled meldt of de task tijdens staging is gestopt: de stop-vlag
