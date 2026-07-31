@@ -414,6 +414,107 @@ func TestPipeReaderEmptyInput(t *testing.T) {
 	}
 }
 
+// ============== LOGSTORE (RETENTIE) ==============
+
+// backdateRetired zet de klok van een gepensioneerde task terug voorbij de
+// retentietermijn, zodat een test niet vijf minuten hoeft te wachten.
+func backdateRetired(s *logStore, taskID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.retired[taskID]
+	p.at = time.Now().Add(-logRetention - time.Second)
+	s.retired[taskID] = p
+}
+
+// De kern: na retire zijn de logs nog opvraagbaar, met dezelfde inhoud, en een
+// nieuwe lezer krijgt de geschiedenis plus een dicht kanaal (de task is voorbij,
+// dus zijn logstroom ook — anders leest het als een vastgelopen node).
+func TestLogStoreBewaartLogsNaHetAflopen(t *testing.T) {
+	s := newLogStore()
+	out, errB := NewLogBroadcaster(), NewLogBroadcaster()
+	s.put("t1", out, errB)
+	_, _ = out.Write([]byte("laatste woorden\n"))
+	_, _ = errB.Write([]byte("panic: nee\n"))
+
+	s.retire("t1")
+
+	got := s.stdout("t1")
+	if got == nil {
+		t.Fatal("stdout is weg direct na retire — de retentie doet niets")
+	}
+	if tail := got.Tail(); len(tail) != 1 || tail[0] != "laatste woorden\n" {
+		t.Fatalf("tail = %q, want [\"laatste woorden\\n\"]", tail)
+	}
+	if e := s.stderr("t1"); e == nil || len(e.Tail()) != 1 {
+		t.Fatal("stderr is weg — juist daar staat waarom een proces viel")
+	}
+
+	ch := got.Subscribe()
+	n := 0
+	for range ch {
+		n++
+	}
+	if n != 1 {
+		t.Fatalf("Subscribe gaf %d regels, want 1 — en het kanaal moet sluiten", n)
+	}
+}
+
+// Voorbij de termijn is de geschiedenis wél weg: een node die dagen
+// restart-lussen draait mag geen logs opstapelen.
+func TestLogStoreVerlooptNaDeTermijn(t *testing.T) {
+	s := newLogStore()
+	s.put("t1", NewLogBroadcaster(), NewLogBroadcaster())
+	s.retire("t1")
+	backdateRetired(s, "t1")
+
+	if s.stdout("t1") != nil || s.stderr("t1") != nil {
+		t.Fatal("logs zijn na de retentietermijn nog opvraagbaar")
+	}
+
+	// En de volgende retire ruimt de verlopen entry ook echt op (geen groei).
+	s.put("t2", NewLogBroadcaster(), NewLogBroadcaster())
+	s.retire("t2")
+	s.mu.RLock()
+	_, stale := s.retired["t1"]
+	s.mu.RUnlock()
+	if stale {
+		t.Fatal("verlopen entry is niet opgeruimd")
+	}
+}
+
+// Een task die nooit logs registreerde (mislukte start) mag retire niet laten
+// klappen, en dubbel retire moet ook goed gaan — beide gebeuren in de runners.
+func TestLogStoreRetireOnbekendEnDubbel(t *testing.T) {
+	s := newLogStore()
+	s.retire("bestaat-niet")
+
+	s.put("t1", NewLogBroadcaster(), NewLogBroadcaster())
+	s.retire("t1")
+	s.retire("t1")
+	if s.stdout("t1") == nil {
+		t.Fatal("dubbel retire gooide de bewaarde logs weg")
+	}
+}
+
+// Een hergebruikte taskID laat zijn pensioen achter zich: wie nu kijkt, kijkt
+// naar de LOPENDE task, niet naar de vorige met dezelfde naam.
+func TestLogStoreHergebruikteTaskIDKrijgtVerseLogs(t *testing.T) {
+	s := newLogStore()
+	oud := NewLogBroadcaster()
+	s.put("t1", oud, NewLogBroadcaster())
+	_, _ = oud.Write([]byte("oud\n"))
+	s.retire("t1")
+
+	nieuw := NewLogBroadcaster()
+	s.put("t1", nieuw, NewLogBroadcaster())
+	if got := s.stdout("t1"); got != nieuw {
+		t.Fatal("stdout geeft de gepensioneerde broadcaster terug i.p.v. de lopende")
+	}
+	if tail := s.stdout("t1").Tail(); len(tail) != 0 {
+		t.Fatalf("nieuwe task begint met %q, want een lege tail", tail)
+	}
+}
+
 func TestPipeReaderNoNewlineAtEnd(t *testing.T) {
 	b := NewLogBroadcaster()
 	ch := b.Subscribe()

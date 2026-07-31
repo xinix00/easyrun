@@ -36,11 +36,13 @@ const (
 type ExecRunner struct {
 	config    *Config
 	processes map[string]*exec.Cmd
-	taskDirs  map[string]string // taskID -> work directory
+	taskDirs  map[string]string   // taskID -> work directory
 	mounts    map[string][]string // taskID -> bind mount targets we created, in setup order
-	stdoutLog map[string]*LogBroadcaster
-	stderrLog map[string]*LogBroadcaster
-	mu        sync.RWMutex
+	// logs zijn de broadcasters van de lopende tasks plus die van net-afgelopen
+	// tasks (zie logStore): na een crash of in een restart-lus kun je zo nog even
+	// zien wat de task zei. Eigen slot, buiten r.mu.
+	logs *logStore
+	mu   sync.RWMutex
 }
 
 // NewExecRunner creates a new process runner
@@ -50,8 +52,7 @@ func NewExecRunner(config *Config) *ExecRunner {
 		processes: make(map[string]*exec.Cmd),
 		taskDirs:  make(map[string]string),
 		mounts:    make(map[string][]string),
-		stdoutLog: make(map[string]*LogBroadcaster),
-		stderrLog: make(map[string]*LogBroadcaster),
+		logs:      newLogStore(),
 	}
 }
 
@@ -142,11 +143,11 @@ func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 	go PipeReader(stdoutBroadcaster, stdoutPipe)
 	go PipeReader(stderrBroadcaster, stderrPipe)
 
+	r.logs.put(taskID, stdoutBroadcaster, stderrBroadcaster)
+
 	r.mu.Lock()
 	r.processes[taskID] = cmd
 	r.taskDirs[taskID] = taskDir
-	r.stdoutLog[taskID] = stdoutBroadcaster
-	r.stderrLog[taskID] = stderrBroadcaster
 	r.mu.Unlock()
 
 	// Apply resource limits
@@ -359,9 +360,12 @@ func (r *ExecRunner) cleanupTaskDir(taskID string) {
 	mounts := r.mounts[taskID]
 	delete(r.taskDirs, taskID)
 	delete(r.mounts, taskID)
-	delete(r.stdoutLog, taskID)
-	delete(r.stderrLog, taskID)
 	r.mu.Unlock()
+
+	// De taskdir gaat weg, de logs met pensioen: nog logRetention opvraagbaar, want
+	// juist ná een crash wil je weten wat het proces zei — en zijn schijfsporen zijn
+	// dan al opgeruimd.
+	r.logs.retire(taskID)
 
 	for i := len(mounts) - 1; i >= 0; i-- {
 		_ = r.unmountVolume(mounts[i])
@@ -371,19 +375,12 @@ func (r *ExecRunner) cleanupTaskDir(taskID string) {
 	}
 }
 
-// GetStdout returns the stdout broadcaster for a task
-func (r *ExecRunner) GetStdout(taskID string) *LogBroadcaster {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.stdoutLog[taskID]
-}
+// GetStdout returns the stdout broadcaster for a task, or the retired one of a
+// task that finished less than logRetention ago (see logStore).
+func (r *ExecRunner) GetStdout(taskID string) *LogBroadcaster { return r.logs.stdout(taskID) }
 
-// GetStderr returns the stderr broadcaster for a task
-func (r *ExecRunner) GetStderr(taskID string) *LogBroadcaster {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.stderrLog[taskID]
-}
+// GetStderr does the same for stderr — where a crashing process usually said why.
+func (r *ExecRunner) GetStderr(taskID string) *LogBroadcaster { return r.logs.stderr(taskID) }
 
 // Cleanup ensures the rootfs base exists and is writable. Stale taskdirs
 // from a crashed predecessor (with bind mounts still attached) are NOT

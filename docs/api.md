@@ -394,7 +394,12 @@ data: [2025-01-31 12:00:00] Server starting...
 data: [2025-01-31 12:00:01] Listening on port 8080
 ```
 
-**No persistence** — logs are streamed live only.
+**No persistence** — logs are streamed live only, with one exception: when a task
+ends (crash, stop, delete) its last 50 lines stay retrievable for 5 minutes on
+every driver (exec, docker, hop). Asking a finished task for its logs returns
+that history and then closes the stream, instead of the `404` it used to — a
+crashed task's last words are exactly what you need right after it fell over.
+After the 5 minutes it is `404 task not found or not running`.
 
 ### Proxy Endpoints
 

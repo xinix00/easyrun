@@ -328,10 +328,10 @@ func TestHopRunnerDeletedDuringStaging(t *testing.T) {
 	}
 	r.mu.RLock()
 	_, hasSlot := r.slots[task.ID]
-	_, hasLog := r.stdoutLog[task.ID]
 	busy := len(r.inUse)
 	stopping := len(r.stopping)
 	r.mu.RUnlock()
+	hasLog := r.logs.stdout(task.ID) != nil
 	if hasSlot || hasLog || busy != 0 || stopping != 0 {
 		t.Fatalf("runner-state niet schoon: slot=%v log=%v inUse=%d stopping=%d", hasSlot, hasLog, busy, stopping)
 	}
@@ -520,11 +520,7 @@ func TestHopRunnerLogsVerlopenNaDeTermijn(t *testing.T) {
 		t.Fatalf("Stop: %v", err)
 	}
 	// De klok terugzetten i.p.v. vijf minuten wachten.
-	r.mu.Lock()
-	rl := r.retired[task.ID]
-	rl.at = time.Now().Add(-logRetention - time.Second)
-	r.retired[task.ID] = rl
-	r.mu.Unlock()
+	backdateRetired(r.logs, task.ID)
 
 	if r.GetStdout(task.ID) != nil {
 		t.Fatal("logs zijn na de retentietermijn nog opvraagbaar")

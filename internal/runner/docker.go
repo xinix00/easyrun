@@ -25,12 +25,15 @@ const (
 
 // DockerRunner runs jobs as Docker containers via the Docker API directly.
 type DockerRunner struct {
-	nodeAttrs  map[string]string
-	client     *http.Client
-	stdoutLog  map[string]*LogBroadcaster
-	stderrLog  map[string]*LogBroadcaster
-	logCancel  map[string]context.CancelFunc
-	mu         sync.RWMutex
+	nodeAttrs map[string]string
+	client    *http.Client
+	// logs zijn de broadcasters van de lopende tasks plus die van net-afgelopen
+	// tasks (zie logStore): na een crash of in een restart-lus kun je zo nog even
+	// zien wat de container zei — en Stop verwijdert 'm, dus `docker logs` kan het
+	// dan ook niet meer navertellen. Eigen slot, buiten r.mu.
+	logs      *logStore
+	logCancel map[string]context.CancelFunc
+	mu        sync.RWMutex
 }
 
 // NewDockerRunner creates a new Docker runner
@@ -47,8 +50,7 @@ func NewDockerRunner(nodeAttrs map[string]string, socketPath string) *DockerRunn
 				},
 			},
 		},
-		stdoutLog: make(map[string]*LogBroadcaster),
-		stderrLog: make(map[string]*LogBroadcaster),
+		logs:      newLogStore(),
 		logCancel: make(map[string]context.CancelFunc),
 	}
 }
@@ -209,15 +211,12 @@ func (r *DockerRunner) Stop(task *types.Task) error {
 		cancel()
 	}
 	delete(r.logCancel, task.ID)
-	if b := r.stdoutLog[task.ID]; b != nil {
-		b.Close()
-	}
-	if b := r.stderrLog[task.ID]; b != nil {
-		b.Close()
-	}
-	delete(r.stdoutLog, task.ID)
-	delete(r.stderrLog, task.ID)
 	r.mu.Unlock()
+
+	// De container is verwijderd, de logs gaan met pensioen: nog logRetention
+	// opvraagbaar. `docker logs` kan het na de rm niet meer navertellen, dus dit is
+	// het enige dat na een crash nog weet wat de container zei.
+	r.logs.retire(task.ID)
 
 	return nil
 }
@@ -251,19 +250,12 @@ func (r *DockerRunner) Status(task *types.Task) (types.TaskState, error) {
 	return types.TaskFailed, nil
 }
 
-// GetStdout returns the stdout log broadcaster for a task
-func (r *DockerRunner) GetStdout(taskID string) *LogBroadcaster {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.stdoutLog[taskID]
-}
+// GetStdout returns the stdout log broadcaster for a task, or the retired one of
+// a task that finished less than logRetention ago (see logStore).
+func (r *DockerRunner) GetStdout(taskID string) *LogBroadcaster { return r.logs.stdout(taskID) }
 
-// GetStderr returns the stderr log broadcaster for a task
-func (r *DockerRunner) GetStderr(taskID string) *LogBroadcaster {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.stderrLog[taskID]
-}
+// GetStderr does the same for stderr.
+func (r *DockerRunner) GetStderr(taskID string) *LogBroadcaster { return r.logs.stderr(taskID) }
 
 // Cleanup removes all hop containers
 func (r *DockerRunner) Cleanup() error {
@@ -297,9 +289,9 @@ func (r *DockerRunner) startLogStreaming(taskID, containerName string) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
+	r.logs.put(taskID, stdoutB, stderrB)
+
 	r.mu.Lock()
-	r.stdoutLog[taskID] = stdoutB
-	r.stderrLog[taskID] = stderrB
 	r.logCancel[taskID] = cancel
 	r.mu.Unlock()
 
