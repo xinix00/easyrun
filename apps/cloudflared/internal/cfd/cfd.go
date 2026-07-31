@@ -55,6 +55,7 @@ type Config struct {
 	URL      string // de lokale service die naar buiten gaat
 	Protocol string // http2 (default) of quic
 	LogLevel string // cloudflared's --loglevel
+	Metrics  string // waar de metrics/readiness-server bindt
 	Extra    []string
 }
 
@@ -68,16 +69,42 @@ const (
 	// TUNNEL_TRANSPORT_PROTOCOL=quic om het te proberen.
 	DefaultProtocol = "http2"
 	DefaultLogLevel = "info"
+
+	// DefaultMetricsPort is de poort van cloudflared's metrics/readiness-server.
+	// Hij bindt op het eigen slot-IP, en dat moet expliciet: een slot heeft geen
+	// loopback (de gVisor-stack krijgt één NIC met het slot-IP), dus
+	// cloudflared's default "localhost:0" is onbindbaar — en de
+	// virtual-variant "0.0.0.0:0" óók: die geeft "bad local address", want de
+	// stack wil een concreet adres én een concrete poort. Gemeten in QEMU 31-07;
+	// dit was de fout die het hele ding deed omvallen (exit code 1, en de reden
+	// was onzichtbaar tot cli.ErrWriter naar de logring ging).
+	//
+	// 20241 is cloudflared's eigen eerste keuze uit GetMetricsKnownAddresses.
+	DefaultMetricsPort = "20241"
 )
 
-// Load leest de config uit de slot-env. env is applib's App.Env.
-func Load(env func(string) string) Config {
+// Load leest de config uit de slot-env. env is applib's App.Env; ip is het
+// eigen IP uit appnet.Up (nodig omdat de metrics-server een concreet adres
+// moet krijgen).
+func Load(env func(string) string, ip string) Config {
 	c := Config{
 		Token:    strings.TrimSpace(env("TUNNEL_TOKEN")),
 		URL:      strings.TrimSpace(env("TUNNEL_URL")),
 		Protocol: strings.TrimSpace(env("TUNNEL_TRANSPORT_PROTOCOL")),
 		LogLevel: strings.TrimSpace(env("TUNNEL_LOGLEVEL")),
+		Metrics:  strings.TrimSpace(env("TUNNEL_METRICS")),
 		Extra:    strings.Fields(env("CFD_EXTRA_ARGS")),
+	}
+	if c.Metrics == "" && ip != "" {
+		// Publiceert de jobspec een poort onder de naam "metrics", dan zet HOP
+		// ER_PORT_METRICS en is dat de poort die van buiten open staat — bind
+		// dié, precies zoals elke andere HopOS-app doet. Anders 20241, en dan is
+		// /ready en /metrics alleen op het interne net te halen.
+		port := strings.TrimSpace(env("ER_PORT_METRICS"))
+		if port == "" {
+			port = DefaultMetricsPort
+		}
+		c.Metrics = ip + ":" + port
 	}
 	if c.Protocol == "" {
 		c.Protocol = DefaultProtocol
@@ -126,6 +153,9 @@ func (c Config) Args() ([]string, error) {
 
 	args := []string{"cloudflared", "tunnel", "--no-autoupdate",
 		"--loglevel", c.LogLevel, "--protocol", c.Protocol}
+	if c.Metrics != "" {
+		args = append(args, "--metrics", c.Metrics)
+	}
 	if c.Named() {
 		// De ingress van een named tunnel komt uit het dashboard; een --url
 		// erbij zou suggereren dat wij hem bepalen.

@@ -66,7 +66,7 @@ func TestGeneratedFlagsExistInPinnedCloudflared(t *testing.T) {
 	// Quick tunnel: alle flags horen op `tunnel` te zitten.
 	quick, err := cfd.Load(func(k string) string {
 		return map[string]string{"HOPOS_HOST": "10.0.0.7"}[k]
-	}).Args()
+	}, "10.100.0.5").Args()
 	if err != nil {
 		t.Fatalf("Args: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestGeneratedFlagsExistInPinnedCloudflared(t *testing.T) {
 	// het subcommando in de opdrachtregel).
 	named, err := cfd.Load(func(k string) string {
 		return map[string]string{"TUNNEL_TOKEN": "tok", "HOPOS_HOST": "10.0.0.7"}[k]
-	}).Args()
+	}, "10.100.0.5").Args()
 	if err != nil {
 		t.Fatalf("Args: %v", err)
 	}

@@ -32,7 +32,9 @@ import (
 	"log"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v2"
 
@@ -45,7 +47,13 @@ import (
 	"hop-os/metal/app/applib"
 	"hop-os/metal/app/applib/appnet"
 
+	"github.com/cloudflare/cloudflared/cmd/cloudflared/cliutil"
+	"github.com/cloudflare/cloudflared/cmd/cloudflared/management"
 	"github.com/cloudflare/cloudflared/cmd/cloudflared/tunnel"
+	"github.com/cloudflare/cloudflared/cmd/cloudflared/updater"
+	"github.com/cloudflare/cloudflared/metrics"
+	"github.com/cloudflare/cloudflared/token"
+	"github.com/cloudflare/cloudflared/tracing"
 
 	"cloudflared/internal/cfd"
 )
@@ -67,6 +75,32 @@ func main() {
 	log.SetFlags(0)      // de ring stempelt zelf
 	log.SetOutput(ringWriter{app: app})
 
+	// Een panic in een slot is STIL: board/hopslot's printk is bewust een
+	// no-op (een gekooide core heeft geen UART-MMIO, een poke zou een
+	// cage-fault zijn), dus runtime-output valt weg en HOP ziet alleen "exit
+	// code 2" — de code waarmee de Go-runtime fataal afsluit. Zonder dit is een
+	// crashende app-image dus niet te debuggen. Wat wij kunnen opvangen, gaat
+	// hier de logring in; een panic in een child-goroutine blijft onvindbaar.
+	defer func() {
+		if r := recover(); r != nil {
+			for _, line := range strings.Split(strings.TrimRight(string(debug.Stack()), "\n"), "\n") {
+				app.Logf("  %s", strings.ReplaceAll(line, "\t", "    "))
+			}
+			// De samenvatting als LAATSTE regel, want dát is de regel die HOP
+			// bij het afsluiten op de node-console echoot (last="…"). De stack
+			// staat erboven in de ring voor wie `hop logs` haalt.
+			app.Logf("cloudflared: PANIC: %v", r)
+			// Debug-uitweg: de logs-endpoint bedient alleen een lévende task, en
+			// een crashende app is binnen een seconde weg. Met CFD_HOLD_ON_PANIC
+			// blijft hij staan zodat de stack op te halen is.
+			if app.Env("CFD_HOLD_ON_PANIC") != "" {
+				app.Logf("cloudflared: holding for 10m (CFD_HOLD_ON_PANIC) — fetch `hop logs cloudflared`")
+				time.Sleep(10 * time.Minute)
+			}
+			app.Exit(2)
+		}
+	}()
+
 	ip, err := appnet.Up(app) // eigen TCP/IP-stack, eigen IP
 	if err != nil {
 		app.Logf("cloudflared: net: %v", err)
@@ -74,17 +108,18 @@ func main() {
 	}
 
 	// stdout/stderr naar de logring, zodat cloudflared's eigen regels — de
-	// quick-tunnel-URL incluis — in `hop logs cloudflared` staan. Lukt de pipe
-	// niet, dan blijven ze op de console: hinderlijk, geen reden om niet te
-	// draaien.
+	// quick-tunnel-URL incluis — in `hop logs cloudflared` staan. Beide uitkomsten
+	// krijgen een logregel: mislukt de pipe, dan is zoekgeraakte cloudflared-
+	// uitvoer anders een raadsel (een slot heeft geen console, zie printk).
 	if r, w, err := os.Pipe(); err == nil {
 		os.Stdout, os.Stderr = w, w
 		go cfd.Pump(r, app.Logf)
+		app.Logf("cloudflared: stdout/stderr bridged to the log ring")
 	} else {
-		app.Logf("cloudflared: no pipe (%v) — cloudflared's own logs stay on the node console", err)
+		app.Logf("cloudflared: no pipe (%v) — cloudflared's own logs are LOST (a slot has no console)", err)
 	}
 
-	cfg := cfd.Load(app.Env)
+	cfg := cfd.Load(app.Env, ip)
 	args, err := cfg.Args()
 	if err != nil {
 		app.Logf("cloudflared: %v", err)
@@ -97,6 +132,43 @@ func main() {
 	app.Logf("%s", cfg.Banner(version, ip))
 	app.Logf("cloudflared: slot %d, %d core(s), %s RAM, %s %s",
 		app.Slot, runtime.NumCPU(), fmtMB(app.RAMSize), runtime.GOARCH, runtime.Version())
+
+	// cloudflared's eigen main doet méér dan commando's registreren: het zet een
+	// handvol package-globals die het tunnel-pad daarna dereferenceert. Zonder
+	// tunnel.Init is buildInfo nil en paniekt StartServer in
+	// cliutil.(*BuildInfo).Log — in een slot volstrekt stil (board/hopslot's
+	// printk is een no-op), dus HOP zag alleen "exit code 2". Gemeten in QEMU
+	// 31-07; de host verried het niet, want daar ketste een ongeldige token af
+	// vóór StartServer.
+	//
+	// Dit is precies de reeks uit cmd/cloudflared/main.go, beperkt tot de
+	// pakketten die het tunnel-pad aanraakt (updater/token/management zitten er
+	// in de code van `tunnel run`; access/tail horen bij andere commando's).
+	bInfo := cliutil.GetBuildInfo("HopOS", version)
+	graceShutdownC := make(chan struct{}) // HOP's kill is abrupt: dit sluit nooit
+	tunnel.Init(bInfo, graceShutdownC)
+	updater.Init(bInfo)
+	management.Init(bInfo)
+	token.Init(version)
+	tracing.Init(version)
+	metrics.RegisterBuildInfo("HopOS", "", version)
+
+	// cloudflared's eigen TUN-8148-workaround, die hun main ook onvoorwaardelijk
+	// zet: ECN-detectie door een eigen netstack is precies het soort ding dat je
+	// hier niet wilt. (Het adres van de metrics-server zet cfd.Args expliciet —
+	// zie DefaultMetricsPort voor waarom dat moet.)
+	os.Setenv("QUIC_GO_DISABLE_ECN", "1")
+
+	// De twee uitgangen van urfave/cli zijn variabelen, en dat is hier goud: een
+	// fatale fout gaat via ErrWriter (default os.Stderr = het zwarte gat van een
+	// slot) en daarna via OsExiter rechtstreeks naar os.Exit — zónder ooit terug
+	// te keren uit Run. Zonder deze twee regels zag HOP alleen "exit code 1" en
+	// bleef de reden onvindbaar.
+	cli.ErrWriter = ringWriter{app: app}
+	cli.OsExiter = func(code int) {
+		app.Logf("cloudflared: exiting with code %d", code)
+		app.Exit(uint64(uint32(code)))
+	}
 
 	// cloudflared's CLI leest os.Args, precies zoals op een gewone machine:
 	// dezelfde subcommando's, dezelfde flags, dezelfde documentatie.

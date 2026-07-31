@@ -40,7 +40,8 @@ applies verbatim.
 | `TUNNEL_TOKEN` | named tunnel; ingress comes from the Cloudflare dashboard. Empty ⇒ quick tunnel |
 | `TUNNEL_URL` | the local service to expose. Default `http://$HOPOS_HOST` |
 | `TUNNEL_TRANSPORT_PROTOCOL` | `http2` (our default) or `quic` |
-| `TUNNEL_LOGLEVEL` | `info` by default |
+| `TUNNEL_LOGLEVEL` | `info` by default (but see *Still open* — cloudflared's own lines do not reach the ring) |
+| `TUNNEL_METRICS` | where the metrics/readiness server binds. Default `<own-ip>:20241` |
 | `CFD_EXTRA_ARGS` | free-form extra flags, split on spaces |
 
 Plus the rest of [`cfd.Bridged`](internal/cfd/cfd.go): a slot's env is *not* the
@@ -70,12 +71,13 @@ by default this puts the [welcome](../welcome/) page on the public internet.
  "env":{"TUNNEL_TOKEN":"eyJhIjoi…"}}
 ```
 
-`hop logs cloudflared` shows everything, the quick tunnel's public URL included.
-That takes a trick: cloudflared logs with zerolog to `os.Stderr`, which on tamago
-is the serial console and not HOP's log ring, so the app hangs an `os.Pipe` on
-stdout/stderr and pumps it into `app.Logf` ([internal/cfd/pump.go](internal/cfd/pump.go)).
-If `os.Pipe` is unavailable the app says so and keeps running — the logs stay on
-the console.
+`hop logs cloudflared` shows the app's own lines — mode, protocol, own IP, the
+target, and any fatal error including its stack. It does **not** show
+cloudflared's zerolog output, so a quick tunnel's public URL is not in there:
+that bridge needs `os.Pipe`, which tamago does not implement
+([internal/cfd/pump.go](internal/cfd/pump.go) is ready for the day it does, and
+the app logs which of the two you got). Until then, read the tunnel's state from
+the metrics server: `/ready`, `/metrics` and `/quicktunnel`.
 
 ## Why a patch, and why it is two files
 
@@ -98,31 +100,67 @@ replaces for `urfave/cli` and `quic-go`, and a dependency's replaces do not appl
 transitively. Without repeating them, its code does not compile — it uses API
 that only exists in those forks.
 
-## What is verified, and what is not
+## What it took to actually run
 
-Verified here: both images build and link; the generated command line is checked
-against the **pinned** cloudflared's real flag tree, and every bridged env name
-against its real `EnvVars`
-([internal/cfd/flags_test.go](internal/cfd/flags_test.go)) — so an upstream rename
-breaks a test instead of a node; the log pump, the mode/default logic and the
-token never reaching a log line are host-tested.
+**It runs**: a named tunnel over `http2` from a QEMU HopOS node, confirmed
+connected on the Cloudflare side (2026-07-31). Getting there took two fixes, and
+one of them was hidden by a third problem.
 
-**Not verified: an actual tunnel.** That needs a real node and a real Cloudflare
-account, so treat the runtime as unproven. Known risks, in order:
+**1. `tunnel.Init` — a nil `*BuildInfo`.** Registering `tunnel.Commands()` is not
+enough: cloudflared's own `main.go` also sets a handful of package globals that
+the tunnel path then dereferences. Without `tunnel.Init(bInfo, …)`, `StartServer`
+panics immediately in `cliutil.(*BuildInfo).Log`. The app now runs the same
+sequence upstream does (`tunnel`, `updater`, `management`, `token`, `tracing`,
+`RegisterBuildInfo`) plus their own `QUIC_GO_DISABLE_ECN=1`.
 
-1. **QUIC.** cloudflared defaults to it; we default to `http2` instead, because
-   http2 is TCP+TLS over the same path as any other outbound connection from a
-   slot. QUIC is UDP with socket options and datagram sizes that have to survive
-   the per-slot gVisor netstack and HOP's masquerade. It may well work — nobody
-   has measured it. `TUNNEL_TRANSPORT_PROTOCOL=quic` to try.
-2. **Trust store.** There is no `/etc/ssl` on a slot, so `x509.SystemCertPool()`
-   comes back empty and TLS to the edge would fail. The app imports
-   `golang.org/x/crypto/x509roots/fallback` for the baked-in bundle — the same
-   one the apploader uses to fetch artifacts over https.
-3. **Filesystem and HOME.** With a token cloudflared needs no `cert.pem`, but
-   parts of it still like a config directory. Nothing writes to disk in a slot.
-4. **Clock.** TLS needs a correct one; HOP syncs via SNTP and applib takes the
-   offset over at startup, so this should be fine.
+**2. The metrics listener — a slot has no loopback.** cloudflared binds its
+metrics/readiness server to `localhost:0` by default, and the per-slot gVisor
+netstack has exactly one NIC with the slot's own IP. Upstream's `virtual` runtime
+turns that into `0.0.0.0:0`, which the stack rejects with `bind: bad local
+address`. It needs a **concrete address and a concrete port**, so the app passes
+`--metrics <own-ip>:20241` (see `DefaultMetricsPort`; `TUNNEL_METRICS` overrides).
+
+**3. Why neither was visible.** `board/hopslot`'s `printk` is deliberately a
+no-op — a caged core has no UART MMIO — so runtime panics *and* cloudflared's
+zerolog output are dropped, and HOP only reported `exit code 2`. Three things now
+make a slot debuggable, and they are worth copying into any HopOS app:
+
+- `recover()` logs the panic and its stack into the ring, with the **summary
+  last**, because the last ring line is what HOP echoes in its exit message
+  (`last="…"`). Reason on the console, stack in `hop logs`.
+- `cli.ErrWriter` and `cli.OsExiter` are redirected into the ring. Those were the
+  invisible exits: urfave/cli writes the fatal error to `ErrWriter` (default
+  `os.Stderr`, a black hole here) and then goes straight to `os.Exit`, so `Run`
+  never returns. This is what finally surfaced the metrics error.
+- `os.Pipe` does **not** exist on tamago (`pipe: not implemented`), so the
+  stdout/stderr bridge cannot work; the app says so in a log line instead of
+  failing silently.
+
+**Still open: cloudflared's own log lines** (including a quick tunnel's public
+URL) do not reach `hop logs`, because of that missing pipe. Publish the metrics
+port and read `/ready`, `/metrics` or `/quicktunnel` instead.
+
+Remaining unknowns, in order:
+
+1. **QUIC** is still unmeasured. We default to `http2` because it is TCP+TLS over
+   the same path as any other outbound slot connection; QUIC is UDP with socket
+   options and datagram sizes that have to survive the per-slot netstack and
+   HOP's masquerade. quic-go already warns it cannot grow its receive buffer
+   (`wanted 7168 kiB, got 0`), which is harmless on http2.
+   `TUNNEL_TRANSPORT_PROTOCOL=quic` to try it.
+2. **Graceful shutdown.** HOP's kill is abrupt (kill flag → `EXITED` → CPU_OFF),
+   so `graceShutdownC` never closes and the connector does not deregister; the
+   edge notices by itself.
+3. **Trust store** worked out: there is no `/etc/ssl`, so `x509.SystemCertPool()`
+   is empty and the app imports `golang.org/x/crypto/x509roots/fallback` — the
+   same bundle the apploader uses. TLS to the edge is fine, which also confirms
+   HOP's SNTP clock offset arrives before the first handshake.
+
+Also verified without a node: both images build and link; the generated command
+line is checked against the **pinned** cloudflared's real flag tree and every
+bridged env name against its real `EnvVars`
+([internal/cfd/flags_test.go](internal/cfd/flags_test.go)), so an upstream rename
+breaks a test instead of a node.
 
 ## Limits
 
@@ -130,8 +168,7 @@ account, so treat the runtime as unproven. Known risks, in order:
   riscv64 build exists so the code keeps building for both, but a LicheeRV Nano
   has a 175 MB pool and one slot: it does not fit.
 - Published to `rolling-release` like the other apps, so a job spec can point
-  straight at it — but read *What is verified* above first: the tunnel itself has
-  not been proven on a node yet.
+  straight at it.
 
   ```
   https://github.com/xinix00/hop/releases/download/rolling-release/cloudflared-arm64-tamago.elf
