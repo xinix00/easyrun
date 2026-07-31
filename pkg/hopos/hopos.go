@@ -51,6 +51,17 @@ type SlotStatus struct {
 	FaultVec uint64
 	FaultESR uint64
 	FaultFAR uint64
+
+	// Cage is the node's own one-line account of the slot's cage, or empty when
+	// there is nothing to say. Same reason the Fault* fields exist — a headless
+	// node is otherwise silent — but for the architectures where the cage is not
+	// a stage-2 map: what the loader stub reached, and what kind of hart is
+	// underneath. It travels over the network, which the node's serial console
+	// cannot be trusted to do: at 115200 that line drops bytes, and a mangled
+	// hex value is worse than none.
+	//
+	// Diagnostics only, like Fault*: never state-machine input.
+	Cage string
 }
 
 // SlotManager abstracts HopOS' slot primitives (hop-os/metal/slots). The

@@ -171,6 +171,16 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 	r.stderrLog[task.ID] = stderr
 	r.mu.Unlock()
 
+	// What kind of cage did this task land in? The node knows, and on a headless
+	// board its serial console is the only other place it would say so — a line
+	// that drops bytes at 115200. Putting it first in the task's own log makes it
+	// arrive intact, and puts it where an operator already looks (`hop logs`).
+	// Empty on architectures where the cage is a stage-2 map: there is nothing
+	// there that the Fault* fields do not already carry.
+	if cage := r.sm.Status(slot).Cage; cage != "" {
+		_, _ = stdout.Write([]byte(cage))
+	}
+
 	go func() {
 		for line := range r.sm.Logs(slot) {
 			_, _ = stdout.Write([]byte(line))
@@ -276,6 +286,9 @@ func (r *HopRunner) awaitStaged(task *types.Task, slot int, timeout time.Duratio
 				return false, fmt.Errorf("apploader died before staging: stage-2 fault (vec %d, ESR %#x, FAR %#x)",
 					s.FaultVec-1, s.FaultESR, s.FaultFAR)
 			}
+			if s.Cage != "" {
+				return false, fmt.Errorf("apploader died before staging (core off): %s", s.Cage)
+			}
 			return false, fmt.Errorf("apploader died before staging (core off, no fault recorded)")
 		}
 		if s.Heartbeat != lastHB {
@@ -351,6 +364,8 @@ func (r *HopRunner) Status(task *types.Task) (types.TaskState, error) {
 			case s.FaultVec != 0:
 				log.Printf("hop task %s failed: stage-2 fault on slot %d (vec %d, ESR %#x, FAR %#x)",
 					task.ID, slot, s.FaultVec-1, s.FaultESR, s.FaultFAR)
+			case s.Cage != "":
+				log.Printf("hop task %s failed: exit code %d (slot %d) — %s", task.ID, s.ExitCode, slot, s.Cage)
 			case s.ExitCode != 0:
 				log.Printf("hop task %s failed: exit code %d (slot %d)", task.ID, s.ExitCode, slot)
 			}

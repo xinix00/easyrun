@@ -21,6 +21,9 @@ type fakeSlotManager struct {
 	num     int
 	classes map[int]string
 
+	// cage is wat de node over de kooi van élk slot meldt (hopos.SlotStatus.Cage).
+	cage string
+
 	// Laatste sharegroup-plaatsing (voor assertions in de core-deling-test).
 	lastSharegroup string
 	lastPoolCores  int
@@ -37,6 +40,7 @@ type fakeSlot struct {
 	coreOn   bool
 	app      uint64
 	exitCode uint64
+	cage     string
 	logs     chan string
 }
 
@@ -128,7 +132,11 @@ func (f *fakeSlotManager) Status(slot int) hopos.SlotStatus {
 	if !ok {
 		return hopos.SlotStatus{App: hopos.SlotEmpty}
 	}
-	return hopos.SlotStatus{CoreOn: s.coreOn, App: s.app, ExitCode: s.exitCode}
+	cage := s.cage
+	if cage == "" {
+		cage = f.cage
+	}
+	return hopos.SlotStatus{CoreOn: s.coreOn, App: s.app, ExitCode: s.exitCode, Cage: cage}
 }
 
 func (f *fakeSlotManager) Logs(slot int) <-chan string {
@@ -218,6 +226,51 @@ func TestHopRunnerLifecycle(t *testing.T) {
 	}
 	if st, _ := r.Status(task); st != types.TaskStopped {
 		t.Fatalf("Status after stop = %v, want stopped", st)
+	}
+}
+
+// De kooi-regel van de node moet in de eigen log van de task belanden, en als
+// eerste regel. Dat is de hele reden dat het veld bestaat: op een headless board
+// is de andere plek waar de node dit zou zeggen zijn seriële console, en die
+// verliest bytes op 115200 — een gehavend hex-getal is erger dan geen.
+func TestHopRunnerCageLineReachesTaskLog(t *testing.T) {
+	srv := imageServer(t, []byte("ELF-achtige bytes"))
+	sm := newFakeSlotManager(11)
+	sm.cage = "hart of slot 1: misa 0x800000000094112d (rv64 acdfimsux, S-mode present)"
+	r := NewHopRunner(sm, map[string]string{"node.os": "hopos"})
+	task := &types.Task{ID: "t-cage", JobName: "demo", Driver: types.DriverHop}
+
+	if err := r.Run(hopJob(srv.URL), task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := r.GetStdout(task.ID)
+	if out == nil {
+		t.Fatal("no stdout broadcaster")
+	}
+	tail := out.Tail()
+	if len(tail) == 0 || tail[0] != sm.cage {
+		t.Fatalf("kooi-regel staat niet vooraan in de task-log: %v", tail)
+	}
+}
+
+// Zonder kooi-regel (de architecturen waar de kooi een stage-2-map is) mag er
+// geen lege regel vooraan komen: dan is de eerste regel die van de app.
+func TestHopRunnerNoCageLineWhenEmpty(t *testing.T) {
+	srv := imageServer(t, []byte("ELF-achtige bytes"))
+	sm := newFakeSlotManager(11)
+	r := NewHopRunner(sm, map[string]string{"node.os": "hopos"})
+	task := &types.Task{ID: "t-nocage", JobName: "demo", Driver: types.DriverHop}
+
+	if err := r.Run(hopJob(srv.URL), task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	out := r.GetStdout(task.ID)
+	deadline := time.Now().Add(2 * time.Second)
+	for len(out.Tail()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if tail := out.Tail(); len(tail) == 0 || tail[0] != "app leeft" {
+		t.Fatalf("eerste regel moet van de app zijn: %v", tail)
 	}
 }
 
