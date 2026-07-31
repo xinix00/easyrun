@@ -22,18 +22,27 @@ node uptime** in that env, so the page does not show them: asking the agent API
 would need HMAC with the cluster key, and a welcome page you cannot read without
 a key is exactly the friction this app removes.
 
-First-hand, and that list *is* the message: node address, its own IP, slot/core,
+First-hand, and that list *is* the message: node address, its own IP, its slot,
 `runtime.NumCPU()`, `app.RAMSize` (a hardware boundary, not a quota), heap from
 `ReadMemStats`, `runtime.GOARCH` + `runtime.Version()`, its own uptime and its
 own counters.
 
-**Whole cores are the default, not a law.** With a sharegroup HOP puts several
-cages on one physical core, and then "a whole core" is a lie — worse, `app.Slot`
-*is* the core index, so a neighbour reports the same number. So the page does not
-claim it: it reads `CtrlShared` from its own control page (HOP is the only writer
-and keeps it current while the app runs) and says `dedicated` or `shared`. That
-value sits in `/api/status` and moves with the poll, so it flips as neighbours
-come and go. A test asserts the page never promises a whole core while sharing.
+**Whole cores are the default, not a law — and sharing is allowed, never
+imposed.** HOP stacks cages on one physical core only when a job asks for it with
+a sharegroup, so nothing lands on your core behind your back. But that also means
+"a whole core" is not a property to state: it is a measurement, and one that
+changes while the app runs. The page reads `CtrlShared` from its own control page
+(HOP is the only writer and keeps it current) and says `dedicated` or `shared`,
+worded as *this moment* rather than a promise. That value sits in `/api/status`
+and moves with the poll, so it flips as neighbours arrive and leave.
+
+**And the slot is not the core.** `app.Slot` is the *cage* number: HOP patches it
+into the image as `slotHint` at start, and `board/hopslot` only falls back to
+MPIDR when that hint is missing (on servers MPIDR is not a slot number at all).
+Which physical core the cage landed on is HOP's business — an app is not told, and
+with a sharegroup several cages share one. The page said "the slot … is also the
+index of the core it runs on", which was simply wrong; tests now pin both this and
+the whole-core claim.
 
 ## Layout
 

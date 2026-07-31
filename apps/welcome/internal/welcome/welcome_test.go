@@ -156,14 +156,16 @@ func TestCoreStateIsReadEveryTimeAndNeverAssumed(t *testing.T) {
 	}
 }
 
-// TestPageNeverClaimsAWholeCoreWhenSharing is de reden dat dit alles bestaat:
-// "een hele core" is de default, geen wet. Zit er een buur op de core, dan mag
-// die belofte nergens op de pagina staan.
-func TestPageNeverClaimsAWholeCoreWhenSharing(t *testing.T) {
+// TestPageNeverPromisesAWholeCore is de reden dat dit alles bestaat: hele cores
+// zijn de default, geen wet. Zit er een buur op de core, dan mag die belofte
+// nergens op de pagina staan — en ook met een eigen core is het een meting van
+// dit moment, niet een eigenschap.
+func TestPageNeverPromisesAWholeCore(t *testing.T) {
 	shared := string(Page(testNode(), Status{Core: CoreShared}))
 	for _, lie := range []string{
+		"to itself",
+		"nobody else on this core",
 		"a whole core",
-		"a core of its own",
 		"not a time slice",
 	} {
 		if strings.Contains(shared, lie) {
@@ -176,19 +178,57 @@ func TestPageNeverClaimsAWholeCoreWhenSharing(t *testing.T) {
 		}
 	}
 
-	// Met een eigen core mag het er juist wél staan.
+	// Met een eigen core mag het er wél staan, maar als moment en niet als belofte.
 	ded := string(Page(testNode(), Status{Core: CoreDedicated}))
-	for _, want := range []string{"a whole core to itself", "a core of its own", ">dedicated<"} {
+	for _, want := range []string{"to itself at this moment", "nobody else on this core right now", ">dedicated<"} {
 		if !strings.Contains(ded, want) {
 			t.Errorf("pagina mist %q bij een dedicated core", want)
 		}
 	}
+	if strings.Contains(ded, "sharing this core") {
+		t.Error("pagina zegt dat de core gedeeld wordt terwijl hij dat niet is")
+	}
 
 	// Weten we het niet, dan geen van beide claims.
 	unknown := string(Page(testNode(), Status{Core: CoreUnknown}))
-	for _, lie := range []string{"a whole core", "a core of its own", "sharing this core"} {
+	for _, lie := range []string{"to itself", "a whole core", "sharing this core", "nobody else on this core"} {
 		if strings.Contains(unknown, lie) {
 			t.Errorf("pagina claimt %q terwijl de core-status onbekend is", lie)
+		}
+	}
+
+	// En in alle drie de gevallen staat erbij dat delen MAG maar niet MOET: HOP
+	// stapelt alleen kooien op één core als een job daar met een sharegroup om
+	// vraagt. Zonder die nuance leest "shared" als iets dat je overkomt.
+	for _, page := range []string{shared, ded, unknown} {
+		if !strings.Contains(page, "allowed but never imposed") {
+			t.Error("pagina zegt niet dat delen mag maar niet moet")
+		}
+		if !strings.Contains(page, "sharegroup") {
+			t.Error("pagina noemt het mechanisme (sharegroup) niet")
+		}
+	}
+}
+
+// TestPageNeverCallsTheSlotACoreIndex pint de tweede correctie vast: app.Slot is
+// het KOOInummer (HOP patcht slotHint bij Start), niet de index van de fysieke
+// core. Welke core een kooi kreeg weet een app niet, en met een sharegroup zitten
+// er meerdere kooien op één core — dus mag de pagina die twee nooit gelijkstellen.
+func TestPageNeverCallsTheSlotACoreIndex(t *testing.T) {
+	for _, st := range []Status{{Core: CoreDedicated}, {Core: CoreShared}, {Core: CoreUnknown}} {
+		page := string(Page(testNode(), st))
+		for _, lie := range []string{
+			"index of the core",
+			"is the core index",
+			"slot / core",
+			"slot · core",
+		} {
+			if strings.Contains(page, lie) {
+				t.Errorf("pagina stelt slot en core gelijk (%q) bij core=%v", lie, st.Core)
+			}
+		}
+		if !strings.Contains(page, "the cage HOP started this app in") {
+			t.Errorf("pagina legt het slotnummer niet uit als kooi (core=%v)", st.Core)
 		}
 	}
 }

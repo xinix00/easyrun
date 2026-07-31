@@ -61,9 +61,12 @@ type Node struct {
 	Port string // ER_PORT_HTTP — de poort die HOP publiceerde
 	DNS  string // HOP_DNS (leeg = niet meegegeven)
 
-	// Slot is de slot-index, en dat is de index van de fysieke core waarop deze
-	// app draait. Onder een sharegroup is die core niet exclusief van deze app
-	// (en rapporteert de buur hetzelfde nummer) — zie CoreState.
+	// Slot is het KOOInummer: HOP patcht het als slotHint in het image bij Start
+	// (board/hopslot valt alleen terug op MPIDR als die hint ontbreekt, en op
+	// servers is MPIDR geen slotnummer). Het is dus NIET de index van de fysieke
+	// core — welke core de kooi kreeg weet een app niet, en met een sharegroup
+	// zitten er meerdere kooien op één core. Of deze app die core alleen heeft:
+	// zie CoreState.
 	Slot int
 
 	Cores   int    // cores van deze app (SMP zet HopOS zelf)

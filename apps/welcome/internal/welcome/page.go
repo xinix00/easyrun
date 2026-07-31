@@ -28,19 +28,23 @@ func Page(n Node, st Status) []byte {
 			`</td><td class="n">HOP_DNS — where this app would look up its neighbours by name (it does not need to)</td></tr>`
 	}
 
-	// Drie plekken op de pagina praten over de core, en alle drie moeten mee met
-	// wat HOP nú zegt: standaard is een core exclusief, maar met een sharegroup
-	// zitten er meerdere kooien op. En omdat app.Slot de CORE-index is, is dat
-	// nummer onder sharing niet eens uniek — dus geen woord over "een hele core"
-	// zonder het gemeten te hebben.
-	phrase, tile, core := "a core assigned by HOP", "one slot on this machine", "—"
+	// Drie plekken praten over de core, en alle drie zeggen wat HOP NÚ zegt.
+	// "Een hele core" is geen eigenschap maar een meting: het is de default, maar
+	// met een sharegroup zetten er meerdere kooien op één core, en HOP zet dat om
+	// terwijl de app leeft. Dus geen belofte, alleen dit moment.
+	//
+	// En let op het verschil dat de pagina eerder verkeerd had: app.Slot is het
+	// KOOInummer (HOP patcht slotHint in het image bij Start; MPIDR is alleen de
+	// terugval, en op servers is dat geen slotnummer). Op welke fysieke core die
+	// kooi landt hoort een app niet te weten — dus staat dat er ook niet.
+	phrase, tile, core := "a core HOP assigned it", "the cage HOP started this app in", "—"
 	switch st.Core {
 	case CoreDedicated:
-		phrase = "a whole core to itself"
-		tile = "a core of its own, not a time slice"
+		phrase = "a core it has to itself at this moment"
+		tile = "nobody else on this core right now"
 		core = "dedicated"
 	case CoreShared:
-		phrase = "a core it shares with at least one other slot, because this node was set up for density"
+		phrase = "a core it shares with at least one other slot, because someone asked for that density with a sharegroup"
 		tile = "sharing this core with another slot"
 		core = "shared"
 	}
@@ -90,7 +94,7 @@ const pageHTML = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HopOS — node __HOST__</title>
-<meta name="description" content="A HopOS node. This page is served by an app that is the operating system on its own core.">
+<meta name="description" content="A HopOS node. This page is served by an app that is the operating system in its own slot.">
 <meta name="robots" content="noindex">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐇</text></svg>">
 <style>
@@ -214,7 +218,7 @@ footer pre{margin:0;font-family:var(--mono);font-size:13px;line-height:1.5;color
 
   <div class="tiles">
     <div class="tile"><span class="k">node</span><span class="v">__HOST__</span><span class="n">this address works from outside and from the node itself</span></div>
-    <div class="tile"><span class="k">slot · core</span><span class="v">__SLOT__</span><span class="n">__CORE_TILE__</span></div>
+    <div class="tile"><span class="k">slot</span><span class="v">__SLOT__</span><span class="n">__CORE_TILE__</span></div>
     <div class="tile"><span class="k">memory</span><span class="v">__RAM__</span><span class="n">a partition, not a quota — the limit is hardware</span></div>
     <div class="tile"><span class="k">runtime</span><span class="v">__ARCH__</span><span class="n">__RUNTIME__ — the Go runtime is the OS here</span></div>
   </div>
@@ -231,9 +235,9 @@ footer pre{margin:0;font-family:var(--mono);font-size:13px;line-height:1.5;color
     <tbody>
       <tr><td class="f">node address</td><td class="v">__ADDR__</td><td class="n">the port HOP published on the node IP; since v1.5.4 the same address also works from inside</td></tr>
       <tr><td class="f">app address</td><td class="v">__IP__</td><td class="n">its <em>own</em> network stack and IP on the internal net — no shared socket layer</td></tr>
-      <tr><td class="f">slot / core</td><td class="v">__SLOT__</td><td class="n">the slot HOP started this app in, which is also the index of the core it runs on</td></tr>
-      <tr><td class="f">this core is</td><td class="v"><span class="l" data-k="core">__CORE_VALUE__</span></td><td class="n">whole cores are the default, but HOP can put trusted apps in a <em>sharegroup</em> on one core when you want the density — so this is measured, not assumed, and it flips while the app runs as neighbours come and go</td></tr>
-      <tr><td class="f">cores</td><td class="v">__CORES__</td><td class="n">what this app was given; a job asking for more CPU shares gets more cores, sharing one heap</td></tr>
+      <tr><td class="f">slot</td><td class="v">__SLOT__</td><td class="n">the cage HOP started this app in — it patches the number into the image at start. <em>Which</em> physical core that cage landed on is HOP's business; an app is not told, and with a sharegroup several cages share one</td></tr>
+      <tr><td class="f">this core is</td><td class="v"><span class="l" data-k="core">__CORE_VALUE__</span></td><td class="n">whole cores are the default, and sharing is <em>allowed but never imposed</em>: HOP stacks cages on one core only when a job asks for it with a <em>sharegroup</em>, so nothing lands on your core behind your back. Which is why this is measured rather than promised — and it flips while the app runs as neighbours arrive and leave</td></tr>
+      <tr><td class="f">cores</td><td class="v">__CORES__</td><td class="n">how many this app was given; a job asking for more CPU shares gets more, sharing one heap. Whether they are exclusive is the row above</td></tr>
       <tr><td class="f">memory partition</td><td class="v">__RAM__</td><td class="n">handed out by HOP and enforced by the hardware — there is nothing to exceed</td></tr>
       <tr><td class="f">heap in use</td><td class="v"><span class="l" data-k="heap">__HEAP__</span></td><td class="n">from the Go runtime, which on this core <em>is</em> the operating system</td></tr>
       <tr><td class="f">live objects</td><td class="v"><span class="l" data-k="objects">__OBJECTS__</span></td><td class="n">everything this page needs is already in memory; there is no filesystem to read</td></tr>
