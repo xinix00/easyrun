@@ -126,10 +126,17 @@ account, so treat the runtime as unproven. Known risks, in order:
 - **30 MB image** ⇒ `memory_limit` of ~256 MB. That is a Pi-class demo. The
   riscv64 build exists so the code keeps building for both, but a LicheeRV Nano
   has a 175 MB pool and one slot: it does not fit.
-- Not published to the `rolling-release` assets, unlike the other apps —
-  publishing a 30 MB artifact that has never completed a tunnel would be a
-  promise this example cannot keep yet. Once it has run on a node, add
-  `hop/apps/cloudflared:cloudflared-hopos:cloudflared` to `HOPOS_TARGETS` (and
-  `HOPOS_RISCV_TARGETS`) in `release.sh` and it ships with the rest.
+- Published to `rolling-release` like the other apps, so a job spec can point
+  straight at it — but read *What is verified* above first: the tunnel itself has
+  not been proven on a node yet.
+
+  ```
+  https://github.com/xinix00/hop/releases/download/rolling-release/cloudflared-arm64-tamago.elf
+  https://github.com/xinix00/hop/releases/download/rolling-release/cloudflared-riscv64-tamago.elf
+  ```
+
+  `release.sh` runs `tools/prepare-cloudflared.sh` itself before the tamago
+  builds (`HOPOS_PREPARE`), so a release picks up a version bump in go.mod
+  without anyone remembering the step.
 - `tunnel diag`, `tunnel login` and the service-install subcommands are along for
   the ride but cannot work here; the diagnostic collectors say so when asked.
