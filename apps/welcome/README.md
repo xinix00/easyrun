@@ -64,10 +64,15 @@ GOWORK=off GOTOOLCHAIN=local GOOS=tamago GOOSPKG=github.com/usbarmory/tamago GOA
   ~/tamago-go/bin/go build -tags linkcpuinit -trimpath \
   -ldflags "-w -T 0x50010000 -R 0x1000" -o out/welcome-arm64-tamago.elf ./cmd/welcome
 
-# riscv64 (LicheeRV Nano) — no second translation stage: the link address IS
-# the partition, and the RAM plan comes from the linkramsize tag
+# riscv64 (LicheeRV Nano) — no second translation stage: the link address IS the
+# partition, and the RAM plan comes from linkramsize. That tag goes ON TOP of
+# linkcpuinit, not instead of it: without linkcpuinit tamago links its own entry
+# assembly, which writes mie/mstatus — M-mode CSRs, while a slot on this board
+# runs in S-MODE. That is an illegal instruction on the second instruction of the
+# entry (measured on the board 2026-07-31: mcause 2, mtval 0x30429073 = csrw mie)
+# and the app dies before its first log line.
 GOWORK=off GOTOOLCHAIN=local GOOS=tamago GOOSPKG=github.com/usbarmory/tamago GOARCH=riscv64 \
-  ~/tamago-go/bin/go build -tags linkramsize -trimpath \
+  ~/tamago-go/bin/go build -tags "linkramsize linkcpuinit" -trimpath \
   -ldflags "-w -T 0x88010000 -R 0x1000" -o out/welcome-riscv64-tamago.elf ./cmd/welcome
 ```
 

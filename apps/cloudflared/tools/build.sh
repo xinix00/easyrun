@@ -35,11 +35,14 @@ GOWORK=off GOTOOLCHAIN=local GOOS=tamago GOOSPKG=github.com/usbarmory/tamago GOA
 du -h out/cloudflared-arm64-tamago.elf | cut -f1
 
 # riscv64 (LicheeRV): geen tweede translatiefase, dus het linkadres IS de
-# partitie en het RAM-plan komt uit de linkramsize-tag. Bouwt mee zodat het
-# blijft bouwen — 30 MB image past alleen niet in de 175 MB-pool van dat bord.
+# partitie en het RAM-plan komt uit de linkramsize-tag. linkcpuinit hoort erbij
+# en is niet optioneel: een slot draait daar in S-MODE, en tamago's eigen
+# opstart-assembly schrijft mie/mstatus — M-mode-CSR's, dus een illegal
+# instruction op instructie twee van het entry (gemeten 31-07: mcause 2, mtval
+# 0x30429073 = csrw mie). Met de tag levert HopOS de S-mode-veilige cpuinit.
 printf "  %-30s" "cloudflared-riscv64-tamago.elf"
 GOWORK=off GOTOOLCHAIN=local GOOS=tamago GOOSPKG=github.com/usbarmory/tamago GOARCH=riscv64 \
-	"$TAMAGO" build -tags linkramsize -trimpath \
+	"$TAMAGO" build -tags "linkramsize linkcpuinit" -trimpath \
 	-ldflags "-w -T 0x88010000 -R 0x1000 -X main.version=$VERSION" \
 	-o out/cloudflared-riscv64-tamago.elf ./cmd/cloudflared-hopos
 du -h out/cloudflared-riscv64-tamago.elf | cut -f1
