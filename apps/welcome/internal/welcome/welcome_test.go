@@ -57,7 +57,7 @@ func TestHostFallsBackToOwnIP(t *testing.T) {
 	// adres dat werkt, en dat moet de pagina noemen — niet een leeg veld.
 	n := testNode()
 	n.Host = ""
-	s := NewServer(n)
+	s := NewServer(n, nil)
 	if got := s.Node().Host; got != n.IP {
 		t.Errorf("Host zonder HOPOS_HOST = %q, wil de eigen IP %q", got, n.IP)
 	}
@@ -117,16 +117,84 @@ func TestStatusJSON(t *testing.T) {
 	got := string(StatusJSON(Status{
 		UptimeSeconds: 61, HeapBytes: 1234567, HeapObjects: 4321,
 		Goroutines: 6, Views: 2, Requests: 9, Slot: 3, Cores: 1, RAMBytes: 67108864,
+		Core: CoreShared,
 	}))
 	want := `{"uptime_seconds":61,"heap_bytes":1234567,"heap_objects":4321,` +
-		`"goroutines":6,"views":2,"requests":9,"slot":3,"cores":1,"ram_bytes":67108864}`
+		`"goroutines":6,"views":2,"requests":9,"slot":3,"cores":1,"ram_bytes":67108864,` +
+		`"core":"shared"}`
 	if got != want {
 		t.Errorf("StatusJSON =\n  %s\nwil\n  %s", got, want)
+	}
+	// Zonder sampler (host, oudere node) mag er geen claim in staan.
+	if unknown := string(StatusJSON(Status{})); !strings.Contains(unknown, `"core":"unknown"`) {
+		t.Errorf("lege Status =\n  %s\nwil core=unknown", unknown)
+	}
+}
+
+func TestCoreStateIsReadEveryTimeAndNeverAssumed(t *testing.T) {
+	// HOP zet CtrlShared om terwijl de app draait (buur komt erbij, buur gaat
+	// weg), dus de sampler moet elke keer opnieuw gelezen worden — niet één keer
+	// bij het starten onthouden.
+	state := CoreDedicated
+	calls := 0
+	s := NewServer(testNode(), func() CoreState { calls++; return state })
+
+	if got := s.Status().Core; got != CoreDedicated {
+		t.Errorf("Core = %v, wil dedicated", got)
+	}
+	state = CoreShared
+	if got := s.Status().Core; got != CoreShared {
+		t.Errorf("Core = %v na omzetten, wil shared — waarde werd gecachet", got)
+	}
+	if calls != 2 {
+		t.Errorf("sampler %d× gelezen, wil 2×", calls)
+	}
+
+	// Zonder sampler claimt niets iets.
+	if got := NewServer(testNode(), nil).Status().Core; got != CoreUnknown {
+		t.Errorf("zonder sampler = %v, wil unknown", got)
+	}
+}
+
+// TestPageNeverClaimsAWholeCoreWhenSharing is de reden dat dit alles bestaat:
+// "een hele core" is de default, geen wet. Zit er een buur op de core, dan mag
+// die belofte nergens op de pagina staan.
+func TestPageNeverClaimsAWholeCoreWhenSharing(t *testing.T) {
+	shared := string(Page(testNode(), Status{Core: CoreShared}))
+	for _, lie := range []string{
+		"a whole core",
+		"a core of its own",
+		"not a time slice",
+	} {
+		if strings.Contains(shared, lie) {
+			t.Errorf("pagina belooft %q terwijl de core gedeeld wordt", lie)
+		}
+	}
+	for _, want := range []string{"shares with at least one other slot", "sharing this core", ">shared<"} {
+		if !strings.Contains(shared, want) {
+			t.Errorf("pagina zegt niet dat de core gedeeld wordt (mist %q)", want)
+		}
+	}
+
+	// Met een eigen core mag het er juist wél staan.
+	ded := string(Page(testNode(), Status{Core: CoreDedicated}))
+	for _, want := range []string{"a whole core to itself", "a core of its own", ">dedicated<"} {
+		if !strings.Contains(ded, want) {
+			t.Errorf("pagina mist %q bij een dedicated core", want)
+		}
+	}
+
+	// Weten we het niet, dan geen van beide claims.
+	unknown := string(Page(testNode(), Status{Core: CoreUnknown}))
+	for _, lie := range []string{"a whole core", "a core of its own", "sharing this core"} {
+		if strings.Contains(unknown, lie) {
+			t.Errorf("pagina claimt %q terwijl de core-status onbekend is", lie)
+		}
 	}
 }
 
 func TestStatusCountsUptimeFromReady(t *testing.T) {
-	s := NewServer(testNode())
+	s := NewServer(testNode(), nil)
 	s.now = func() time.Time { return s.start.Add(90 * time.Second) }
 	if got := s.Status().UptimeSeconds; got != 90 {
 		t.Errorf("uptime = %d, wil 90", got)
@@ -205,7 +273,7 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 	t.Cleanup(func() { l.Close() })
 
-	s := NewServer(testNode())
+	s := NewServer(testNode(), nil)
 	go apphttp.Serve(l, s.Handle)
 	base := "http://" + l.Addr().String()
 

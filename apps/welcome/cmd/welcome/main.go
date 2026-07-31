@@ -13,10 +13,12 @@
 //	HOPOS_HOST    het node-IP waarop die poort van buiten open staat
 //	HOP_DNS       de cluster-resolver (alleen om te tonen; niet gebruikt)
 //
-// Jobspec (zoals in image/hopos-headless.cfg):
+// Jobspec (zoals in image/hopos-headless.cfg) — één regel voor beide
+// architecturen, de node kiest zijn eigen artifact via match op node.arch:
 //
-//	hopos.init[]={"name":"welcome","driver":"hop",
-//	 "artifacts":[{"url":"https://github.com/xinix00/hop/releases/download/rolling-release/welcome-arm64-tamago.elf"}],
+//	hopos.init[]={"name":"welcome","driver":"hop","artifacts":[
+//	  {"url":"https://github.com/xinix00/hop/releases/download/rolling-release/welcome-arm64-tamago.elf","match":{"node.arch":"arm64"}},
+//	  {"url":"https://github.com/xinix00/hop/releases/download/rolling-release/welcome-riscv64-tamago.elf","match":{"node.arch":"riscv64"}}],
 //	 "memory_limit":67108864,
 //	 "ports":{"http":80}}
 package main
@@ -24,9 +26,11 @@ package main
 import (
 	"runtime"
 
+	"hop-os/metal/abi/layout"
 	"hop-os/metal/app/applib"
 	"hop-os/metal/app/applib/apphttp"
 	"hop-os/metal/app/applib/appnet"
+	"hop-os/metal/dev"
 
 	"welcome/internal/welcome"
 )
@@ -60,9 +64,30 @@ func main() {
 		Arch:    runtime.GOARCH,   // arm64 óf riscv64
 		Runtime: runtime.Version(),
 		Version: version,
-	})
+	}, coreState(app))
 
 	app.Logf("%s", welcome.Banner(srv.Node()))
 	app.Logf("http: %v", apphttp.ListenAndServe(":"+port, srv.Handle))
 	app.Exit(1) // een service die stopt met serveren is een crash, by design
+}
+
+// coreState leest CtrlShared van de eigen control-page: 1 zodra er een tweede
+// levende bewoner op deze fysieke core zit (sharegroup), 0 als deze app hem
+// alleen heeft. HOP is de enige schrijver en werkt het bij zolang de app leeft,
+// dus dit wordt bij élke opvraging opnieuw gelezen en niet één keer onthouden.
+//
+// Rechtstreeks van de control-page en niet via applib, want applib gebruikt dit
+// woord alleen zelf (de idle-governor yieldt erop) en biedt er geen accessor
+// voor. Het is wel gewoon de ABI: abi/layout documenteert CtrlShared als
+// HOP → app. Met dev.Pull erbij, want op een board waar HOP en dit hart niet
+// coherent zijn staat de verse waarde anders alleen in HOP's cache.
+func coreState(app *applib.App) func() welcome.CoreState {
+	addr := layout.CtrlPageAt(app.RAMStart, app.RAMSize) + layout.CtrlShared
+	return func() welcome.CoreState {
+		dev.Pull(addr, 8)
+		if dev.Read64(addr) == 1 {
+			return welcome.CoreShared
+		}
+		return welcome.CoreDedicated
+	}
 }

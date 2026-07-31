@@ -27,6 +27,14 @@ First-hand, and that list *is* the message: node address, its own IP, slot/core,
 `ReadMemStats`, `runtime.GOARCH` + `runtime.Version()`, its own uptime and its
 own counters.
 
+**Whole cores are the default, not a law.** With a sharegroup HOP puts several
+cages on one physical core, and then "a whole core" is a lie — worse, `app.Slot`
+*is* the core index, so a neighbour reports the same number. So the page does not
+claim it: it reads `CtrlShared` from its own control page (HOP is the only writer
+and keeps it current while the app runs) and says `dedicated` or `shared`. That
+value sits in `/api/status` and moves with the poll, so it flips as neighbours
+come and go. A test asserts the page never promises a whole core while sharing.
+
 ## Layout
 
 | path | what |
@@ -73,8 +81,11 @@ https://github.com/xinix00/hop/releases/download/rolling-release/welcome-riscv64
 
 ## Run
 
+One line for both architectures — list an artifact per arch and let the node pick
+its own with `match` on `node.arch`:
+
 ```
-hopos.init[]={"name":"welcome","driver":"hop","artifacts":[{"url":"…/welcome-arm64-tamago.elf"}],"memory_limit":67108864,"ports":{"http":80}}
+hopos.init[]={"name":"welcome","driver":"hop","artifacts":[{"url":"…/welcome-arm64-tamago.elf","match":{"node.arch":"arm64"}},{"url":"…/welcome-riscv64-tamago.elf","match":{"node.arch":"riscv64"}}],"memory_limit":67108864,"ports":{"http":80}}
 ```
 
 In QEMU (`image/uefi-run.sh agent` forwards 18080 to the published port) publish

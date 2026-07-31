@@ -26,14 +26,46 @@ import (
 	"hop-os/metal/app/applib/apphttp"
 )
 
+// CoreState zegt of deze app de fysieke core voor zichzelf heeft. HopOS geeft
+// standaard hele cores, maar met een sharegroup kan HOP meerdere kooien op één
+// core zetten als je die dichtheid wilt — dan is "een hele core" een leugen, en
+// die staat niet op een pagina die de node moet uitleggen.
+//
+// HOP houdt het bij in CtrlShared en werkt het BIJ zolang de app leeft (een
+// buur die erbij komt of weggaat zet het om), dus dit is geen opstartwaarde maar
+// een levend cijfer: het staat in /api/status en loopt mee.
+type CoreState int
+
+const (
+	CoreUnknown   CoreState = iota // niet uit te lezen (host-tests, oudere node)
+	CoreDedicated                  // deze app is de enige bewoner van zijn core
+	CoreShared                     // er woont minstens één ander slot op deze core
+)
+
+func (c CoreState) String() string {
+	switch c {
+	case CoreDedicated:
+		return "dedicated"
+	case CoreShared:
+		return "shared"
+	default:
+		return "unknown"
+	}
+}
+
 // Node is wat de app zonder iemand iets te vragen over zichzelf weet. Leeg mag:
 // een veld dat HOP niet meegaf laat de pagina weg in plaats van te gokken.
 type Node struct {
-	Host    string // HOPOS_HOST — het node-IP waarop deze poort gepubliceerd is
-	IP      string // eigen IP op het interne net, uit appnet.Up
-	Port    string // ER_PORT_HTTP — de poort die HOP publiceerde
-	DNS     string // HOP_DNS (leeg = niet meegegeven)
-	Slot    int    // slot-index = core-index
+	Host string // HOPOS_HOST — het node-IP waarop deze poort gepubliceerd is
+	IP   string // eigen IP op het interne net, uit appnet.Up
+	Port string // ER_PORT_HTTP — de poort die HOP publiceerde
+	DNS  string // HOP_DNS (leeg = niet meegegeven)
+
+	// Slot is de slot-index, en dat is de index van de fysieke core waarop deze
+	// app draait. Onder een sharegroup is die core niet exclusief van deze app
+	// (en rapporteert de buur hetzelfde nummer) — zie CoreState.
+	Slot int
+
 	Cores   int    // cores van deze app (SMP zet HopOS zelf)
 	RAMSize uint64 // de partitie die HOP gaf — harde grens, geen quota
 	Arch    string // runtime.GOARCH: arm64 óf riscv64
@@ -46,6 +78,7 @@ type Server struct {
 	node  Node
 	start time.Time
 	now   func() time.Time // testhaak; nil = time.Now
+	core  func() CoreState // leest CtrlShared; nil = CoreUnknown
 
 	views atomic.Uint64 // pagina-opvragingen ("/")
 	reqs  atomic.Uint64 // alle behandelde verzoeken behalve /healthz
@@ -53,11 +86,15 @@ type Server struct {
 
 // NewServer zet de uptime-klok op nu: dat is het moment waarop applib.Init()
 // READY meldde, niet dat waarop de node aanging — de pagina zegt dat ook zo.
-func NewServer(n Node) *Server {
+//
+// core wordt bij elke opvraging opnieuw gelezen (HOP werkt CtrlShared bij
+// terwijl de app draait); nil betekent "niet uit te lezen" en dan claimt de
+// pagina niets over de core.
+func NewServer(n Node, core func() CoreState) *Server {
 	if n.Host == "" {
 		n.Host = n.IP // niet gepubliceerd: dan is het interne IP het enige adres
 	}
-	return &Server{node: n, start: time.Now()}
+	return &Server{node: n, start: time.Now(), core: core}
 }
 
 // Node geeft de node-gegevens van deze server, met de HOPOS_HOST-terugval er
@@ -104,6 +141,7 @@ type Status struct {
 	Slot          int
 	Cores         int
 	RAMBytes      uint64
+	Core          CoreState
 }
 
 // Status leest de levende cijfers: uptime van de app zelf, de heap uit de
@@ -111,7 +149,12 @@ type Status struct {
 func (s *Server) Status() Status {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
+	core := CoreUnknown
+	if s.core != nil {
+		core = s.core()
+	}
 	return Status{
+		Core:          core,
 		UptimeSeconds: int64(s.clock().Sub(s.start) / time.Second),
 		HeapBytes:     m.HeapAlloc,
 		HeapObjects:   m.HeapObjects,
@@ -166,14 +209,15 @@ func (s *Server) respond(w apphttp.ResponseWriter, r *apphttp.Request, ctype str
 }
 
 // StatusJSON schrijft het antwoord van /api/status met de hand. encoding/json
-// zou reflect meelinken voor negen getallen, en een app-image betaalt elke byte
-// in zijn RAM-partitie — het zijn allemaal integers, dus er valt niets te
-// escapen.
+// zou reflect meelinken voor negen getallen en één woord, en een app-image
+// betaalt elke byte in zijn RAM-partitie. Escapen hoeft niet: alles is een
+// integer behalve de core-status, en die is een vaste enum (%q eromheen).
 func StatusJSON(st Status) []byte {
 	return fmt.Appendf(nil, `{"uptime_seconds":%d,"heap_bytes":%d,"heap_objects":%d,`+
-		`"goroutines":%d,"views":%d,"requests":%d,"slot":%d,"cores":%d,"ram_bytes":%d}`,
+		`"goroutines":%d,"views":%d,"requests":%d,"slot":%d,"cores":%d,"ram_bytes":%d,`+
+		`"core":%q}`,
 		st.UptimeSeconds, st.HeapBytes, st.HeapObjects, st.Goroutines,
-		st.Views, st.Requests, st.Slot, st.Cores, st.RAMBytes)
+		st.Views, st.Requests, st.Slot, st.Cores, st.RAMBytes, st.Core)
 }
 
 // fmtBytes maakt van een getal een leesbare grootte. Basis 1024 met de korte

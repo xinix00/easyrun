@@ -28,7 +28,27 @@ func Page(n Node, st Status) []byte {
 			`</td><td class="n">HOP_DNS — where this app would look up its neighbours by name (it does not need to)</td></tr>`
 	}
 
+	// Drie plekken op de pagina praten over de core, en alle drie moeten mee met
+	// wat HOP nú zegt: standaard is een core exclusief, maar met een sharegroup
+	// zitten er meerdere kooien op. En omdat app.Slot de CORE-index is, is dat
+	// nummer onder sharing niet eens uniek — dus geen woord over "een hele core"
+	// zonder het gemeten te hebben.
+	phrase, tile, core := "a core assigned by HOP", "one slot on this machine", "—"
+	switch st.Core {
+	case CoreDedicated:
+		phrase = "a whole core to itself"
+		tile = "a core of its own, not a time slice"
+		core = "dedicated"
+	case CoreShared:
+		phrase = "a core it shares with at least one other slot, because this node was set up for density"
+		tile = "sharing this core with another slot"
+		core = "shared"
+	}
+
 	return []byte(strings.NewReplacer(
+		"__CORE_PHRASE__", phrase,
+		"__CORE_TILE__", tile,
+		"__CORE_VALUE__", core,
 		"__HOST__", esc(n.Host),
 		"__ADDR__", esc(URL(n)),
 		"__BANNER__", esc(Banner(n)),
@@ -186,15 +206,15 @@ footer pre{margin:0;font-family:var(--mono);font-size:13px;line-height:1.5;color
     <p class="mark">this node is up</p>
     <h1>You have reached a HopOS node.</h1>
     <p class="lede">The page you are reading is served by a Go program that <strong>is</strong>
-    the operating system on core __SLOT__ of this machine. No Linux underneath, no container
-    around it, no kernel in between — <strong>a whole core</strong> and a memory partition
+    the operating system in slot __SLOT__ of this machine. No Linux underneath, no container
+    around it, no kernel in between — <strong>__CORE_PHRASE__</strong>, and a memory partition
     drawn in hardware. It is also the first job this node ran, which is why you got
     something instead of a closed port.</p>
   </div>
 
   <div class="tiles">
     <div class="tile"><span class="k">node</span><span class="v">__HOST__</span><span class="n">this address works from outside and from the node itself</span></div>
-    <div class="tile"><span class="k">slot · core</span><span class="v">__SLOT__</span><span class="n">a core of its own, not a time slice</span></div>
+    <div class="tile"><span class="k">slot · core</span><span class="v">__SLOT__</span><span class="n">__CORE_TILE__</span></div>
     <div class="tile"><span class="k">memory</span><span class="v">__RAM__</span><span class="n">a partition, not a quota — the limit is hardware</span></div>
     <div class="tile"><span class="k">runtime</span><span class="v">__ARCH__</span><span class="n">__RUNTIME__ — the Go runtime is the OS here</span></div>
   </div>
@@ -211,7 +231,8 @@ footer pre{margin:0;font-family:var(--mono);font-size:13px;line-height:1.5;color
     <tbody>
       <tr><td class="f">node address</td><td class="v">__ADDR__</td><td class="n">the port HOP published on the node IP; since v1.5.4 the same address also works from inside</td></tr>
       <tr><td class="f">app address</td><td class="v">__IP__</td><td class="n">its <em>own</em> network stack and IP on the internal net — no shared socket layer</td></tr>
-      <tr><td class="f">slot / core</td><td class="v">__SLOT__</td><td class="n">the slot index <em>is</em> the core index</td></tr>
+      <tr><td class="f">slot / core</td><td class="v">__SLOT__</td><td class="n">the slot HOP started this app in, which is also the index of the core it runs on</td></tr>
+      <tr><td class="f">this core is</td><td class="v"><span class="l" data-k="core">__CORE_VALUE__</span></td><td class="n">whole cores are the default, but HOP can put trusted apps in a <em>sharegroup</em> on one core when you want the density — so this is measured, not assumed, and it flips while the app runs as neighbours come and go</td></tr>
       <tr><td class="f">cores</td><td class="v">__CORES__</td><td class="n">what this app was given; a job asking for more CPU shares gets more cores, sharing one heap</td></tr>
       <tr><td class="f">memory partition</td><td class="v">__RAM__</td><td class="n">handed out by HOP and enforced by the hardware — there is nothing to exceed</td></tr>
       <tr><td class="f">heap in use</td><td class="v"><span class="l" data-k="heap">__HEAP__</span></td><td class="n">from the Go runtime, which on this core <em>is</em> the operating system</td></tr>
@@ -312,6 +333,7 @@ function tick() {
     set("goroutines", num(s.goroutines));
     set("views", num(s.views));
     set("requests", num(s.requests));
+    set("core", s.core === "unknown" ? "—" : s.core);
     live.className = "live";
     livetxt.textContent = "live";
   }).catch(function () {

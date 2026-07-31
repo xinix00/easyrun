@@ -20,8 +20,9 @@
 //
 // Jobspec — quick tunnel die de welcome-pagina van deze node publiek maakt:
 //
-//	{"name":"cloudflared","driver":"hop",
-//	 "artifacts":[{"url":"…/cloudflared-arm64-tamago.elf"}],
+//	{"name":"cloudflared","driver":"hop","artifacts":[
+//	  {"url":"…/cloudflared-arm64-tamago.elf","match":{"node.arch":"arm64"}},
+//	  {"url":"…/cloudflared-riscv64-tamago.elf","match":{"node.arch":"riscv64"}}],
 //	 "memory_limit":268435456}
 //
 // De URL waarop de node dan te bereiken is, staat in `hop logs cloudflared`.

@@ -2,7 +2,8 @@
 
 A HopOS node behind NAT, with no inbound port and no kernel, made publicly
 reachable by Cloudflare Tunnel. This is cloudflared's **own** `tunnel run`,
-unmodified, running as a slot image on a dedicated core.
+unmodified, running as a slot image on its own core — or sharing one, if you put
+it in a sharegroup.
 
 The point of this example is not the tunnel. It is that "just a Go program in a
 slot" also holds for somebody else's Go program: cloudflared's entire dependency
@@ -53,16 +54,18 @@ no `TUNNEL_URL` it exposes `http://$HOPOS_HOST`, which is port 80 of this node:
 by default this puts the [welcome](../welcome/) page on the public internet.
 
 ```json
-{"name":"cloudflared","driver":"hop",
- "artifacts":[{"url":"https://…/cloudflared-arm64-tamago.elf"}],
+{"name":"cloudflared","driver":"hop","artifacts":[
+  {"url":"https://…/cloudflared-arm64-tamago.elf","match":{"node.arch":"arm64"}},
+  {"url":"https://…/cloudflared-riscv64-tamago.elf","match":{"node.arch":"riscv64"}}],
  "memory_limit":268435456}
 ```
 
 **Named tunnel** — your own hostname, ingress configured in the dashboard:
 
 ```json
-{"name":"cloudflared","driver":"hop",
- "artifacts":[{"url":"https://…/cloudflared-arm64-tamago.elf"}],
+{"name":"cloudflared","driver":"hop","artifacts":[
+  {"url":"https://…/cloudflared-arm64-tamago.elf","match":{"node.arch":"arm64"}},
+  {"url":"https://…/cloudflared-riscv64-tamago.elf","match":{"node.arch":"riscv64"}}],
  "memory_limit":268435456,
  "env":{"TUNNEL_TOKEN":"eyJhIjoi…"}}
 ```
