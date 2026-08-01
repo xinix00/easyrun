@@ -324,8 +324,16 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Job   string `json:"job"`
 		Event string `json:"event"`
+		Agent string `json:"agent"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&req)
+	// Een hand-back is méér dan een event: de agent heeft de taak verwijderd
+	// (onplaatsbaar — geen core, geen partitie), dus de plaatsing bestaat niet
+	// meer. Zonder deze afboeking bleef placed op 1 staan en zag reconcile een
+	// gezonde job waar in werkelijkheid niets draaide.
+	if req.Event == "unplaceable" && req.Job != "" && req.Agent != "" {
+		s.leader.MarkUnplaced(req.Agent, req.Job)
+	}
 	if req.Job != "" {
 		topic := "job:" + req.Job
 		if req.Event != "" {

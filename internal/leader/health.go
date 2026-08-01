@@ -23,12 +23,25 @@ func (l *Leader) Run(ctx context.Context) {
 	ticker := time.NewTicker(deadAgentCheckInterval)
 	defer ticker.Stop()
 
+	// Reconcile is verder event-gedreven (dispatch, updates, hand-backs, dode
+	// agents) — dit is het vangnet erónder: een job die onderplaatst raakte
+	// terwijl er even niets gebeurde (capaciteit kwam later vrij, een event
+	// ging verloren) wordt anders nooit meer geprobeerd. Gemeten 01-08:
+	// cloudflared bleef na een gefragmenteerde pool voorgoed op 0/1 staan
+	// terwijl de ruimte allang terug was. Elke derde tik (~30s) is ruim
+	// genoeg: reconcileJob doet niets bij een gezonde vloot.
+	tick := 0
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			l.checkDeadAgents()
+			if tick++; tick%3 == 0 {
+				if query(l, func(s *leaderState) bool { return s.settled }) {
+					l.reconcileJobs()
+				}
+			}
 		}
 	}
 }

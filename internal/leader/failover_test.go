@@ -66,11 +66,6 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "simulated failure", http.StatusServiceUnavailable)
 		return
 	}
-	if ma.maxCapacity > 0 && len(ma.tasks) >= ma.maxCapacity {
-		ma.mu.Unlock()
-		http.Error(w, "at capacity", http.StatusServiceUnavailable)
-		return
-	}
 	delay := ma.runDelay
 	ma.mu.Unlock()
 
@@ -79,6 +74,35 @@ func (ma *mockAgent) handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid json", http.StatusBadRequest)
 		return
 	}
+	replace := r.URL.Query().Get("replace") == "1"
+
+	ma.mu.Lock()
+	// Replace-semantiek zoals de echte agent: de eigen voorgangers tellen niet
+	// mee voor de toelating en verdwijnen pas als die slaagt — een weigering
+	// laat ze staan.
+	occupied := len(ma.tasks)
+	if replace {
+		for _, t := range ma.tasks {
+			if t.JobName == job.Name {
+				occupied--
+			}
+		}
+	}
+	if ma.maxCapacity > 0 && occupied >= ma.maxCapacity {
+		ma.mu.Unlock()
+		http.Error(w, "at capacity", http.StatusServiceUnavailable)
+		return
+	}
+	if replace {
+		kept := ma.tasks[:0]
+		for _, t := range ma.tasks {
+			if t.JobName != job.Name {
+				kept = append(kept, t)
+			}
+		}
+		ma.tasks = kept
+	}
+	ma.mu.Unlock()
 
 	if delay > 0 {
 		time.Sleep(delay)

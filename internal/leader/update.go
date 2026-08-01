@@ -100,23 +100,43 @@ func (l *Leader) updateRolling(job *types.Job) error {
 
 	var loopErr error
 	for i, oldTask := range oldTasks {
+		replaced := false
 		if i < count {
-			// Replace: dispatch new version before stopping old (zero downtime)
-			if err := l.dispatchToAvailableAgent(job); err != nil {
+			// Replace: dispatch new version before stopping old (zero
+			// downtime) — maar NOOIT via preemptie: de tijdelijke
+			// oud+nieuw-overlap van een update mag geen buurman kosten
+			// (gemeten 01-08: welcome-update preemptte cloudflared, en de
+			// uitgeweken partitie fragmenteerde de pool er nog bij).
+			err := l.dispatchWithoutPreemption(job)
+			if errors.Is(err, errNoCapacity) {
+				// Geen ruimte voor oud+nieuw naast elkaar: replace-in-place
+				// op de agent van het oude exemplaar. Die stopt zijn eigen
+				// voorganger pas ná een geslaagde toelating — weigert hij,
+				// dan draait het oude gewoon door (de KeepsOld-invariant).
+				// Korte eigen onderbreking, buurman ongemoeid, en de
+				// opvolger krijgt de vrijgekomen partitie terug (geen
+				// fragmentatie).
+				if agent := l.agentForTask(oldTask.agentID); agent != nil {
+					if rerr := l.sendReplaceToAgent(agent, job); rerr == nil {
+						// Oud is door de agent verruild voor nieuw: plaatsing
+						// per saldo ongewijzigd, en hieronder niets meer te
+						// stoppen.
+						replaced = true
+						err = nil
+					} else {
+						err = rerr
+					}
+				}
+			}
+			if err != nil {
 				loopErr = fmt.Errorf("rolling update failed at instance %d: %w", i+1, err)
 				break
 			}
 		}
 
 		// Stop old task (replacement or scale-down excess)
-		agent := l.agentForTask(oldTask.agentID)
-		if agent != nil {
-			l.stopTaskByID(agent, oldTask.taskID)
-			l.do(func(s *leaderState) {
-				if s.placed[oldTask.agentID] != nil && s.placed[oldTask.agentID][job.Name] > 0 {
-					s.placed[oldTask.agentID][job.Name]--
-				}
-			})
+		if !replaced {
+			l.stopOldTask(job.Name, oldTask)
 		}
 
 		l.eventBus.Notify("job:" + job.Name)
@@ -172,10 +192,13 @@ func (l *Leader) updateBlueGreen(job *types.Job) error {
 		count = 1
 	}
 
-	// Store new definition and dispatch all new instances.
+	// Store new definition and dispatch all new instances. Zonder preemptie,
+	// zelfde principe als rolling: blue-green EIST oud+nieuw naast elkaar, en
+	// als dat niet past hoort de update te falen mét de oude versie intact —
+	// niet te slagen over het lijk van een buurman.
 	l.jobStore.StoreJob(job)
 	for i := 0; i < count; i++ {
-		if err := l.dispatchToAvailableAgent(job); err != nil {
+		if err := l.dispatchWithoutPreemption(job); err != nil {
 			return fmt.Errorf("blue-green: failed to dispatch instance %d/%d: %w", i+1, count, err)
 		}
 	}
@@ -195,6 +218,22 @@ func (l *Leader) updateBlueGreen(job *types.Job) error {
 
 	l.eventBus.Notify("job:" + job.Name)
 	return nil
+}
+
+// stopOldTask stopt één oud exemplaar en boekt de plaatsing af — het
+// stop-gedeelte van elke update-stap, op één plek zodat de volgorde (eerst
+// stoppen of eerst plaatsen) de boekhouding niet kan laten verlopen.
+func (l *Leader) stopOldTask(jobName string, ref taskRef) {
+	agent := l.agentForTask(ref.agentID)
+	if agent == nil {
+		return
+	}
+	l.stopTaskByID(agent, ref.taskID)
+	l.do(func(s *leaderState) {
+		if s.placed[ref.agentID] != nil && s.placed[ref.agentID][jobName] > 0 {
+			s.placed[ref.agentID][jobName]--
+		}
+	})
 }
 
 // taskRef holds the agent ID and task ID of a running task.

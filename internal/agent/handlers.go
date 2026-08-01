@@ -122,7 +122,11 @@ func (a *Agent) notifyLeader(jobName, event string) {
 	if addr == "" {
 		return
 	}
-	payload := fmt.Sprintf(`{"job":%q,"event":%q}`, jobName, event)
+	// Mét afzender: bij een hand-back ("unplaceable") moet de leader wéten bij
+	// welke agent de plaatsing verviel, anders blijft zijn placed-teller staan
+	// en denkt reconcile voorgoed "1/1" (gemeten 01-08: cloudflared voor eeuwig
+	// pending terwijl de node ruimte had).
+	payload := fmt.Sprintf(`{"job":%q,"event":%q,"agent":%q}`, jobName, event, a.id)
 	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/v1/notify", addr), strings.NewReader(payload))
 	if err != nil {
 		return
@@ -197,12 +201,19 @@ func (a *Agent) handleTasks(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, tasks)
 }
 
-// handleRun starts a new job
+// handleRun starts a new job. Met ?replace=1 vervangt hij de lopende taken van
+// dezelfde job: de toelating rekent hun reservering dan niet mee (de opvolger
+// hoeft niet naast zijn voorganger te passen) en de oude taken worden pas ná
+// een geslaagde toelating gestopt — een weigering laat ze dus ongemoeid
+// draaien. Dat is het update-pad van de leader op een node zonder headroom:
+// vóór deze vorm werd zo'n update via de preemptie-pas over een búúrman
+// uitgevochten (gemeten 01-08, welcome-update offerde cloudflared).
 func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	replace := r.URL.Query().Get("replace") == "1"
 
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
@@ -240,8 +251,13 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// Check capacity AND add task to state atomically.
 	// The task in state IS the capacity reservation — no separate reservation needed.
+	var oldTasks []*types.Task
 	added := query(a, func(s *agentState) bool {
-		usedCPU, usedMem := s.resourceUsage()
+		exclude := ""
+		if replace {
+			exclude = job.Name
+		}
+		usedCPU, usedMem := s.resourceUsageExcluding(exclude)
 		// Een sharegroup-lid dat een AL draaiende pool joint kost geen extra
 		// cores: het deelt de al-gereserveerde pool (HopOS stapelt het erbij).
 		// Alleen de eerste van een groep — of een dedicated/SMP-app — claimt
@@ -255,6 +271,19 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 		}
 		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.effectiveMemoryBytes() {
 			return false
+		}
+		if replace {
+			// De voorgangers: markeren en verzamelen — het stoppen zelf komt
+			// ná de toelating (in de startvolgorde hieronder), zodat hun
+			// core/partitie vrij is vóór de opvolger plaatst. Tot die tijd
+			// staan oud én nieuw in de map: elke ándere toelating telt beide
+			// (conservatief, kortstondig) — de veilige richting.
+			for _, t := range s.tasks {
+				if t.JobName == job.Name && t.ID != task.ID {
+					t.State = types.TaskStopping
+					oldTasks = append(oldTasks, t)
+				}
+			}
 		}
 		s.jobs[job.Name] = &job
 		s.tasks[task.ID] = task
@@ -277,6 +306,16 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	// Start process in background (task already in state for capacity reservation)
 	go func() {
+		// Replace: eerst de voorgangers écht weg — hun core en partitie moeten
+		// vrij zijn vóór de opvolger plaatst (op HopOS is dat letterlijk
+		// dezelfde partitie-pool; dit is ook wat fragmentatie voorkomt: de
+		// opvolger krijgt de vrijgekomen regio terug).
+		for _, old := range oldTasks {
+			if err := a.runnerFor(old.Driver).Stop(old); err != nil {
+				log.Printf("Replace of job %s: failed to stop predecessor %.8s: %v", job.Name, old.ID, err)
+			}
+			a.do(func(s *agentState) { delete(s.tasks, old.ID) })
+		}
 		if err := a.startJob(&job, task); err != nil {
 			if errors.Is(err, runner.ErrNoCapacity) {
 				a.releaseUnplaceable(job.Name, task, err)

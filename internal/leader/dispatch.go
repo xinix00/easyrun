@@ -114,6 +114,22 @@ func (l *Leader) trackPlacement(agentID, jobName string) {
 	})
 }
 
+// MarkUnplaced is de spiegel van trackPlacement, voor de hand-back: de agent
+// heeft de taak verwijderd omdat hij daar nu niet plaatsbaar is (geen vrije
+// core, geen passende partitie). De plaatsing afboeken en meteen reconcilen —
+// misschien past hij elders, of hier zodra een buurman schuift; de periodieke
+// reconcile blijft het anders proberen. Vóór deze afboeking verdampte de
+// hand-back in de status-stream en bleef placed voorgoed op 1 staan.
+func (l *Leader) MarkUnplaced(agentID, jobName string) {
+	l.do(func(s *leaderState) {
+		if s.placed[agentID] != nil && s.placed[agentID][jobName] > 0 {
+			s.placed[agentID][jobName]--
+		}
+	})
+	log.Printf("Job %s handed back by %s (unplaceable there right now) — reconciling", jobName, agentID)
+	go l.reconcileJobs()
+}
+
 // trimReturningAgentSurplus stops jobs on a just-(re)registered agent that the
 // cluster no longer needs. A returning agent (gone long enough to be evicted,
 // then back) re-registers with the tasks it kept running; the leader re-placed
@@ -190,6 +206,21 @@ func (l *Leader) trimReturningAgentSurplus(agentID string) {
 // First pass: round-robin over all agents.
 // Second pass: preemption — evict lowest-priority job from capacity-failed agents.
 func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
+	return l.dispatchJob(job, true)
+}
+
+// dispatchWithoutPreemption plaatst zonder de preemptie-pas. Voor UPDATES: de
+// capaciteitsnood van een update is boekhouding (oud+nieuw staan even naast
+// elkaar), geen nieuwe vraag — een buurman offeren om die overlap te betalen is
+// collaterale schade (gemeten 01-08: welcome-update preemptte cloudflared).
+// Preemptie blijft bestaan waar hij hoort: een belangrijkere NIEUWKOMER mag een
+// minder belangrijke bewoner verdringen. De aanroeper herkent "alles zat vol"
+// aan errors.Is(err, errNoCapacity) en kiest dan zelf zijn terugval.
+func (l *Leader) dispatchWithoutPreemption(job *types.Job) error {
+	return l.dispatchJob(job, false)
+}
+
+func (l *Leader) dispatchJob(job *types.Job, allowPreempt bool) error {
 	agentCount := query(l, func(s *leaderState) int { return len(s.agents) })
 	if agentCount == 0 {
 		return fmt.Errorf("no agents available")
@@ -213,6 +244,16 @@ func (l *Leader) dispatchToAvailableAgent(job *types.Job) error {
 		} else if !errors.Is(err, errAffinityMismatch) {
 			log.Printf("Agent %s rejected job %s: %v, trying next agent", agent.ID, job.Name, err)
 		}
+	}
+
+	if !allowPreempt {
+		if len(capacityCandidates) > 0 {
+			// Herkenbaar voor de aanroeper (errors.Is): vol is hier een
+			// toestand om op terug te vallen, geen reden om slachtoffers te
+			// maken.
+			return fmt.Errorf("%w on all %d agent(s) for %s", errNoCapacity, len(capacityCandidates), job.Name)
+		}
+		return fmt.Errorf("no agent accepted %s after trying %d agents", job.Name, agentCount)
 	}
 
 	// Second pass: preemption on capacity-failed agents only.
@@ -369,6 +410,19 @@ func (l *Leader) nextAgent() *types.Agent {
 
 // sendJobToAgent sends a job to a specific agent.
 func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
+	return l.sendRunToAgent(agent, job, false)
+}
+
+// sendReplaceToAgent stuurt een job als VERVANGING van zijn eigen lopende
+// taken op die agent (/run?replace=1): de agent laat hem alleen toe als de
+// opvolger past in de ruimte mét de voorganger weggedacht, en stopt de
+// voorganger pas ná die toelating. Het update-pad voor nodes zonder headroom —
+// weigering betekent dat het oude exemplaar gewoon doordraait.
+func (l *Leader) sendReplaceToAgent(agent *types.Agent, job *types.Job) error {
+	return l.sendRunToAgent(agent, job, true)
+}
+
+func (l *Leader) sendRunToAgent(agent *types.Agent, job *types.Job, replace bool) error {
 	// Tombstone check at the single dispatch choke point: every reconcile
 	// snapshot and in-flight dispatch carries a job COPY, and the agent's
 	// /run re-registers whatever it receives — without this check a dispatch
@@ -382,6 +436,9 @@ func (l *Leader) sendJobToAgent(agent *types.Agent, job *types.Job) error {
 	}
 
 	url := fmt.Sprintf("%s/run", agent.Endpoint)
+	if replace {
+		url += "?replace=1"
+	}
 
 	body, err := json.Marshal(job)
 	if err != nil {

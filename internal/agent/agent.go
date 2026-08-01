@@ -521,6 +521,15 @@ func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 // anything back — it is about to be restarted right here, or it is waiting for
 // an operator.
 func (s *agentState) resourceUsage() (cpu int, mem uint64) {
+	return s.resourceUsageExcluding("")
+}
+
+// resourceUsageExcluding telt als resourceUsage, maar zonder de taken van één
+// job — voor de replace-toelating: de opvolger hoeft niet te passen NAAST zijn
+// voorganger, die gaat immers direct na de toelating weg. De sharegroup-collapse
+// blijft kloppen: draagt alleen de uitgesloten job de pool, dan telt die pool
+// niet mee (en claimt de opvolger hem zo weer via zijn eigen tag).
+func (s *agentState) resourceUsageExcluding(jobName string) (cpu int, mem uint64) {
 	// CPU telt in HELE cores (CPUShares; 1024 = 1 core). Sharegroup-leden delen
 	// één pool cores, dus dat pool-CPU telt ÉÉN keer — niet per lid. Zonder deze
 	// collapse zou "2 apps in sharegroup web (pool 2)" als 4 cores tellen i.p.v.
@@ -529,6 +538,9 @@ func (s *agentState) resourceUsage() (cpu int, mem uint64) {
 	// delen cores, geen RAM.
 	seenGroup := map[string]bool{}
 	for _, task := range s.tasks {
+		if jobName != "" && task.JobName == jobName {
+			continue
+		}
 		mem += task.MemoryLimit
 		if grp := s.sharegroupOf(task); grp != "" {
 			if seenGroup[grp] {
