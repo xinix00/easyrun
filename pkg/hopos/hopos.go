@@ -102,7 +102,12 @@ type SlotManager interface {
 	// simply sees GOMAXPROCS=cores). mounts is the job's volume table (shared path
 	// -> local path); ports (name -> port) are published on the node IP via
 	// stateless DNAT to the task's per-slot stack.
-	StartStaged(slot int, memLimit uint64, cores int, env map[string]string, mounts map[string]string, ports map[string]int) error
+	//
+	// job is the JOB name (not the task ID): HopOS uses it as the app's
+	// namespace in the node's object store (apps/<cluster>/<job>/), so a
+	// restart or failover on another node sees the same directory and count>1
+	// replicas share it like a shared volume. Empty disables store access.
+	StartStaged(slot int, memLimit uint64, cores int, env map[string]string, mounts map[string]string, ports map[string]int, job string) error
 	// Stop asks the app to exit (kill flag) and waits until the core is off.
 	Stop(slot int, timeout time.Duration) error
 	// Status reports the slot's current state.

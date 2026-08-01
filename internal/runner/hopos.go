@@ -236,7 +236,9 @@ func (r *HopRunner) runViaLoader(job *types.Job, task *types.Task, slot, cores i
 		log.Printf("hop driver: task %.8s stopped during staging — skipping start", task.ID)
 		return false, nil
 	}
-	if err := r.sm.StartStaged(slot, job.MemoryLimit, cores, env, job.Volumes, task.Ports); err != nil {
+	// job.Name (not task.ID) is the store namespace: restart/failover keeps
+	// the same per-app directory, count>1 replicas share it.
+	if err := r.sm.StartStaged(slot, job.MemoryLimit, cores, env, job.Volumes, task.Ports, job.Name); err != nil {
 		_ = r.sm.Stop(slot, hopStopTimeout)
 		r.release(task.ID)
 		return false, fmt.Errorf("hop driver: place staged slot %d (%d cores): %w", slot, cores, err)

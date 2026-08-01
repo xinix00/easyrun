@@ -99,7 +99,7 @@ func (f *fakeSlotManager) StartLoader(slot int, memLimit uint64, sharegroup stri
 
 // StartStaged promotes the staged image to the running app (phase 2), with the
 // real cores/volumes/ports (the loader ran on 1 core, no mounts).
-func (f *fakeSlotManager) StartStaged(slot int, memLimit uint64, cores int, env map[string]string, mounts map[string]string, ports map[string]int) error {
+func (f *fakeSlotManager) StartStaged(slot int, memLimit uint64, cores int, env map[string]string, mounts map[string]string, ports map[string]int, _ string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	s, ok := f.slots[slot]
