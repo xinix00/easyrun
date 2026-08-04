@@ -6,6 +6,8 @@ github.com/usbarmory/go-net v0.0.0-20260626130943-dad9ef39fd9b h1:QOgzNwGI3ZFJzr
 github.com/usbarmory/go-net v0.0.0-20260626130943-dad9ef39fd9b/go.mod h1:buOhhKgCq3hxLvQ3QUMVHZy5XKcxFcx4zjOgGc2PEas=
 github.com/usbarmory/tamago v1.26.4 h1:laFvRANKgVYFHxLHjIlhqJCc3Xm+qMyab2SlUoNw6zY=
 github.com/usbarmory/tamago v1.26.4/go.mod h1:HZkb+ZkzFl8aCxAuF7exsKX+XaNM0mYG9Iv7ooX1WDY=
+github.com/xinix00/HopOS/metal v1.8.3 h1:ovJnU3fgyibt0xpBHTslXZkvsmzpiLkMFgyW0kyKejQ=
+github.com/xinix00/HopOS/metal v1.8.3/go.mod h1:KFjSKHg7xyhrYpeJ22eeFR4t0g+VO+9sVidlxbrWR5o=
 golang.org/x/sys v0.44.0 h1:ildZl3J4uzeKP07r2F++Op7E9B29JRUy+a27EibtBTQ=
 golang.org/x/sys v0.44.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
 golang.org/x/time v0.7.0 h1:ntUhktv3OPE6TgYxXWv9vKvUSJyIFJlyohwbkEwPrKQ=

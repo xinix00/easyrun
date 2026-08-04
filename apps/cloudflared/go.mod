@@ -3,7 +3,7 @@
 // cloudflared's hele dependency-berg — en dat hoort niet in de graaf van de
 // hop-module. Nested modules vallen buiten `./...`, dus hop's CI ziet dit niet.
 //
-// Drie soorten replaces, en alle drie moeten:
+// Twee soorten replaces, en allebei moeten ze:
 //
 //  1. cloudflared => ./build/cloudflared-patched — de gepinde module met twee
 //     platform-fallbacks erin. Die map maakt tools/prepare-cloudflared.sh; tot
@@ -12,15 +12,14 @@
 //  2. urfave/cli en quic-go — cloudflared's EIGEN replaces. Replaces van een
 //     dependency gelden niet transitief, dus zonder deze twee bouwt zijn code
 //     niet (hij gebruikt API's die alleen in die forks bestaan).
-//  3. hop-os/metal en hop — het HopOS-app-skelet, lokaal naast de monorepo
-//     (zelfde patroon als apps/welcome en de satellieten).
-module cloudflared
+module github.com/xinix00/hop/apps/cloudflared
 
 go 1.26.4
 
 require (
 	github.com/cloudflare/cloudflared v0.0.0-20260722163246-3a2b45c2a511
 	github.com/urfave/cli/v2 v2.3.0
+	golang.org/x/crypto/x509roots/fallback v0.0.0-20260709184058-243e02a382f8
 )
 
 require (
@@ -45,7 +44,6 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.uber.org/mock v0.5.1 // indirect
-	golang.org/x/crypto/x509roots/fallback v0.0.0-20260709184058-243e02a382f8 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
 	golang.org/x/tools v0.47.0 // indirect
@@ -93,6 +91,7 @@ require (
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.3 // indirect
 	github.com/usbarmory/tamago v1.26.4 // indirect
+	github.com/xinix00/HopOS/metal v1.8.3
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/propagators v0.22.0 // indirect
 	go.opentelemetry.io/otel v1.43.0 // indirect
@@ -115,7 +114,6 @@ require (
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	hop-os/metal v1.5.5
 	nhooyr.io/websocket v1.8.7 // indirect
 	zombiezen.com/go/capnproto2 v2.18.0+incompatible // indirect
 )
@@ -125,7 +123,3 @@ replace github.com/urfave/cli/v2 => github.com/ipostelnik/cli/v2 v2.3.1-0.202103
 replace github.com/quic-go/quic-go => github.com/chungthuang/quic-go v0.45.1-0.20250428085412-43229ad201fd
 
 replace github.com/cloudflare/cloudflared => ./build/cloudflared-patched
-
-replace hop-os/metal => ../../../../hop-os/metal
-
-replace hop => ../..

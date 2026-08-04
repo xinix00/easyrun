@@ -1,4 +1,4 @@
-module welcome
+module github.com/xinix00/hop/apps/welcome
 
 go 1.26.4
 
@@ -8,11 +8,10 @@ go 1.26.4
 // vallen buiten `./...` van de parent, dus hop's CI (go 1.24) ziet deze map
 // niet en de hop-module blijft op zijn eigen go-directive staan.
 //
-// hop-os/metal is (nog) geen fetchbare module: lokaal naast de monorepo. Zijn
-// replaces gelden niet transitief, dus `hop => …` staat hier herhaald (zelfde
-// patroon als hopdns/hoplb/hopprom). Lokale paden — dit bouwt alleen op een
-// werkplek met de sibling-checkouts.
-require hop-os/metal v1.5.5
+// hop-os/metal is een echte GitHub-dep (metal/vX.Y.Z-tag in de HopOS-
+// repo), dus geen lokale replaces meer nodig; sibling-dev loopt via
+// go.work.
+require github.com/xinix00/HopOS/metal v1.8.3
 
 require (
 	github.com/google/btree v1.1.2 // indirect
@@ -22,9 +21,4 @@ require (
 	golang.org/x/sys v0.44.0 // indirect
 	golang.org/x/time v0.7.0 // indirect
 	gvisor.dev/gvisor v0.0.0-20250911055229-61a46406f068 // indirect
-)
-
-replace (
-	hop => ../..
-	hop-os/metal => ../../../../hop-os/metal
 )

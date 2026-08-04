@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"hop-os/metal/app/applib/apphttp"
+	"github.com/xinix00/HopOS/metal/app/applib/apphttp"
 )
 
 // CoreState zegt of deze app de fysieke core voor zichzelf heeft. HopOS geeft

@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"hop-os/metal/app/applib/apphttp"
+	"github.com/xinix00/HopOS/metal/app/applib/apphttp"
 )
 
 // testNode is een node zoals HOP hem meegeeft: gepubliceerd op poort 80 van het

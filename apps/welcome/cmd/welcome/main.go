@@ -26,13 +26,13 @@ package main
 import (
 	"runtime"
 
-	"hop-os/metal/abi/layout"
-	"hop-os/metal/app/applib"
-	"hop-os/metal/app/applib/apphttp"
-	"hop-os/metal/app/applib/appnet"
-	"hop-os/metal/dev"
+	"github.com/xinix00/HopOS/metal/abi/layout"
+	"github.com/xinix00/HopOS/metal/app/applib"
+	"github.com/xinix00/HopOS/metal/app/applib/apphttp"
+	"github.com/xinix00/HopOS/metal/app/applib/appnet"
+	"github.com/xinix00/HopOS/metal/dev"
 
-	"welcome/internal/welcome"
+	"github.com/xinix00/hop/apps/welcome/internal/welcome"
 )
 
 var version = "dev" // -ldflags "-X main.version=vX.Y.Z"
