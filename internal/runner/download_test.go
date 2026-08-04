@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // --- downloadArtifact edge cases ---

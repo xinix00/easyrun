@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // fakePersister vangt Save-snapshots en serveert een voorgekookte Load.

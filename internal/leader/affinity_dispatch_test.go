@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 func TestDispatch406SkipsToNextAgent(t *testing.T) {

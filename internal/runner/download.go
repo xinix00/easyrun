@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // downloadArtifact downloads and extracts an artifact to destDir

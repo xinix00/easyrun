@@ -9,7 +9,7 @@ import (
 	"os"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 const downloadTimeout = 5 * time.Minute

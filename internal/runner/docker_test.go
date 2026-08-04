@@ -3,7 +3,7 @@ package runner
 import (
 	"testing"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 func TestDockerRunnerRequiresImage(t *testing.T) {

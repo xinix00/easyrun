@@ -9,8 +9,8 @@ import (
 	"sort"
 	"time"
 
-	"hop/internal/types"
-	"hop/pkg/httputil"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/httputil"
 )
 
 // Run starts the leader's state loop and dead agent checker

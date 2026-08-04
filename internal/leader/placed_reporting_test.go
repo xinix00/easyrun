@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // TestGetPlacedCounts_PreExistingJobs verifies placed counts work for jobs

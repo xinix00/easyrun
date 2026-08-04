@@ -11,7 +11,7 @@ import (
 	"strings"
 	"syscall"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // wrapCommand on macOS is a no-op — macOS does not support ulimit -v

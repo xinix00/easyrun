@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/leader"
+	"github.com/xinix00/hop/internal/leader"
 )
 
 // TestServerPortNotReleasedWithoutStop proves that cancelling the context

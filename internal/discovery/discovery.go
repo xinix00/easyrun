@@ -22,7 +22,7 @@ import (
 	"github.com/xinix00/hoplock/s3"
 	"github.com/xinix00/hoplockserver/client"
 
-	"hop/pkg/config"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 const backendTimeout = 5 * time.Second

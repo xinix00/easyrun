@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
-	"hop/pkg/config"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 // intPtr returns a pointer to an int literal (helper for *int struct fields).

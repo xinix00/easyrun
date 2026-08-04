@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
-	"hop/pkg/config"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 func TestMatchesAffinity(t *testing.T) {

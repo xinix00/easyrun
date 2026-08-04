@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"hop/internal/runner"
-	"hop/internal/types"
-	"hop/pkg/httputil"
+	"github.com/xinix00/hop/internal/runner"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/httputil"
 
 	"github.com/google/uuid"
 )

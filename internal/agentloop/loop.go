@@ -15,10 +15,10 @@ import (
 	"net/http"
 	"time"
 
-	"hop/pkg/httputil"
+	"github.com/xinix00/hop/pkg/httputil"
 
-	"hop/internal/types"
-	"hop/pkg/config"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 // Discoverer handles leader election queries.

@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"hop/internal/runner"
-	"hop/internal/types"
-	"hop/pkg/config"
-	"hop/pkg/httputil"
+	"github.com/xinix00/hop/internal/runner"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/config"
+	"github.com/xinix00/hop/pkg/httputil"
 )
 
 const (

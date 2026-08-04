@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
-	"hop/pkg/hopos"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hopos"
 )
 
 // fakeSlotManager is an in-memory SlotManager for lifecycle tests.

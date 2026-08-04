@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"strings"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // refreshMeminfo rewrites the per-task synthetic /proc/meminfo with the

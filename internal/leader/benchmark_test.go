@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // startLeader creates and starts a leader for benchmarking.

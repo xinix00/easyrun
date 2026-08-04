@@ -6,8 +6,8 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"hop/internal/types"
-	"hop/pkg/config"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 // TestDecodeInitJobs: YAML-config-specs (JSON-veldnamen) worden strikte,

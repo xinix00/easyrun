@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // De replace-toelating (/run?replace=1): de opvolger hoeft niet naast zijn

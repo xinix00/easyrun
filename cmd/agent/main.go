@@ -13,12 +13,12 @@ import (
 	"syscall"
 	"time"
 
-	"hop/internal/agent"
-	"hop/internal/agentloop"
-	"hop/internal/api"
-	"hop/internal/discovery"
-	"hop/internal/leader"
-	"hop/pkg/config"
+	"github.com/xinix00/hop/internal/agent"
+	"github.com/xinix00/hop/internal/agentloop"
+	"github.com/xinix00/hop/internal/api"
+	"github.com/xinix00/hop/internal/discovery"
+	"github.com/xinix00/hop/internal/leader"
+	"github.com/xinix00/hop/pkg/config"
 
 	"github.com/google/uuid"
 	"github.com/xinix00/hoplock"

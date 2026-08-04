@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"hop/pkg/config"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 func TestStateStoreFromConfigSelection(t *testing.T) {

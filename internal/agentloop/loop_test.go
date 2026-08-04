@@ -4,8 +4,8 @@ import (
 	"errors"
 	"testing"
 
-	"hop/internal/types"
-	"hop/pkg/config"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 // ---- mocks ----

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // startStressLeader creates a leader with settle delay to prevent reconciliation

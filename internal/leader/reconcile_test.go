@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // TestVolumeAffinity tests that jobs with volumes are rejected by nodes without those volumes

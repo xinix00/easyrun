@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // TestDeployingReflectsRolloutTruth: the flag tells the truth about a rollout.

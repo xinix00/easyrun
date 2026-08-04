@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"hop/internal/types"
-	"hop/pkg/httputil"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/httputil"
 )
 
 // Sentinel errors returned by sendJobToAgent — lets callers distinguish why an agent rejected.

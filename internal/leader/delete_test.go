@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // TestDeleteJobRemovesFromStore verifies job is removed from store, not just placement

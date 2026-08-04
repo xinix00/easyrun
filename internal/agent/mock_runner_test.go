@@ -4,8 +4,8 @@ import (
 	"errors"
 	"sync"
 
-	"hop/internal/runner"
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/runner"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // ErrSimulated is returned by mock runner when configured to fail

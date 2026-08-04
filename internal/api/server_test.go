@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/leader"
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/leader"
+	"github.com/xinix00/hop/internal/types"
 )
 
 func init() {

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"hop/internal/leader"
-	"hop/internal/types"
-	"hop/pkg/httputil"
+	"github.com/xinix00/hop/internal/leader"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/httputil"
 )
 
 // Server provides the HTTP API for the leader

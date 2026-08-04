@@ -7,8 +7,8 @@ import (
 	"sync"
 	"time"
 
-	"hop/internal/types"
-	"hop/pkg/hopos"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hopos"
 )
 
 // HopRunner runs tasks on HopOS: each task is a native Go image started on a

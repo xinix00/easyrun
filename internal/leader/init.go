@@ -14,7 +14,7 @@ import (
 	"fmt"
 	"log"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // DecodeInitJobs converts raw config specs (YAML maps using the job JSON

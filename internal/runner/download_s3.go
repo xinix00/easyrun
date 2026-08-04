@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // downloadS3 downloads from S3-compatible URL.

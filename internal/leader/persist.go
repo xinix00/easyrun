@@ -24,7 +24,7 @@ import (
 	"log"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // StatePersister stores and retrieves the committed cluster state. The

@@ -15,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/runner"
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/runner"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // ============== HTTP HANDLER TESTS ==============

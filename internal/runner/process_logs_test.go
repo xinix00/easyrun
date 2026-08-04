@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // Een gestopte exec-task blijft zijn logs houden: cleanupTaskDir gooit de taskdir

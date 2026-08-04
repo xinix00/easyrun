@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // TestConcurrentDispatchNewAgentJoinOverScheduling reproduces the over-scheduling bug:

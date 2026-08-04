@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"hop/pkg/config"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 func TestGetOrCreateNodeID_FromConfig(t *testing.T) {

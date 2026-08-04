@@ -14,8 +14,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"hop/internal/types"
-	"hop/pkg/httputil"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/httputil"
 )
 
 var (

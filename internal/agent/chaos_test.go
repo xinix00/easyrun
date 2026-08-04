@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"hop/internal/runner"
-	"hop/internal/types"
-	"hop/pkg/config"
+	"github.com/xinix00/hop/internal/runner"
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/config"
 )
 
 // TestChaos_AllTasksCrashSimultaneously tests mass task failure

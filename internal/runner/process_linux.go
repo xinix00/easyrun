@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 const cgroupBase = "/sys/fs/cgroup/hop"

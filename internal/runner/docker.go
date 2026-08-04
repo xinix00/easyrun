@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 const (

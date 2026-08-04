@@ -5,7 +5,7 @@ package runner
 import (
 	"errors"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // ExecRunner stub for targets without a POSIX process model (HopOS/tamago).

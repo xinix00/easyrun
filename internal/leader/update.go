@@ -6,7 +6,7 @@ import (
 	"log"
 	"time"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 var (

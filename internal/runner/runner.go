@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"hop/internal/types"
+	"github.com/xinix00/hop/internal/types"
 )
 
 // ErrNoCapacity is what a runner reports when it cannot PLACE a task for lack of
