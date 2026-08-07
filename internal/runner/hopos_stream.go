@@ -57,7 +57,7 @@ func (r *HopRunner) SetProgressSink(s ProgressSink) {
 // terugkomt is de task tijdens de start gestopt en heeft Stop de opruiming;
 // bij een fout is alles al vrijgegeven behalve de runner-boekhouding (de
 // aanroeper released). Bij (true, nil) draait de app.
-func (r *HopRunner) runViaStream(ss hopos.StreamStarter, job *types.Job, task *types.Task, slot, cores int, sharegroup string, poolCores int, env map[string]string) (started bool, err error) {
+func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores int, sharegroup string, poolCores int, env map[string]string) (started bool, err error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	r.mu.Lock()
@@ -140,7 +140,7 @@ func (r *HopRunner) runViaStream(ss hopos.StreamStarter, job *types.Job, task *t
 		s.TaskDownloading(task.ID, 0, uint64(resp.ContentLength)) // queued → downloading
 	}
 
-	err = ss.StartStream(slot, body, resp.ContentLength, hopos.StartSpec{
+	err = r.sm.StartStream(slot, body, resp.ContentLength, hopos.StartSpec{
 		MemLimit:   job.MemoryLimit,
 		Cores:      cores,
 		Sharegroup: sharegroup,

@@ -31,7 +31,6 @@ type fakeSlotManager struct {
 
 type fakeSlot struct {
 	image    []byte
-	staged   []byte // door de "apploader" gedownloade image, wacht op StartStaged
 	memLimit uint64
 	cores    int
 	env      map[string]string
@@ -66,50 +65,26 @@ func newFakeSlotManager(num int) *fakeSlotManager {
 func (f *fakeSlotManager) NumCores() int             { return f.num }
 func (f *fakeSlotManager) CoreClass(slot int) string { return f.classes[slot] }
 
-// StartLoader is phase 1: it loads the (embedded) apploader and simulates it —
-// the real loader downloads the app image (env HOP_IMAGE_URL) on its own
-// core+netstack and signals SlotStaged. The fake fetches that image and parks
-// the slot at SlotStaged; StartStaged then promotes it (phase 2). This mirrors
-// the real two-phase "app downloads its own image" flow.
-func (f *fakeSlotManager) StartLoader(slot int, memLimit uint64, sharegroup string, poolCores int, env map[string]string) error {
-	f.mu.Lock()
-	f.lastSharegroup, f.lastPoolCores = sharegroup, poolCores
-	f.mu.Unlock()
-	url := env["HOP_IMAGE_URL"]
-	if url == "" {
-		return fmt.Errorf("fake: apploader started without HOP_IMAGE_URL")
-	}
-	resp, err := http.Get(url)
+// StartStream is de one-phase start: de runner heeft de GET al gedaan en
+// geeft de stroom door; de fake leest hem leeg en markeert het slot draaiend —
+// het spiegelbeeld van kern/slots.StartStreamOn.
+func (f *fakeSlotManager) StartStream(slot int, image io.Reader, size int64, spec hopos.StartSpec) error {
+	img, err := io.ReadAll(image)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	img, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
+	if int64(len(img)) != size {
+		return fmt.Errorf("fake: %d van %d bytes — afgekapte stroom", len(img), size)
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.lastSharegroup, f.lastPoolCores = spec.Sharegroup, spec.PoolCores
 	f.slots[slot] = &fakeSlot{
-		staged: img, memLimit: memLimit, env: env,
-		app: hopos.SlotStaged, logs: make(chan string, 16),
+		image: img, memLimit: spec.MemLimit, cores: spec.Cores,
+		env: spec.Env, mounts: spec.Mounts, ports: spec.Ports,
+		coreOn: true, app: hopos.SlotReady, logs: make(chan string, 16),
 	}
-	return nil
-}
-
-// StartStaged promotes the staged image to the running app (phase 2), with the
-// real cores/volumes/ports (the loader ran on 1 core, no mounts).
-func (f *fakeSlotManager) StartStaged(slot int, memLimit uint64, cores int, env map[string]string, mounts map[string]string, ports map[string]int, _ string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	s, ok := f.slots[slot]
-	if !ok || s.staged == nil {
-		return fmt.Errorf("fake: StartStaged on slot %d with nothing staged", slot)
-	}
-	s.image, s.staged = s.staged, nil
-	s.memLimit, s.cores, s.env, s.mounts, s.ports = memLimit, cores, env, mounts, ports
-	s.coreOn, s.app = true, hopos.SlotReady
-	s.logs <- "app leeft"
+	f.slots[slot].logs <- "app leeft"
 	return nil
 }
 

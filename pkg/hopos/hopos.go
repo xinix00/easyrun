@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-// ErrNoCapacity is what StartLoader/StartStaged wrap when the node cannot
-// PLACE the cage: no free app core for a dedicated job, or not enough free
-// cores to open the requested sharegroup pool. It is emphatically not a crash
-// — the job is fine and will run as soon as a core frees up (or right away on
+// ErrNoCapacity is what StartStream wraps when the node cannot PLACE the
+// cage: no free app core for a dedicated job, or not enough free cores to
+// open the requested sharegroup pool. It is emphatically not a crash — the
+// job is fine and will run as soon as a core frees up (or right away on
 // another node), so HOP must reject it back to pending instead of restart-
 // looping it. Restarting an unplaceable job is a storm: every retry re-downloads
 // the image and re-fails, and the churn starves the tasks that DO run.
@@ -25,7 +25,6 @@ const (
 	SlotBooting = 1
 	SlotReady   = 2
 	SlotExited  = 3
-	SlotStaged  = 4 // apploader downloaded the real image and parked; awaiting StartStaged
 )
 
 // SlotStatus is a point-in-time view of one slot.
@@ -79,26 +78,6 @@ type StartSpec struct {
 	Job        string            // job name = object-store namespace ("" = none)
 }
 
-// StreamStarter is the one-phase start path: the node streams the image from r
-// STRAIGHT into the slot's partition — every byte lands on the address it will
-// run from. No apploader, no staged copy, so the partition only ever holds the
-// app itself: image + heap instead of image + staged copy + a loader runtime.
-// size is the image size (Content-Length) and is mandatory: placement is
-// validated against it and a short read is a loud failure.
-//
-// The download happens on the CALLER's network stack (HOP, core 0). That used
-// to be forbidden — 127 whole images buffering through the kernel heap OOM'd
-// it (14-07) — but streaming buffers only one read-chunk per download, which
-// is what makes this path possible at all.
-//
-// Implementations must clean up their own allocations on error (partition,
-// core placement): after a failed StartStream the slot is free again and the
-// caller only releases its own bookkeeping. A node that does not implement
-// StreamStarter gets the classic two-phase path (StartLoader/StartStaged).
-type StreamStarter interface {
-	StartStream(slot int, image io.Reader, size int64, spec StartSpec) error
-}
-
 // SlotManager abstracts HopOS' slot primitives (hop-os/metal/slots). The
 // bare-metal implementation calls that package directly; tests use a fake.
 type SlotManager interface {
@@ -111,38 +90,29 @@ type SlotManager interface {
 	NumCores() int
 	// CoreClass returns the core class of a slot ("big", "mid" or "small").
 	CoreClass(slot int) string
-	// StartLoader is phase 1 of the two-phase load: it loads the universal
-	// apploader — a small image baked into the node — into the slot on one core,
-	// with env (including HOP_IMAGE_URL, the real app image). The apploader then
-	// downloads that image on its OWN core and network stack, straight into the
-	// top of its own partition, and signals SlotStaged. This is how the download
-	// moves off the node's single netstack: one connection per app core instead
-	// of every image funnelling through core 0 (which OOM'd the kernel heap).
-	// memLimit sizes the partition the real app reuses in phase 2.
+	// StartStream is the one-phase start: the node streams the image from r
+	// STRAIGHT into the slot's partition — every byte lands on the address it
+	// will run from. No staged copy, so the partition only ever holds the app
+	// itself: image + heap. size is the image size (Content-Length) and is
+	// mandatory: placement is validated against it and a short read is a loud
+	// failure.
 	//
-	// sharegroup + poolCores drive cooperative core-sharing (HopOS-only; other
-	// drivers ignore it). sharegroup == "" places the slot on its own dedicated
-	// core (the default — whole cores, no sharing). A non-empty sharegroup packs
-	// this slot onto a pool of poolCores whole cores shared with same-named
-	// slots; poolCores is the pool size in whole cores (first job of a group
-	// wins). It comes from the job's "sharegroup" tag and CPUShares — HopOS does
-	// the packing, HOP just forwards the intent.
-	StartLoader(slot int, memLimit uint64, sharegroup string, poolCores int, env map[string]string) error
-	// StartStaged is phase 2: the apploader has staged the real image in the top
-	// of its own partition (SlotStaged). StartStaged places it over the loader
-	// and re-dispatches the parked core on the real app, with the real cores,
-	// volumes and ports. It reuses the partition allocated in phase 1, so no extra
-	// slot or pool memory is consumed. cores > 1 gives the app SMP on the primary
-	// slot plus the next cores-1 cores, sharing one heap (the app is oblivious and
-	// simply sees GOMAXPROCS=cores). mounts is the job's volume table (shared path
-	// -> local path); ports (name -> port) are published on the node IP via
-	// stateless DNAT to the task's per-slot stack.
+	// The download happens on the CALLER's network stack (HOP, core 0). That
+	// used to be forbidden — 127 whole images buffering through the kernel
+	// heap OOM'd it (14-07) — but streaming buffers only one read-chunk per
+	// download, which is what makes this path possible at all. The caller
+	// bounds how many streams run at once.
 	//
-	// job is the JOB name (not the task ID): HopOS uses it as the app's
-	// namespace in the node's object store (apps/<cluster>/<job>/), so a
-	// restart or failover on another node sees the same directory and count>1
-	// replicas share it like a shared volume. Empty disables store access.
-	StartStaged(slot int, memLimit uint64, cores int, env map[string]string, mounts map[string]string, ports map[string]int, job string) error
+	// spec.Sharegroup/PoolCores drive cooperative core-sharing: "" places the
+	// slot on its own dedicated core; a name packs it onto a pool of PoolCores
+	// whole cores shared with same-named slots. spec.Job is the JOB name (not
+	// the task ID): the app's namespace in the node's object store, so a
+	// restart or failover sees the same directory.
+	//
+	// Implementations clean up their own allocations on error (partition,
+	// core placement): after a failed StartStream the slot is free again and
+	// the caller only releases its own bookkeeping.
+	StartStream(slot int, image io.Reader, size int64, spec StartSpec) error
 	// Stop asks the app to exit (kill flag) and waits until the core is off.
 	Stop(slot int, timeout time.Duration) error
 	// Status reports the slot's current state.

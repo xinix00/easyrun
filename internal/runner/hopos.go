@@ -33,15 +33,6 @@ import (
 // 15-07: 127 deletes took tens of minutes).
 const hopStopTimeout = 3 * time.Second
 
-// hopStageTimeout is the NO-PROGRESS window while the apploader downloads the
-// real image: it resets on every heartbeat tick (awaitStaged), so a slow shared
-// link never false-fails a living loader. hopStageHardTimeout is the absolute
-// cap for a loader that is alive but will never finish (stuck stream).
-const (
-	hopStageTimeout     = 120 * time.Second
-	hopStageHardTimeout = 10 * time.Minute
-)
-
 // HopRunner implements Runner against a SlotManager.
 type HopRunner struct {
 	sm        hopos.SlotManager
@@ -59,7 +50,7 @@ type HopRunner struct {
 	// Status is polled continuously, the WHY of a failure should be logged
 	// exactly once. Cleared in release alongside the other task maps.
 	faultLogged map[string]bool
-	// stopping markeert tasks waarvoor Stop is begonnen. awaitStaged leest
+	// stopping markeert tasks waarvoor Stop is begonnen. runViaStream leest
 	// dit (onder r.mu) i.p.v. task.State: dat veld muteert in de
 	// agent-state-loop en hier raw pollen was een data race. Gewist in
 	// release, samen met de andere task-maps.
@@ -163,18 +154,10 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 	r.slots[task.ID] = slot
 	r.mu.Unlock()
 
-	// Twee startpaden. Voorkeur: de node streamt het image zélf de partitie in
-	// (StreamStarter, one-phase) — de partitie draagt dan alleen de app, en de
-	// startfase is zichtbaar als queued→downloading. Kan de node dat niet, dan
-	// het klassieke two-phase pad: de universele apploader downloadt het image
-	// op zijn eigen core en netstack (runViaLoader). Beide geven de slot bij
-	// een fout al vrij.
-	var started bool
-	if ss, ok := r.sm.(hopos.StreamStarter); ok {
-		started, err = r.runViaStream(ss, job, task, slot, appCores, sharegroup, poolCores, env)
-	} else {
-		started, err = r.runViaLoader(job, task, slot, appCores, sharegroup, poolCores, env)
-	}
+	// One-phase start: de node streamt het image zélf de partitie in — de
+	// partitie draagt dan alleen de app, en de startfase is zichtbaar als
+	// queued→downloading. runViaStream geeft de slot bij een fout al vrij.
+	started, err := r.runViaStream(job, task, slot, appCores, sharegroup, poolCores, env)
 	if err != nil {
 		return err
 	}
@@ -222,112 +205,6 @@ func placementErr(err error) error {
 	return err
 }
 
-// runViaLoader realiseert "de app downloadt zijn eigen image": HOP laadt de
-// universele apploader (ingebakken in de node) in de slot met de echte URL in de
-// env; de loader fetcht op zíjn eigen core+netstack, seint "staged", en HOP
-// plaatst de echte app (StartStaged) over de loader heen en her-dispatcht de core.
-// started=false (zonder fout) betekent: task tijdens staging verwijderd — de
-// slot is dan al vrijgegeven en de aanroeper mag NIETS meer aan de slot koppelen.
-func (r *HopRunner) runViaLoader(job *types.Job, task *types.Task, slot, cores int, sharegroup string, poolCores int, env map[string]string) (started bool, err error) {
-	// Fase 1: de apploader (1 core, geen mounts) met de echte image-URL in de
-	// env. Hij deelt de partitie die straks de echte app krijgt (op MemoryLimit
-	// gealloceerd — de echte app-parameters volgen in fase 2).
-	lenv := make(map[string]string, len(env)+1)
-	for k, v := range env {
-		lenv[k] = v
-	}
-	lenv["HOP_IMAGE_URL"] = job.Artifacts[0].URL
-	if err := r.sm.StartLoader(slot, job.MemoryLimit, sharegroup, poolCores, lenv); err != nil {
-		r.release(task.ID)
-		return false, fmt.Errorf("hop driver: start apploader slot %d: %w", slot, placementErr(err))
-	}
-	// Fase 2: wachten tot de loader de echte image gestaged heeft (of de task
-	// mid-download verwijderd is), dan de echte app plaatsen — met de ÉCHTE
-	// cores/volumes/ports.
-	staged, err := r.awaitStaged(task, slot, hopStageTimeout)
-	if err != nil {
-		_ = r.sm.Stop(slot, hopStopTimeout)
-		r.release(task.ID)
-		return false, fmt.Errorf("hop driver: slot %d: %w", slot, err)
-	}
-	if !staged {
-		// Task tijdens staging gestopt (delete/preemptie). Stop() is de
-		// eigenaar van de opruiming (kill + release) — hier NIET nogmaals
-		// stoppen of releasen: de slot kan al aan een andere task zijn.
-		log.Printf("hop driver: task %.8s stopped during staging — skipping start", task.ID)
-		return false, nil
-	}
-	// job.Name (not task.ID) is the store namespace: restart/failover keeps
-	// the same per-app directory, count>1 replicas share it.
-	if err := r.sm.StartStaged(slot, job.MemoryLimit, cores, env, job.Volumes, task.Ports, job.Name); err != nil {
-		_ = r.sm.Stop(slot, hopStopTimeout)
-		r.release(task.ID)
-		return false, fmt.Errorf("hop driver: place staged slot %d (%d cores): %w", slot, cores, err)
-	}
-	return true, nil
-}
-
-// awaitStaged waits until the apploader has staged the real image (SlotStaged);
-// (false, nil) means the task was stopped mid-download (Stop owns the cleanup
-// then — detected via stagingCancelled, NOT via task.State: that field is
-// mutated by the agent state loop and reading it raw here was a data race).
-//
-// Its patience follows LIFE, not the clock: `timeout` is a
-// no-progress window that RESETS as long as the loader's heartbeat advances.
-// A slow download is not a failure — 127 loaders sharing one uplink (measured
-// 15-07: the fixed 2m window produced false timeouts whose retries re-downloaded
-// and starved the still-running transfers, a self-amplifying churn). A loader
-// whose core DIED (cage fault) fails fast instead — with the why — rather than
-// burning the full window. hopStageHardTimeout caps a live-but-stuck loader
-// (e.g. a TCP stream that will never finish; http.Get has no own deadline).
-func (r *HopRunner) awaitStaged(task *types.Task, slot int, timeout time.Duration) (bool, error) {
-	deadline := time.Now().Add(timeout)
-	hard := time.Now().Add(hopStageHardTimeout)
-	var lastHB uint64
-	for {
-		if r.stagingCancelled(task.ID, slot) {
-			return false, nil
-		}
-		s := r.sm.Status(slot)
-		switch s.App {
-		case hopos.SlotStaged:
-			return true, nil
-		case hopos.SlotExited:
-			if r.stagingCancelled(task.ID, slot) {
-				return false, nil // Stop killde de loader — geen echte fout
-			}
-			return false, fmt.Errorf("apploader exited before staging the image")
-		}
-		if !s.CoreOn {
-			if r.stagingCancelled(task.ID, slot) {
-				return false, nil // Stop parkeerde de core — geen echte fout
-			}
-			// Dead before staging: the cage parked it (fault) — no point
-			// waiting out any window. Surface the why (ESR/FAR) right here.
-			if s.FaultVec != 0 {
-				return false, fmt.Errorf("apploader died before staging: stage-2 fault (vec %d, ESR %#x, FAR %#x)",
-					s.FaultVec-1, s.FaultESR, s.FaultFAR)
-			}
-			if s.Cage != "" {
-				return false, fmt.Errorf("apploader died before staging (core off): %s", s.Cage)
-			}
-			return false, fmt.Errorf("apploader died before staging (core off, no fault recorded)")
-		}
-		if s.Heartbeat != lastHB {
-			lastHB = s.Heartbeat
-			deadline = time.Now().Add(timeout) // leven gezien: geduld verlengd
-		}
-		now := time.Now()
-		if now.After(hard) {
-			return false, fmt.Errorf("apploader alive but did not stage within the hard cap %s", hopStageHardTimeout)
-		}
-		if now.After(deadline) {
-			return false, fmt.Errorf("apploader did not stage the image within %s (no heartbeat progress)", timeout)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
-
 // Stop asks the slot to shut down and frees it.
 func (r *HopRunner) Stop(task *types.Task) error {
 	r.mu.Lock()
@@ -335,8 +212,8 @@ func (r *HopRunner) Stop(task *types.Task) error {
 	var cancel func()
 	var done chan struct{}
 	if ok {
-		// Vlag vóór de (blokkerende) sm.Stop: een awaitStaged die nog op
-		// deze task pollt ziet 'm en stapt er graceful uit — Stop ruimt op.
+		// Vlag vóór de (blokkerende) sm.Stop: een runViaStream die nog moet
+		// beginnen ziet 'm en stapt er graceful uit — Stop ruimt op.
 		r.stopping[task.ID] = true
 		cancel, done = r.cancels[task.ID], r.dones[task.ID]
 	}
@@ -378,11 +255,10 @@ func (r *HopRunner) Stop(task *types.Task) error {
 
 // Status maps slot state onto task state.
 func (r *HopRunner) Status(task *types.Task) (types.TaskState, error) {
-	// task.Pid wordt pas gezet als Run VOLLEDIG klaar is: apploader laden →
-	// image downloaden (app-kant) → stagen → de echte app plaatsen. Zolang het 0
-	// is, is de task nog aan het starten — rapporteer Running. Anders ziet de
-	// monitor de kort geparkeerde apploader (SlotStaged: CoreOn=false) als een
-	// crash en killt 'm mid-start (gemeten 14-07: 3/5 taken sneuvelden zo).
+	// task.Pid wordt pas gezet als Run volledig klaar is. Zolang het 0 is, is
+	// de task nog in zijn startfase (queued/downloading) — en die states
+	// bevraagt de monitor niet, dus hier hoort dan niemand te komen. Toch
+	// binnen? Dan is Running het eerlijke antwoord: de start loopt nog.
 	if task.Pid == 0 {
 		return types.TaskRunning, nil
 	}
@@ -508,21 +384,6 @@ func (r *HopRunner) release(taskID string) {
 	delete(r.armed, taskID)
 	// De logs gaan niet weg maar met pensioen: nog logRetention opvraagbaar.
 	r.logs.retire(taskID)
-}
-
-// stagingCancelled meldt of de task tijdens staging is gestopt: de stop-vlag
-// staat (Stop is bezig) óf de slot-claim is al weg (Stop is klaar en heeft
-// released). In beide gevallen is Stop de eigenaar van de opruiming — de
-// staging-flow mag de slot dan niet meer aanraken (hij kan al van een
-// ANDERE task zijn).
-func (r *HopRunner) stagingCancelled(taskID string, slot int) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.stopping[taskID] {
-		return true
-	}
-	s, ok := r.slots[taskID]
-	return !ok || s != slot
 }
 
 func indexByte(s string, c byte) int {
