@@ -13,14 +13,14 @@ var ErrSimulated = errors.New("simulated runner error")
 
 // MockRunner implements runner.Runner for testing
 type MockRunner struct {
-	mu       sync.Mutex
-	tasks    map[string]*types.Task
-	stopped  map[string]bool
-	runErr   error
-	stopErr  error
-	nextPid  int
-	stdout   map[string]*runner.LogBroadcaster
-	stderr   map[string]*runner.LogBroadcaster
+	mu      sync.Mutex
+	tasks   map[string]*types.Task
+	stopped map[string]bool
+	runErr  error
+	stopErr error
+	nextPid int
+	stdout  map[string]*runner.LogBroadcaster
+	stderr  map[string]*runner.LogBroadcaster
 
 	// Hooks for testing
 	onRun  func(job *types.Job) error

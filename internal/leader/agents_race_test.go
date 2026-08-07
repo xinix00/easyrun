@@ -33,7 +33,7 @@ func TestGetAgentsNoRaceWithHeartbeat(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				l.Heartbeat("a", "v2")
+				l.Heartbeat("a", "v2", 0)
 			}
 		}
 	}()

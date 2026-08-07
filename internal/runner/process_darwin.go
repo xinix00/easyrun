@@ -136,5 +136,3 @@ func (r *ExecRunner) fakeMeminfo(taskDir string, memoryLimit uint64) string {
 
 // ensureCgroupControllers is a no-op on macOS (no cgroups).
 func ensureCgroupControllers() {}
-
-

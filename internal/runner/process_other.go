@@ -18,9 +18,11 @@ var errNoExec = errors.New("exec driver is not supported on this platform (use d
 // NewExecRunner matches the POSIX constructor; config is ignored.
 func NewExecRunner(config *Config) *ExecRunner { return &ExecRunner{} }
 
-func (r *ExecRunner) Run(job *types.Job, task *types.Task) error        { return errNoExec }
-func (r *ExecRunner) Stop(task *types.Task) error                       { return nil }
-func (r *ExecRunner) Status(task *types.Task) (types.TaskState, error)  { return types.TaskFailed, errNoExec }
-func (r *ExecRunner) GetStdout(taskID string) *LogBroadcaster           { return nil }
-func (r *ExecRunner) GetStderr(taskID string) *LogBroadcaster           { return nil }
-func (r *ExecRunner) Cleanup() error                                    { return nil }
+func (r *ExecRunner) Run(job *types.Job, task *types.Task) error { return errNoExec }
+func (r *ExecRunner) Stop(task *types.Task) error                { return nil }
+func (r *ExecRunner) Status(task *types.Task) (types.TaskState, error) {
+	return types.TaskFailed, errNoExec
+}
+func (r *ExecRunner) GetStdout(taskID string) *LogBroadcaster { return nil }
+func (r *ExecRunner) GetStderr(taskID string) *LogBroadcaster { return nil }
+func (r *ExecRunner) Cleanup() error                          { return nil }

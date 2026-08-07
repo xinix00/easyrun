@@ -28,7 +28,7 @@ func TestUpdateRollingPreemptGeenBuurman(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("node-1", agent.URL(), "", nil)
-	leader.Heartbeat("node-1", "")
+	leader.Heartbeat("node-1", "", 0)
 
 	// De buurman (minder belangrijk — prio 1 in nice-semantiek) en de job die
 	// straks geüpdatet wordt. Samen is de node vol.
@@ -90,7 +90,7 @@ func TestMarkUnplacedBoektAfEnReconcilet(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("node-1", agent.URL(), "", nil)
-	leader.Heartbeat("node-1", "")
+	leader.Heartbeat("node-1", "", 0)
 
 	job := &types.Job{Name: "cloudflared", Command: "./tunnel"}
 	if err := leader.DispatchJob(job); err != nil {

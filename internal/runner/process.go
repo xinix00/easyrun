@@ -411,4 +411,3 @@ func lookupCredential(username string) (*syscall.Credential, string, error) {
 	gid, _ := strconv.Atoi(u.Gid)
 	return &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}, u.HomeDir, nil
 }
-

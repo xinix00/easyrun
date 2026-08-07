@@ -19,7 +19,7 @@ func TestDispatchSimpleJob(t *testing.T) {
 
 	// Register 1 agent
 	leader.RegisterAgent("agent-a", "http://10.0.0.1:8080", "", nil)
-	leader.Heartbeat("agent-a", "")
+	leader.Heartbeat("agent-a", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	agents := leader.GetAgents()

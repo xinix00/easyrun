@@ -113,9 +113,10 @@ func (s *Server) handleGetAgents(w http.ResponseWriter, r *http.Request) {
 // zijn uitvoerders. Onbekende velden in oudere agents worden genegeerd.
 func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		ID       string `json:"id"`
-		Endpoint string `json:"endpoint"`
-		Version  string `json:"version,omitempty"`
+		ID         string `json:"id"`
+		Endpoint   string `json:"endpoint"`
+		Version    string `json:"version,omitempty"`
+		TempMilliC int    `json:"temp_milli_c,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
@@ -126,7 +127,7 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if !s.leader.Heartbeat(req.ID, req.Version) {
+	if !s.leader.Heartbeat(req.ID, req.Version, req.TempMilliC) {
 		httputil.WriteError(w, http.StatusNotFound, "not registered")
 		return
 	}

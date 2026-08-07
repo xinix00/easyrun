@@ -37,7 +37,7 @@ func setupLeader(t *testing.T) (*Leader, *MockJobStore, context.CancelFunc) {
 // registerAgent registers an agent and sends an initial heartbeat.
 func registerAgent(l *Leader, id string, agent *mockAgent) {
 	l.RegisterAgent(id, agent.URL(), "", nil)
-	l.Heartbeat(id, "")
+	l.Heartbeat(id, "", 0)
 }
 
 // totalTasks returns the sum of task counts across all agents.
@@ -678,7 +678,7 @@ func TestNodeLeave_WithMixedTaskStates(t *testing.T) {
 	agentA.Close()
 	time.Sleep(300 * time.Millisecond)
 
-	l.Heartbeat("b", "")
+	l.Heartbeat("b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	l.checkDeadAgents()
@@ -855,7 +855,7 @@ func TestNodeLeave_DuringRollingUpdate(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Keep agent1 alive (heartbeat JUST before dead agent check)
-	l.Heartbeat("a1", "")
+	l.Heartbeat("a1", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	l.checkDeadAgents()

@@ -44,4 +44,3 @@ func TestLeaderGetJobs(t *testing.T) {
 		t.Errorf("GetJobs() returned %d jobs, want 2", len(jobs))
 	}
 }
-

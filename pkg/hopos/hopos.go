@@ -6,6 +6,7 @@ package hopos
 
 import (
 	"errors"
+	"io"
 	"time"
 )
 
@@ -62,6 +63,40 @@ type SlotStatus struct {
 	//
 	// Diagnostics only, like Fault*: never state-machine input.
 	Cage string
+}
+
+// StartSpec carries everything a one-phase start needs. It is the union of
+// what StartLoader and StartStaged each took, because a streaming start IS
+// both phases at once.
+type StartSpec struct {
+	MemLimit   uint64            // partition size (the job's memory_limit)
+	Cores      int               // SMP cores for the app itself (>=1)
+	Sharegroup string            // "" = dedicated core; else cooperative pool
+	PoolCores  int               // pool size in whole cores (sharegroup only)
+	Env        map[string]string // job env (ER_* included)
+	Mounts     map[string]string // shared path -> local path
+	Ports      map[string]int    // published ports (name -> port)
+	Job        string            // job name = object-store namespace ("" = none)
+}
+
+// StreamStarter is the one-phase start path: the node streams the image from r
+// STRAIGHT into the slot's partition — every byte lands on the address it will
+// run from. No apploader, no staged copy, so the partition only ever holds the
+// app itself: image + heap instead of image + staged copy + a loader runtime.
+// size is the image size (Content-Length) and is mandatory: placement is
+// validated against it and a short read is a loud failure.
+//
+// The download happens on the CALLER's network stack (HOP, core 0). That used
+// to be forbidden — 127 whole images buffering through the kernel heap OOM'd
+// it (14-07) — but streaming buffers only one read-chunk per download, which
+// is what makes this path possible at all.
+//
+// Implementations must clean up their own allocations on error (partition,
+// core placement): after a failed StartStream the slot is free again and the
+// caller only releases its own bookkeeping. A node that does not implement
+// StreamStarter gets the classic two-phase path (StartLoader/StartStaged).
+type StreamStarter interface {
+	StartStream(slot int, image io.Reader, size int64, spec StartSpec) error
 }
 
 // SlotManager abstracts HopOS' slot primitives (hop-os/metal/slots). The

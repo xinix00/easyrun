@@ -83,7 +83,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		})
 	}
 
-	return &Agent{
+	a := &Agent{
 		id:           id,
 		endpoint:     endpoint,
 		config:       cfg,
@@ -98,12 +98,37 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		getLeader:    func() string { return "" }, // overridden by SetLeaderFunc; default = "no leader"
 		shutdownCh:   make(chan struct{}),
 	}
+	// Runners met een zichtbare startfase (streamende download) melden hun
+	// voortgang terug: de task gaat queued → downloading met bytes erbij.
+	if pr, ok := r.(runner.ProgressReporter); ok {
+		pr.SetProgressSink(progressSink{a})
+	}
+	return a
+}
+
+// progressSink is de runner→agent brug voor startfase-voortgang. Alle mutatie
+// loopt door de state-loop, en alleen vooruit: een task die al Stopping,
+// Failed of Running is wordt nooit teruggezet door een late voortgangsmelding.
+type progressSink struct{ a *Agent }
+
+func (p progressSink) TaskDownloading(taskID string, downloaded, total uint64) {
+	p.a.do(func(s *agentState) {
+		t := s.tasks[taskID]
+		if t == nil || (t.State != types.TaskQueued && t.State != types.TaskDownloading) {
+			return
+		}
+		t.State = types.TaskDownloading
+		t.Downloaded, t.ImageSize = downloaded, total
+	})
 }
 
 // WithHopRunner registers the HopOS slot runner; jobs with driver "hop" are
 // dispatched to it. Only meaningful on HopOS nodes (node.os == "hopos").
 func (a *Agent) WithHopRunner(r runner.Runner) *Agent {
 	a.hopRunner = r
+	if pr, ok := r.(runner.ProgressReporter); ok {
+		pr.SetProgressSink(progressSink{a})
+	}
 	return a
 }
 
@@ -353,7 +378,12 @@ func (a *Agent) stopTasks(tasks []*types.Task) {
 func markRunningAsStopping(s *agentState) []*types.Task {
 	var tasks []*types.Task
 	for _, task := range s.tasks {
-		if task.State == types.TaskRunning || task.State == types.TaskStopping {
+		switch task.State {
+		// De startfase (Queued/Downloading) telt mee: die tasks houden een
+		// slot vast terwijl hun download loopt, en de Stop-route weet hoe je
+		// een lopende download afbreekt. Alleen Failed/Stopped blijven liggen —
+		// daar draait niets meer.
+		case types.TaskQueued, types.TaskDownloading, types.TaskRunning, types.TaskStopping:
 			task.State = types.TaskStopping
 			tasks = append(tasks, task)
 		}

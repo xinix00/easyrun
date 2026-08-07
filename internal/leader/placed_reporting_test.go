@@ -44,8 +44,8 @@ func TestGetPlacedCounts_PreExistingJobs(t *testing.T) {
 	time.Sleep(20 * time.Millisecond)
 
 	// Heartbeat with same stateTime (NOT newer → no sync)
-	l.Heartbeat("agent-1", "")
-	l.Heartbeat("agent-2", "")
+	l.Heartbeat("agent-1", "", 0)
+	l.Heartbeat("agent-2", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	placed := l.GetPlacedCounts()

@@ -660,8 +660,8 @@ func TestRestartTaskMaxRestartsExceeded(t *testing.T) {
 			ID:           "task-max",
 			JobName:      "max-restart",
 			State:        types.TaskFailed,
-			RestartCount: 3,                      // Already at max
-			LastFailedAt: time.Now(),              // Recent crash — no grace period reset
+			RestartCount: 3,          // Already at max
+			LastFailedAt: time.Now(), // Recent crash — no grace period reset
 		}
 	})
 	time.Sleep(10 * time.Millisecond)

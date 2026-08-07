@@ -26,7 +26,7 @@ func TestLeaderCheckDeadAgents(t *testing.T) {
 
 	// Register agent
 	leader.RegisterAgent("dying-agent", "http://192.168.1.10:8080", "", nil)
-	leader.Heartbeat("dying-agent", "")
+	leader.Heartbeat("dying-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	if len(leader.GetAgents()) != 1 {
@@ -93,8 +93,8 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 	// Register two agents: one will "die", one will accept redispatched jobs
 	leader.RegisterAgent("dying-agent", "http://dead.host:8080", "", nil)
 	leader.RegisterAgent("healthy-agent", server.URL, "", nil)
-	leader.Heartbeat("dying-agent", "")
-	leader.Heartbeat("healthy-agent", "")
+	leader.Heartbeat("dying-agent", "", 0)
+	leader.Heartbeat("healthy-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	// Manually add placement for job on dying agent (by job ID)
@@ -110,7 +110,7 @@ func TestLeaderRedispatchJobsFromDeadAgent(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Keep healthy-agent alive
-	leader.Heartbeat("healthy-agent", "")
+	leader.Heartbeat("healthy-agent", "", 0)
 
 	// Trigger dead agent check
 	leader.checkDeadAgents()
@@ -165,8 +165,8 @@ func TestLeaderGetClusterStatusWithFailingAgent(t *testing.T) {
 
 	leader.RegisterAgent("working-agent", workingServer.URL, "", nil)
 	leader.RegisterAgent("failing-agent", failingServer.URL, "", nil)
-	leader.Heartbeat("working-agent", "")
-	leader.Heartbeat("failing-agent", "")
+	leader.Heartbeat("working-agent", "", 0)
+	leader.Heartbeat("failing-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	status := leader.GetClusterStatus()
@@ -201,7 +201,7 @@ func TestLeaderDispatchWithHTTPTimeout(t *testing.T) {
 	go leader.stateLoop(ctx)
 
 	leader.RegisterAgent("slow-agent", server.URL, "", nil)
-	leader.Heartbeat("slow-agent", "")
+	leader.Heartbeat("slow-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	job := &types.Job{
@@ -254,8 +254,8 @@ func TestLeaderMultipleAgentsPartialFailure(t *testing.T) {
 
 	leader.RegisterAgent("success-agent", successServer.URL, "", nil)
 	leader.RegisterAgent("fail-agent", failServer.URL, "", nil)
-	leader.Heartbeat("success-agent", "")
-	leader.Heartbeat("fail-agent", "")
+	leader.Heartbeat("success-agent", "", 0)
+	leader.Heartbeat("fail-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	// Dispatch job with 1 instance - should succeed on first agent

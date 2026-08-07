@@ -338,9 +338,9 @@ type hostConfig struct {
 }
 
 type createRequest struct {
-	Image        string                `json:"Image"`
-	Env          []string              `json:"Env,omitempty"`
-	Cmd          []string              `json:"Cmd,omitempty"`
-	ExposedPorts map[string]struct{}   `json:"ExposedPorts,omitempty"`
-	HostConfig   hostConfig            `json:"HostConfig"`
+	Image        string              `json:"Image"`
+	Env          []string            `json:"Env,omitempty"`
+	Cmd          []string            `json:"Cmd,omitempty"`
+	ExposedPorts map[string]struct{} `json:"ExposedPorts,omitempty"`
+	HostConfig   hostConfig          `json:"HostConfig"`
 }

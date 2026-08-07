@@ -6,10 +6,22 @@ import "time"
 type TaskState string
 
 const (
-	TaskRunning  TaskState = "running"
-	TaskStopping TaskState = "stopping"
-	TaskFailed   TaskState = "failed"
-	TaskStopped  TaskState = "stopped"
+	// TaskQueued en TaskDownloading zijn de startfase, zichtbaar gemaakt:
+	// een task heette vanaf zijn geboorte "running", en op HopOS kan de
+	// image-download daarvoor minuten duren — tien minuten "running, 0%
+	// cpu" op het scherm terwijl er niets draait ("staat ie running issie
+	// dood", 07-08). Queued = aangenomen, capaciteit gereserveerd, wacht op
+	// een downloadbeurt; Downloading = de bytes stromen (voortgang in
+	// Task.Downloaded/ImageSize); Running = de app draait echt.
+	//
+	// ÉLKE state telt mee voor capaciteit — aanwezigheid is de maat, nooit
+	// de state (vrijgeven = het record verwijderen).
+	TaskQueued      TaskState = "queued"
+	TaskDownloading TaskState = "downloading"
+	TaskRunning     TaskState = "running"
+	TaskStopping    TaskState = "stopping"
+	TaskFailed      TaskState = "failed"
+	TaskStopped     TaskState = "stopped"
 )
 
 // Artifact describes where to download the application binary/assets
@@ -116,6 +128,11 @@ type Task struct {
 	MemoryLimit  uint64         `json:"memory_limit,omitempty"`
 	CPUPercent   float64        `json:"cpu_percent"`
 	MemPercent   float64        `json:"mem_percent"`
+
+	// Downloadvoortgang van de startfase (state "downloading"): bytes binnen
+	// en de totale image-maat. Alleen gevuld door runners die streamen.
+	Downloaded uint64 `json:"downloaded_bytes,omitempty"`
+	ImageSize  uint64 `json:"image_size_bytes,omitempty"`
 }
 
 // Agent represents a registered agent
@@ -124,4 +141,10 @@ type Agent struct {
 	Endpoint string    `json:"endpoint"` // http://ip:port
 	Version  string    `json:"version"`  // Agent version (e.g., "v0.1.0")
 	LastSeen time.Time `json:"last_seen"`
+
+	// TempMilliC is de CPU-temperatuur van de node in milligraden Celsius,
+	// meegestuurd met elke heartbeat. Eén getal per node, en dat is bewust:
+	// wie meer sensoren heeft rapporteert de heetste (max), want dát is het
+	// getal waarop je ingrijpt. 0 = onbekend (geen sensor).
+	TempMilliC int `json:"temp_milli_c,omitempty"`
 }

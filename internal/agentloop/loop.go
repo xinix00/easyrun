@@ -240,9 +240,13 @@ func Register(leaderAddr, agentID, agentEndpoint, version string, placed map[str
 // Heartbeat is puur een levensteken; de job-lijsten die hier vroeger
 // meereisden zijn gesloopt (16-07) — gewenste staat heeft één auteur (de
 // leader, gecommit naar S3; zie internal/leader/persist.go).
-func Heartbeat(leaderAddr, agentID, agentEndpoint, version, apiKey string) error {
+func Heartbeat(leaderAddr, agentID, agentEndpoint, version, apiKey string, tempMilliC int) error {
 	resp, err := postJSON(fmt.Sprintf("http://%s/v1/heartbeat", leaderAddr), map[string]any{
 		"id": agentID, "endpoint": agentEndpoint, "version": version,
+		// De CPU-temperatuur van de node, in milligraden. Eén getal (de
+		// heetste sensor); 0 = geen sensor. Liftet mee op de heartbeat omdat
+		// dat de enige periodieke agent→leader-lijn is — geen extra verkeer.
+		"temp_milli_c": tempMilliC,
 	}, apiKey)
 	if err != nil {
 		return err

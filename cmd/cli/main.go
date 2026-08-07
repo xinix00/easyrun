@@ -237,10 +237,10 @@ func runStatus() error {
 	}
 
 	var status struct {
-		Agents       int            `json:"agents"`
-		Settling     bool           `json:"settling"`
-		TotalPlaced  int            `json:"total_placed"`
-		Placed       map[string]int `json:"placed"`
+		Agents      int            `json:"agents"`
+		Settling    bool           `json:"settling"`
+		TotalPlaced int            `json:"total_placed"`
+		Placed      map[string]int `json:"placed"`
 	}
 	if err := json.Unmarshal(resp, &status); err != nil {
 		return err
@@ -280,6 +280,11 @@ func runStatus() error {
 			if placed < expected {
 				statusStr = "DEGRADED"
 			}
+			// De startfase zichtbaar: een geplaatste task die nog downloadt is
+			// geen "OK, draait" — laat zien wat er gebeurt en hoe ver het is.
+			if s := startPhaseOf(job.Name); s != "" {
+				statusStr = s
+			}
 			expectedStr := fmt.Sprintf("%d", expected)
 			if job.Count == -1 {
 				expectedStr = fmt.Sprintf("all(%d)", status.Agents)
@@ -315,17 +320,29 @@ func runAgents(args []string) error {
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tENDPOINT\tLAST SEEN")
+	fmt.Fprintln(w, "ID\tENDPOINT\tTEMP\tLAST SEEN")
 	for _, agent := range agents {
-		fmt.Fprintf(w, "%s\t%s\t%s\n", agent.ID, agent.Endpoint, agent.LastSeen.Format("15:04:05"))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", agent.ID, agent.Endpoint, fmtTemp(agent.TempMilliC), agent.LastSeen.Format("15:04:05"))
 	}
 	w.Flush()
 	return nil
 }
 
+// fmtTemp toont de node-temperatuur uit de heartbeat (milligraden); 0 =
+// geen sensor, en dan hoort er een streepje te staan — geen nep-nul.
+func fmtTemp(milliC int) string {
+	if milliC == 0 {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f°C", float64(milliC)/1000)
+}
+
 func showAgentDetails(agent *types.Agent) error {
 	fmt.Printf("Agent:    %s\n", agent.ID)
 	fmt.Printf("Endpoint: %s\n", agent.Endpoint)
+	if agent.TempMilliC != 0 {
+		fmt.Printf("CPU temp: %s\n", fmtTemp(agent.TempMilliC))
+	}
 	fmt.Printf("LastSeen: %s\n", agent.LastSeen.Format("15:04:05"))
 	fmt.Println()
 
@@ -413,6 +430,38 @@ func runLogs(args []string) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// startPhaseOf geeft de startfase van een job als leesbare status ("queued",
+// "downloading 42% (12.6/30.4 MB)"), of "" als alle tasks voorbij de start
+// zijn. Best-effort: een onbereikbare status-endpoint maakt de regel niet stuk.
+func startPhaseOf(jobName string) string {
+	st, err := doRequest("GET", "/v1/jobs/"+jobName+"/status", nil)
+	if err != nil {
+		return ""
+	}
+	var status struct {
+		TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
+	}
+	if err := json.Unmarshal(st, &status); err != nil {
+		return ""
+	}
+	for _, tasks := range status.TasksByAgent {
+		for _, t := range tasks {
+			switch t.State {
+			case types.TaskQueued:
+				return "QUEUED"
+			case types.TaskDownloading:
+				if t.ImageSize > 0 {
+					return fmt.Sprintf("DOWNLOADING %d%% (%.1f/%.1f MB)",
+						t.Downloaded*100/t.ImageSize,
+						float64(t.Downloaded)/(1<<20), float64(t.ImageSize)/(1<<20))
+				}
+				return "DOWNLOADING"
+			}
+		}
+	}
+	return ""
 }
 
 // findTaskAgent returns the ID of the agent running taskID, by scanning each

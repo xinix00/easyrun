@@ -160,7 +160,7 @@ func TestExtractTarGzValid(t *testing.T) {
 
 	// Create a valid .tar.gz
 	createTarGz(t, tarGzPath, map[string]string{
-		"hello.txt":     "Hello, World!",
+		"hello.txt":      "Hello, World!",
 		"dir/nested.txt": "Nested content",
 	})
 
@@ -219,7 +219,7 @@ func TestExtractZipValid(t *testing.T) {
 
 	// Create a valid .zip
 	createZip(t, zipPath, map[string]string{
-		"hello.txt":     "Hello, World!",
+		"hello.txt":      "Hello, World!",
 		"dir/nested.txt": "Nested content",
 	})
 

@@ -31,7 +31,6 @@ func effectivePriority(p *int) int {
 	return *p
 }
 
-
 // DispatchJob stores a job and sends it to agents.
 // count=-1 means run on ALL agents (exactly once per agent)
 // The job is ALWAYS stored, even if dispatch fails (reconciliation will retry later).

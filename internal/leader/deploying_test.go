@@ -27,7 +27,7 @@ func TestDeployingReflectsRolloutTruth(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	l.RegisterAgent("a", agent.URL(), "", nil)
-	l.Heartbeat("a", "")
+	l.Heartbeat("a", "", 0)
 
 	if err := l.DispatchJob(&types.Job{Name: "app", Command: "./v1", Count: 1}); err != nil {
 		t.Fatalf("dispatch: %v", err)

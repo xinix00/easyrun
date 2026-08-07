@@ -155,7 +155,7 @@ func run(ctx context.Context, cfg *config.Config, nodeID string, standalone bool
 			return agentloop.Register(leaderAddr, id, ep, version, placed, key)
 		},
 		DoHeartbeat: func(leaderAddr, id, ep, key string) error {
-			return agentloop.Heartbeat(leaderAddr, id, ep, version, key)
+			return agentloop.Heartbeat(leaderAddr, id, ep, version, key, cpuTempMilliC())
 		},
 		DoBecomeLeader: func() (func(), agentloop.LeaderAPI) {
 			var l *leader.Leader

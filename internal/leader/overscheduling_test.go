@@ -28,14 +28,13 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 	store := NewMockJobStore()
 	ldr := New("leader", store, &http.Client{Timeout: 200 * time.Millisecond})
 
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ldr.stateLoop(ctx)
 
 	// Register agent-1
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
-	ldr.Heartbeat("agent-1", "")
+	ldr.Heartbeat("agent-1", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	job := &types.Job{Name: "app", Command: "./app", Count: 20}
@@ -114,7 +113,6 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	ldr := New("leader", store, nil)
 	ldr.settleDelay = 300 * time.Millisecond // Wait for agents before reconciling
 
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ldr.stateLoop(ctx)
@@ -123,8 +121,8 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"app": 10})
 	ldr.RegisterAgent("agent-2", agent2.URL(), "", map[string]int{"app": 10})
 	// Heartbeat for keepalive
-	ldr.Heartbeat("agent-1", "")
-	ldr.Heartbeat("agent-2", "")
+	ldr.Heartbeat("agent-1", "", 0)
+	ldr.Heartbeat("agent-2", "", 0)
 
 	// Wait for settle timer + reconciliation
 	time.Sleep(500 * time.Millisecond)
@@ -146,16 +144,16 @@ func TestLeaderCrashConcurrentHeartbeatsOverScheduling(t *testing.T) {
 // bug when turning an agent off and on.
 //
 // Race condition:
-// 1. 3 agents, job count=10: placed a1=4, a2=3, a3=3
-// 2. Agent-2 goes down → leader dispatches 3 replacements to a1 and a3
-//    → trackPlacement updates: placed a1=6, a3=4 (total=10)
-// 3. Agent-1 sends heartbeat with placed={4} — stale because the newly
-//    dispatched tasks haven't appeared in s.tasks yet (handleRun returns
-//    202 Accepted, task starts in background goroutine)
-//    → leader REPLACES placed[a1] from 6 to 4 (2 dispatches lost!)
-//    → placed: a1=4, a3=4 (total=8)
-// 4. Agent-2 comes back → RegisterAgent → reconcileJobs sees total=8
-//    → dispatches 2 more → 12 total tasks dispatched (expected 10)
+//  1. 3 agents, job count=10: placed a1=4, a2=3, a3=3
+//  2. Agent-2 goes down → leader dispatches 3 replacements to a1 and a3
+//     → trackPlacement updates: placed a1=6, a3=4 (total=10)
+//  3. Agent-1 sends heartbeat with placed={4} — stale because the newly
+//     dispatched tasks haven't appeared in s.tasks yet (handleRun returns
+//     202 Accepted, task starts in background goroutine)
+//     → leader REPLACES placed[a1] from 6 to 4 (2 dispatches lost!)
+//     → placed: a1=4, a3=4 (total=8)
+//  4. Agent-2 comes back → RegisterAgent → reconcileJobs sees total=8
+//     → dispatches 2 more → 12 total tasks dispatched (expected 10)
 func TestAgentRestartHeartbeatRaceOverScheduling(t *testing.T) {
 	agents := make([]*mockAgent, 3)
 	for i := range agents {
@@ -207,7 +205,7 @@ func TestAgentRestartHeartbeatRaceOverScheduling(t *testing.T) {
 	// In production: agent-1 received /run (202 Accepted) but task hasn't
 	// appeared in s.tasks yet → GetPlacedTaskCounts() returns OLD count.
 	// This heartbeat REPLACES the leader's placed[a1] with stale data.
-	ldr.Heartbeat("agent-1", "")
+	ldr.Heartbeat("agent-1", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// ---- Agent-2 comes back ----
@@ -247,7 +245,6 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	store := NewMockJobStore()
 	ldr := New("leader", store, nil)
 
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go ldr.stateLoop(ctx)
@@ -256,9 +253,9 @@ func TestAgentCrashRejoinWithinTimeout(t *testing.T) {
 	ldr.RegisterAgent("agent-1", agent1.URL(), "", nil)
 	ldr.RegisterAgent("agent-2", agent2.URL(), "", nil)
 	ldr.RegisterAgent("agent-3", agent3.URL(), "", nil)
-	ldr.Heartbeat("agent-1", "")
-	ldr.Heartbeat("agent-2", "")
-	ldr.Heartbeat("agent-3", "")
+	ldr.Heartbeat("agent-1", "", 0)
+	ldr.Heartbeat("agent-2", "", 0)
+	ldr.Heartbeat("agent-3", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Dispatch 20 tasks (round-robin across 3 agents → 7+7+6)

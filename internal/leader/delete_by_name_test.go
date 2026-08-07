@@ -77,7 +77,7 @@ func TestDeleteSweepSpaartHersubmit(t *testing.T) {
 	defer srv.Close()
 
 	leader.RegisterAgent("agent-1", srv.URL, "", nil)
-	leader.Heartbeat("agent-1", "")
+	leader.Heartbeat("agent-1", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	store.StoreJob(&types.Job{Name: "app", Command: "./v1", Count: 1})

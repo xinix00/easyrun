@@ -98,7 +98,7 @@ func TestGetAgentsWithRegistered(t *testing.T) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, "")
+		l.Heartbeat(agentID, "", 0)
 	}
 	time.Sleep(10 * time.Millisecond)
 
@@ -306,7 +306,7 @@ func TestRunJobCreatesNew(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	l.RegisterAgent("mock-agent", mockAgent.URL(), "", nil)
-	l.Heartbeat("mock-agent", "")
+	l.Heartbeat("mock-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	server := NewServer(l, ":9080", "", "test")
@@ -330,7 +330,6 @@ func TestRunJobCreatesNew(t *testing.T) {
 		t.Errorf("name = %q, want %q", resp["name"], "test-job")
 	}
 }
-
 
 func TestRunJobNoAgentsAvailable(t *testing.T) {
 	server, store, cancel := setupTestServer(t)
@@ -374,7 +373,7 @@ func TestRunJobUpdateExisting(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	l.RegisterAgent("mock-agent", mockAgent.URL(), "", nil)
-	l.Heartbeat("mock-agent", "")
+	l.Heartbeat("mock-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	server := NewServer(l, ":9080", "", "test")
@@ -438,7 +437,7 @@ func TestUnregisterAgent(t *testing.T) {
 	defer cancel()
 
 	l.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
-	l.Heartbeat("agent-1", "")
+	l.Heartbeat("agent-1", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	w := doRequest(server, "DELETE", "/v1/agents/agent-1", nil)
@@ -498,7 +497,7 @@ func TestStatusEndpointWithAgents(t *testing.T) {
 		agentID := fmt.Sprintf("agent-%d", i)
 		endpoint := fmt.Sprintf("http://10.0.0.%d:8080", i)
 		l.RegisterAgent(agentID, endpoint, "", nil)
-		l.Heartbeat(agentID, "")
+		l.Heartbeat(agentID, "", 0)
 	}
 	time.Sleep(10 * time.Millisecond)
 

@@ -13,7 +13,6 @@ import (
 	"github.com/xinix00/hop/internal/types"
 )
 
-
 // TestChaos_CascadingFailure tests multiple agents failing simultaneously
 func TestChaos_CascadingFailure(t *testing.T) {
 	store := NewMockJobStore()
@@ -35,7 +34,7 @@ func TestChaos_CascadingFailure(t *testing.T) {
 	for i, agent := range agents {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, agent.URL(), "", nil)
-		leader.Heartbeat(agentID, "")
+		leader.Heartbeat(agentID, "", 0)
 	}
 	time.Sleep(20 * time.Millisecond)
 
@@ -48,8 +47,8 @@ func TestChaos_CascadingFailure(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		time.Sleep(100 * time.Millisecond)
 		// Only agents 1 and 3 are still alive
-		leader.Heartbeat("agent-1", "")
-		leader.Heartbeat("agent-3", "")
+		leader.Heartbeat("agent-1", "", 0)
+		leader.Heartbeat("agent-3", "", 0)
 	}
 
 	// Trigger dead agent check
@@ -89,8 +88,8 @@ func TestChaos_NetworkPartition(t *testing.T) {
 	// Register both
 	leader.RegisterAgent("slow-agent", slowAgent.URL, "", nil)
 	leader.RegisterAgent("fast-agent", fastAgent.URL(), "", nil)
-	leader.Heartbeat("slow-agent", "")
-	leader.Heartbeat("fast-agent", "")
+	leader.Heartbeat("slow-agent", "", 0)
+	leader.Heartbeat("fast-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	// Dispatch job
@@ -139,7 +138,7 @@ func TestChaos_AllAgentsDownExceptOne(t *testing.T) {
 		defer agents[i].Close()
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, agents[i].URL(), "", nil)
-		leader.Heartbeat(agentID, "")
+		leader.Heartbeat(agentID, "", 0)
 	}
 	time.Sleep(20 * time.Millisecond)
 
@@ -151,7 +150,7 @@ func TestChaos_AllAgentsDownExceptOne(t *testing.T) {
 	// Keep the survivor (agent-4) sending heartbeats
 	for i := 0; i < 3; i++ {
 		time.Sleep(100 * time.Millisecond)
-		leader.Heartbeat("agent-4", "")
+		leader.Heartbeat("agent-4", "", 0)
 	}
 
 	// Trigger dead agent check
@@ -188,7 +187,7 @@ func TestChaos_RapidAgentChurn(t *testing.T) {
 
 		// Register
 		leader.RegisterAgent(agentID, agent.URL(), "", nil)
-		leader.Heartbeat(agentID, "")
+		leader.Heartbeat(agentID, "", 0)
 		time.Sleep(5 * time.Millisecond)
 
 		// Kill
@@ -225,7 +224,7 @@ func TestChaos_JobDispatchToDeadAgent(t *testing.T) {
 
 	// Register
 	leader.RegisterAgent("dying-agent", agent.URL(), "", nil)
-	leader.Heartbeat("dying-agent", "")
+	leader.Heartbeat("dying-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	// Kill agent BEFORE dispatch
@@ -267,7 +266,7 @@ func TestChaos_LeaderMemoryPressure(t *testing.T) {
 	for i := 0; i < 10000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, "")
+		leader.Heartbeat(agentID, "", 0)
 	}
 
 	// Create 100k jobs
@@ -332,7 +331,7 @@ func TestChaos_HeartbeatStorm(t *testing.T) {
 			agentID := fmt.Sprintf("agent-%d", id)
 
 			for j := 0; j < 100; j++ {
-				leader.Heartbeat(agentID, "")
+				leader.Heartbeat(agentID, "", 0)
 				heartbeats.Add(1)
 			}
 			done <- true
@@ -404,7 +403,7 @@ func TestChaos_AgentFlapping(t *testing.T) {
 
 		// UP - register agent
 		leader.RegisterAgent(agentID, agent.URL(), "", nil)
-		leader.Heartbeat(agentID, "")
+		leader.Heartbeat(agentID, "", 0)
 		time.Sleep(30 * time.Millisecond) // Allow state to update
 
 		// Verify registered

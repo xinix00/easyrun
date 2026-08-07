@@ -46,10 +46,10 @@ type JobStore interface {
 // leaderState holds all mutable state (owned by single goroutine)
 type leaderState struct {
 	agents       map[string]*types.Agent
-	agentsSorted []*types.Agent         // cached sorted agent list, rebuilt on mutation
+	agentsSorted []*types.Agent            // cached sorted agent list, rebuilt on mutation
 	placed       map[string]map[string]int // agentID -> jobName -> count
-	dispatching  map[string]bool          // jobName -> true if actively being dispatched
-	settled      bool                     // false during settle period after leader election
+	dispatching  map[string]bool           // jobName -> true if actively being dispatched
+	settled      bool                      // false during settle period after leader election
 	roundRobin   int
 	// tombstones marks recently deleted job names. Reconcile snapshots and
 	// in-flight dispatches carry job COPIES; without this marker they can
@@ -185,7 +185,7 @@ func query[T any](l *Leader, fn func(*leaderState) T) T {
 // auteur van gewenste staat (gecommit naar S3, persist.go) en agents zijn
 // uitvoerders. De oude bidirectionele job-sync hier was de kraamkamer van
 // de delete-storm-zombies van 15-07.
-func (l *Leader) Heartbeat(id, version string) bool {
+func (l *Leader) Heartbeat(id, version string, tempMilliC int) bool {
 	return query(l, func(s *leaderState) bool {
 		agent, ok := s.agents[id]
 		if !ok {
@@ -193,6 +193,10 @@ func (l *Leader) Heartbeat(id, version string) bool {
 		}
 		agent.LastSeen = time.Now()
 		agent.Version = version
+		// Telemetrie, geen scheduling-input: de CPU-temperatuur van de node
+		// (heetste sensor, milligraden; 0 = onbekend) reist mee op de
+		// heartbeat en is via /v1/agents zichtbaar.
+		agent.TempMilliC = tempMilliC
 		return true
 	})
 }

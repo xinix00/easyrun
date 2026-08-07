@@ -43,7 +43,7 @@ func TestMassiveScale(t *testing.T) {
 			for i := 0; i < tt.agents; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, "")
+				leader.Heartbeat(agentID, "", 0)
 			}
 			registerTime := time.Since(start)
 
@@ -100,7 +100,7 @@ func BenchmarkMassiveAgents(b *testing.B) {
 			for i := 0; i < size; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, "")
+				leader.Heartbeat(agentID, "", 0)
 			}
 
 			b.ResetTimer()
@@ -130,7 +130,7 @@ func BenchmarkMassiveJobs(b *testing.B) {
 			for i := 0; i < 10; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, "")
+				leader.Heartbeat(agentID, "", 0)
 			}
 
 			// Create jobs
@@ -206,7 +206,7 @@ func BenchmarkHeartbeatScale(b *testing.B) {
 			for i := 0; i < count; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, "")
+				leader.Heartbeat(agentID, "", 0)
 			}
 
 			b.ResetTimer()
@@ -214,7 +214,7 @@ func BenchmarkHeartbeatScale(b *testing.B) {
 
 			for i := 0; i < b.N; i++ {
 				agentID := fmt.Sprintf("agent-%d", i%count)
-				leader.Heartbeat(agentID, "")
+				leader.Heartbeat(agentID, "", 0)
 			}
 
 			b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "heartbeats/sec")
@@ -245,7 +245,7 @@ func BenchmarkPlacementScale(b *testing.B) {
 			for i := 0; i < s.agents; i++ {
 				agentID := fmt.Sprintf("agent-%d", i)
 				leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-				leader.Heartbeat(agentID, "")
+				leader.Heartbeat(agentID, "", 0)
 			}
 
 			// Create placement for all jobs
@@ -291,7 +291,7 @@ func BenchmarkMemoryFootprint(b *testing.B) {
 	for i := 0; i < 1000; i++ {
 		agentID := fmt.Sprintf("agent-%d", i)
 		leader.RegisterAgent(agentID, fmt.Sprintf("http://10.0.0.%d:8080", i), "", nil)
-		leader.Heartbeat(agentID, "")
+		leader.Heartbeat(agentID, "", 0)
 	}
 
 	for i := 0; i < 10000; i++ {

@@ -17,17 +17,17 @@ import (
 
 // mockAgent simulates an hop agent for testing
 type mockAgent struct {
-	server   *httptest.Server
-	mu       sync.Mutex
-	jobs     map[string]*types.Job // jobID -> job (for backwards compat)
-	tasks    []*types.Task         // all running tasks
-	runCalls int
-	taskSeq  int
-	failRuns        bool          // if true, all /run requests will fail with 503
-	rejectAffinity  bool          // if true, all /run requests will fail with 406
-	failStops       bool          // if true, all /stop requests will fail with 500
-	runDelay        time.Duration // delay before processing /run requests (simulates slow dispatch)
-	maxCapacity     int           // if > 0, reject with 503 when len(tasks) >= maxCapacity
+	server         *httptest.Server
+	mu             sync.Mutex
+	jobs           map[string]*types.Job // jobID -> job (for backwards compat)
+	tasks          []*types.Task         // all running tasks
+	runCalls       int
+	taskSeq        int
+	failRuns       bool          // if true, all /run requests will fail with 503
+	rejectAffinity bool          // if true, all /run requests will fail with 406
+	failStops      bool          // if true, all /stop requests will fail with 500
+	runDelay       time.Duration // delay before processing /run requests (simulates slow dispatch)
+	maxCapacity    int           // if > 0, reject with 503 when len(tasks) >= maxCapacity
 }
 
 func newMockAgent() *mockAgent {
@@ -427,7 +427,7 @@ func TestFailoverCountMinusOneDispatchesToNewAgents(t *testing.T) {
 	agent1.mu.Unlock()
 
 	newLeader.RegisterAgent("agent-1", agent1.URL(), "", map[string]int{"daemon": 1})
-	newLeader.Heartbeat("agent-1", "")
+	newLeader.Heartbeat("agent-1", "", 0)
 	time.Sleep(50 * time.Millisecond)
 
 	// Agent 1 should NOT receive /run (already has it running)
@@ -496,7 +496,7 @@ func TestFailoverMultipleAgentsWithDaemonJob(t *testing.T) {
 	for i, agent := range agents {
 		agentID := string(rune('a' + i))
 		newLeader.RegisterAgent("agent-"+agentID, agent.URL(), "", map[string]int{"monitoring": 1})
-		newLeader.Heartbeat("agent-"+agentID, "")
+		newLeader.Heartbeat("agent-"+agentID, "", 0)
 	}
 	time.Sleep(50 * time.Millisecond)
 
@@ -539,7 +539,7 @@ func TestFailoverNewAgentGetsAllDaemonJobs(t *testing.T) {
 		newLeaderStore.StoreJob(j)
 	}
 	newLeader.RegisterAgent("existing", existingAgent.URL(), "", map[string]int{"hopdns": 1, "hoplb": 1, "monitoring": 1})
-	newLeader.Heartbeat("existing", "")
+	newLeader.Heartbeat("existing", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// New agent joins with no jobs via RegisterAgent
@@ -590,7 +590,7 @@ func TestFailoverPreservesJobMetadata(t *testing.T) {
 	}
 
 	newLeader.RegisterAgent("agent-1", "http://10.0.0.1:8080", "", nil)
-	newLeader.Heartbeat("agent-1", "")
+	newLeader.Heartbeat("agent-1", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Retrieve and verify
@@ -628,7 +628,7 @@ func TestFailoverAgentWithEmptyJobsStillRegisters(t *testing.T) {
 
 	// Agent heartbeats with no jobs
 	newLeader.RegisterAgent("fresh-agent", "http://10.0.0.99:8080", "", nil)
-	newLeader.Heartbeat("fresh-agent", "")
+	newLeader.Heartbeat("fresh-agent", "", 0)
 	time.Sleep(10 * time.Millisecond)
 
 	agents := newLeader.GetAgents()
@@ -665,7 +665,7 @@ func TestFailoverDispatchFailureDoesNotBreakHeartbeat(t *testing.T) {
 	defer goodAgent.Close()
 	newLeaderStore.StoreJob(&types.Job{Name: "daemon", Command: "./d", Count: -1})
 	newLeader.RegisterAgent("good-agent", goodAgent.URL(), "", map[string]int{"daemon": 1})
-	newLeader.Heartbeat("good-agent", "")
+	newLeader.Heartbeat("good-agent", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Rejecting agent joins via RegisterAgent - dispatch will fail but registration should succeed
@@ -714,7 +714,7 @@ func TestFailoverNewLeaderDoesNotDuplicateOwnTasks(t *testing.T) {
 	// New leader has PERSISTED STATE from before the failover
 	// (it was synced by the old leader, or loaded from disk)
 	newLeaderStore := NewMockJobStore()
-	newLeaderStore.StoreJob(existingJob) // Job already in store!
+	newLeaderStore.StoreJob(existingJob)                        // Job already in store!
 	newLeaderStore.stateTime = time.Now().Add(-1 * time.Minute) // State from before
 
 	// The new leader's ID matches the local agent
@@ -737,7 +737,7 @@ func TestFailoverNewLeaderDoesNotDuplicateOwnTasks(t *testing.T) {
 	// LOCAL agent registers with placed counts and heartbeats to the new leader (itself)
 	// Note: stateTime is SAME as leader's (not newer), so sync path is NOT triggered
 	newLeader.RegisterAgent("local-agent-id", localAgent.URL(), "", map[string]int{"my-api": 1})
-	newLeader.Heartbeat("local-agent-id", "")
+	newLeader.Heartbeat("local-agent-id", "", 0)
 	time.Sleep(50 * time.Millisecond)
 
 	// BUG: The new leader dispatches instances to itself because:
@@ -810,7 +810,7 @@ func TestFailoverNewLeaderLearnsFromLocalAgent(t *testing.T) {
 
 	// Local agent registers with placed counts and heartbeats (same stateTime, not newer)
 	newLeader.RegisterAgent("local-agent-id", localAgent.URL(), "", taskCounts(localJobs))
-	newLeader.Heartbeat("local-agent-id", "")
+	newLeader.Heartbeat("local-agent-id", "", 0)
 	time.Sleep(50 * time.Millisecond)
 
 	// Jobs should still be in store
@@ -922,7 +922,7 @@ func TestFailoverNewLeaderWithExistingDaemon(t *testing.T) {
 
 	// During settle: register with placed counts + heartbeat for keepalive (no dispatch yet)
 	newLeader.RegisterAgent("new-leader-id", localAgent.URL(), "", map[string]int{"daemon": 1})
-	newLeader.Heartbeat("new-leader-id", "")
+	newLeader.Heartbeat("new-leader-id", "", 0)
 
 	// Wait for settle timer → reconcile sees daemon placed → dispatches only regular jobs
 	time.Sleep(400 * time.Millisecond)
@@ -1014,14 +1014,14 @@ func TestFailoverSecondHeartbeatDoesNotReschedule(t *testing.T) {
 	// First heartbeat - agent rejects all /run calls
 	localAgent.SetFailRuns(true)
 	newLeader.RegisterAgent("new-leader-id", localAgent.URL(), "", nil)
-	newLeader.Heartbeat("new-leader-id", "")
+	newLeader.Heartbeat("new-leader-id", "", 0)
 	time.Sleep(50 * time.Millisecond)
 
 	// Now agent is healthy
 	localAgent.SetFailRuns(false)
 
 	// Second heartbeat - agent is no longer "new", no rescheduling
-	newLeader.Heartbeat("new-leader-id", "")
+	newLeader.Heartbeat("new-leader-id", "", 0)
 	time.Sleep(50 * time.Millisecond)
 
 	// Current behavior: no rescheduling on second heartbeat
@@ -1048,8 +1048,8 @@ func TestFailoverAgentDiesTasksRescheduled(t *testing.T) {
 	// Register agents first
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", "")
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-a", "", 0)
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Actually dispatch the job (this creates real tasks in mock agents)
@@ -1076,7 +1076,7 @@ func TestFailoverAgentDiesTasksRescheduled(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Keep B alive
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Trigger dead agent check - reconcileJobs will see B's tasks and dispatch missing
@@ -1120,8 +1120,8 @@ func TestFailoverHeartbeatLearnsWrongPlacementCount(t *testing.T) {
 	// Agents heartbeat - they are registered but placement is NOT learned
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", "")
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-a", "", 0)
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Verify agents are registered
@@ -1181,8 +1181,8 @@ func TestRedispatchDoesNotCorruptJobCount(t *testing.T) {
 	// Agent B has 18 ticker tasks and 1 caddy task
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", "")
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-a", "", 0)
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Verify initial state
@@ -1248,8 +1248,8 @@ func TestCountMinusOneNotRedispatchedOnAgentDeath(t *testing.T) {
 	// Both agents have the daemon running (1 instance each)
 	leader.RegisterAgent("agent-a", agentA.URL(), "", map[string]int{"daemon": 1})
 	leader.RegisterAgent("agent-b", agentB.URL(), "", map[string]int{"daemon": 1})
-	leader.Heartbeat("agent-a", "")
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-a", "", 0)
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Reset run counters
@@ -1294,8 +1294,8 @@ func TestRedispatchCorrectInstanceCount(t *testing.T) {
 	// Register agents first
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", "")
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-a", "", 0)
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Job with count=20 - dispatch it so placement is tracked
@@ -1361,8 +1361,8 @@ func TestRedispatchWithStalePlacement(t *testing.T) {
 	// Register agents first
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", "")
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-a", "", 0)
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Job with count=20 - actually dispatch it
@@ -1428,8 +1428,8 @@ func TestFailoverAgentDiesRealisticHeartbeat(t *testing.T) {
 	// Register agents FIRST (before job exists)
 	leader.RegisterAgent("agent-a", agentA.URL(), "", nil)
 	leader.RegisterAgent("agent-b", agentB.URL(), "", nil)
-	leader.Heartbeat("agent-a", "")
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-a", "", 0)
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Create and dispatch job with count=20
@@ -1464,7 +1464,7 @@ func TestFailoverAgentDiesRealisticHeartbeat(t *testing.T) {
 	time.Sleep(300 * time.Millisecond)
 
 	// Keep agent B alive
-	leader.Heartbeat("agent-b", "")
+	leader.Heartbeat("agent-b", "", 0)
 	time.Sleep(20 * time.Millisecond)
 
 	// Trigger dead agent check - this calls reconcileJobs()

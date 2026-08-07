@@ -153,11 +153,11 @@ type dirtyTrackingStore struct {
 	dirty func()
 }
 
-func (d *dirtyTrackingStore) GetJobs() []*types.Job          { return d.inner.GetJobs() }
-func (d *dirtyTrackingStore) GetJob(name string) *types.Job  { return d.inner.GetJob(name) }
-func (d *dirtyTrackingStore) GetStateTime() time.Time        { return d.inner.GetStateTime() }
-func (d *dirtyTrackingStore) StoreJob(job *types.Job)        { d.inner.StoreJob(job); d.dirty() }
-func (d *dirtyTrackingStore) DeleteJob(name string)          { d.inner.DeleteJob(name); d.dirty() }
+func (d *dirtyTrackingStore) GetJobs() []*types.Job         { return d.inner.GetJobs() }
+func (d *dirtyTrackingStore) GetJob(name string) *types.Job { return d.inner.GetJob(name) }
+func (d *dirtyTrackingStore) GetStateTime() time.Time       { return d.inner.GetStateTime() }
+func (d *dirtyTrackingStore) StoreJob(job *types.Job)       { d.inner.StoreJob(job); d.dirty() }
+func (d *dirtyTrackingStore) DeleteJob(name string)         { d.inner.DeleteJob(name); d.dirty() }
 func (d *dirtyTrackingStore) UpdateJob(job *types.Job) bool {
 	ok := d.inner.UpdateJob(job)
 	if ok {

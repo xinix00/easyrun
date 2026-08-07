@@ -64,6 +64,18 @@ type HopRunner struct {
 	// agent-state-loop en hier raw pollen was een data race. Gewist in
 	// release, samen met de andere task-maps.
 	stopping map[string]bool
+
+	// Het one-phase startpad (hopos_stream.go): per lopende download een
+	// abort (cancels) en een klaar-signaal (dones) zodat Stop een download
+	// netjes afbreekt en wácht tot de node-kant opgeruimd is; armed zegt of
+	// de app het ooit tot draaien bracht (dan is Stop een echte sm.Stop).
+	// progress is de agent-sink voor queued→downloading; downloads is de
+	// beurt-semafoor (maxConcurrentDownloads).
+	progress  ProgressSink
+	cancels   map[string]func()
+	dones     map[string]chan struct{}
+	armed     map[string]bool
+	downloads chan struct{}
 }
 
 // NewHopRunner creates a runner on top of a SlotManager. nodeAttrs are
@@ -77,6 +89,10 @@ func NewHopRunner(sm hopos.SlotManager, nodeAttrs map[string]string) *HopRunner 
 		inUse:       make(map[int]string),
 		faultLogged: make(map[string]bool),
 		stopping:    make(map[string]bool),
+		cancels:     make(map[string]func()),
+		dones:       make(map[string]chan struct{}),
+		armed:       make(map[string]bool),
+		downloads:   make(chan struct{}, maxConcurrentDownloads),
 	}
 }
 
@@ -147,13 +163,18 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 	r.slots[task.ID] = slot
 	r.mu.Unlock()
 
-	// De app downloadt zijn EIGEN image: HOP laadt eerst de universele apploader
-	// in de slot (lokaal, uit de cache), die op zijn eigen core+netstack de echte
-	// image fetcht en HOP "staged" seint; HOP plaatst 'm (StartStaged) en
-	// her-dispatcht de core. Zo draagt de node-netstack nooit alle downloads
-	// tegelijk (geen core-0-OOM bij een storm) en raakt een kapotte image hooguit
-	// dat ene slot. runViaLoader geeft de slot bij een fout al vrij.
-	started, err := r.runViaLoader(job, task, slot, appCores, sharegroup, poolCores, env)
+	// Twee startpaden. Voorkeur: de node streamt het image zélf de partitie in
+	// (StreamStarter, one-phase) — de partitie draagt dan alleen de app, en de
+	// startfase is zichtbaar als queued→downloading. Kan de node dat niet, dan
+	// het klassieke two-phase pad: de universele apploader downloadt het image
+	// op zijn eigen core en netstack (runViaLoader). Beide geven de slot bij
+	// een fout al vrij.
+	var started bool
+	if ss, ok := r.sm.(hopos.StreamStarter); ok {
+		started, err = r.runViaStream(ss, job, task, slot, appCores, sharegroup, poolCores, env)
+	} else {
+		started, err = r.runViaLoader(job, task, slot, appCores, sharegroup, poolCores, env)
+	}
 	if err != nil {
 		return err
 	}
@@ -311,10 +332,13 @@ func (r *HopRunner) awaitStaged(task *types.Task, slot int, timeout time.Duratio
 func (r *HopRunner) Stop(task *types.Task) error {
 	r.mu.Lock()
 	slot, ok := r.slots[task.ID]
+	var cancel func()
+	var done chan struct{}
 	if ok {
 		// Vlag vóór de (blokkerende) sm.Stop: een awaitStaged die nog op
 		// deze task pollt ziet 'm en stapt er graceful uit — Stop ruimt op.
 		r.stopping[task.ID] = true
+		cancel, done = r.cancels[task.ID], r.dones[task.ID]
 	}
 	r.mu.Unlock()
 	if !ok {
@@ -325,7 +349,29 @@ func (r *HopRunner) Stop(task *types.Task) error {
 		}
 	}
 
-	err := r.sm.Stop(slot, hopStopTimeout)
+	// Loopt er nog een stream-download, breek hem dan af en wacht tot de
+	// node-kant klaar is: StartStream ruimt zijn eigen allocaties op zijn
+	// foutpad op, en pas als dat gebeurd is weten we of er iets gearmd is.
+	// Zonder dit wachten zou sm.Stop hieronder een partitie kunnen vrijgeven
+	// waar de stream nog in schrijft.
+	if cancel != nil {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(2 * downloadStallTimeout):
+			log.Printf("hop driver: task %.8s: stream did not wind down after cancel — stopping the slot anyway", task.ID)
+		}
+	}
+	armed := true
+	if cancel != nil {
+		r.mu.RLock()
+		armed = r.armed[task.ID]
+		r.mu.RUnlock()
+	}
+	var err error
+	if armed {
+		err = r.sm.Stop(slot, hopStopTimeout)
+	}
 	r.release(task.ID)
 	return err
 }
@@ -459,6 +505,7 @@ func (r *HopRunner) release(taskID string) {
 	delete(r.slots, taskID)
 	delete(r.faultLogged, taskID)
 	delete(r.stopping, taskID)
+	delete(r.armed, taskID)
 	// De logs gaan niet weg maar met pensioen: nog logRetention opvraagbaar.
 	r.logs.retire(taskID)
 }

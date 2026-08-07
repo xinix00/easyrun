@@ -429,11 +429,15 @@ func (a *Agent) stopJobTasks(jobName string) int {
 // newTask creates a Task from a Job.
 func newTask(job *types.Job) *types.Task {
 	return &types.Task{
-		ID:          uuid.New().String(),
-		JobName:     job.Name,
-		Driver:      job.Driver,
-		Image:       job.Image,
-		State:       types.TaskRunning,
+		ID:      uuid.New().String(),
+		JobName: job.Name,
+		Driver:  job.Driver,
+		Image:   job.Image,
+		// Geboren als Queued, niet Running: tussen aanname en echte start zit
+		// de hele artifact-download, en die kan op een klein board minuten
+		// duren. De capaciteit telt vanaf hier (aanwezigheid, niet state);
+		// Running wordt het pas als de runner de app echt draaiend heeft.
+		State:       types.TaskQueued,
 		CPUShares:   job.CPUShares,
 		MemoryLimit: job.MemoryLimit,
 		StartedAt:   time.Now(),
@@ -502,11 +506,15 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 			return false // job deleted mid-start → ghost: stop it again below
 		}
 		s.jobs[job.Name] = job
-		if task.State == types.TaskRunning {
-			s.tasks[task.ID] = task
-			return true
+		// Een /stop die de start kruiste heeft de task op Stopping gezet — dan
+		// is dit een ghost. Anders is dit HET moment waarop de task echt
+		// draait: Queued/Downloading (de startfase) wordt hier Running.
+		if task.State == types.TaskStopping {
+			return false
 		}
-		return false
+		task.State = types.TaskRunning
+		s.tasks[task.ID] = task
+		return true
 	})
 	if !alive {
 		log.Printf("ghost task %.8s (job %s): deleted mid-start — stopping again", task.ID, job.Name) // freeze-forensiek
@@ -725,9 +733,14 @@ func (a *Agent) restartTask(task *types.Task, ran bool) {
 	// Pas hier draait de app. StartedAt op de aanmaaktijd laten staan telt de
 	// starttijd — bij de hop-driver de hele download van het image — als uptime,
 	// en dat vergiftigt zowel de genadeperiode hierboven als de
-	// health-check-grace en de uptime die de operator ziet.
+	// health-check-grace en de uptime die de operator ziet. Zelfde moment:
+	// de startfase (Queued/Downloading) wordt Running — tenzij een /stop de
+	// herstart kruiste, dan blijft Stopping staan en ruimt Stop op.
 	a.do(func(s *agentState) {
 		if t := s.tasks[replacement.ID]; t != nil {
+			if t.State != types.TaskStopping {
+				t.State = types.TaskRunning
+			}
 			t.StartedAt = time.Now()
 		}
 	})

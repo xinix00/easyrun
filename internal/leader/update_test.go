@@ -34,7 +34,7 @@ func TestUpdateJobRolling(t *testing.T) {
 	for i, agent := range agents {
 		agentID := string(rune('a' + i))
 		leader.RegisterAgent("agent-"+agentID, agent.URL(), "", nil)
-		leader.Heartbeat("agent-"+agentID, "")
+		leader.Heartbeat("agent-"+agentID, "", 0)
 	}
 
 	// Deploy initial version
@@ -102,7 +102,7 @@ func TestUpdateJobRecreate(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", "")
+	leader.Heartbeat("agent-1", "", 0)
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -158,7 +158,7 @@ func TestUpdateJobBlueGreen(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", "")
+	leader.Heartbeat("agent-1", "", 0)
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -227,7 +227,7 @@ func TestUpdateJobRollingFailureKeepsOld(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", "")
+	leader.Heartbeat("agent-1", "", 0)
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -296,7 +296,7 @@ func TestUpdateJobBlueGreenFailureKeepsOld(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	leader.RegisterAgent("agent-1", agent.URL(), "", nil)
-	leader.Heartbeat("agent-1", "")
+	leader.Heartbeat("agent-1", "", 0)
 
 	// Deploy initial version
 	oldJob := &types.Job{
@@ -513,8 +513,8 @@ func (ma *realisticMockAgent) handleStop(w http.ResponseWriter, r *http.Request)
 	_ = json.NewEncoder(w).Encode(map[string]int{"stopped": stopped})
 }
 
-func (ma *realisticMockAgent) URL() string  { return ma.server.URL }
-func (ma *realisticMockAgent) Close()       { ma.server.Close() }
+func (ma *realisticMockAgent) URL() string { return ma.server.URL }
+func (ma *realisticMockAgent) Close()      { ma.server.Close() }
 func (ma *realisticMockAgent) TaskCount() int {
 	ma.mu.Lock()
 	defer ma.mu.Unlock()

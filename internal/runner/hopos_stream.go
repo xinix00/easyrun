@@ -1,0 +1,206 @@
+package runner
+
+import (
+	"context"
+	"encoding/base64"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"time"
+
+	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hopos"
+)
+
+// Dit bestand is het one-phase startpad: de node streamt het image van de
+// artifact-URL rechtstreeks de partitie in (hopos.StreamStarter). Geen
+// apploader, geen gestagede kopie — de partitie draagt alleen de app zelf, en
+// de agent ziet de startfase als échte states (queued → downloading → running)
+// in plaats van tien minuten "running" waarin niets draait.
+
+// maxConcurrentDownloads begrenst hoeveel images de node tegelijk trekt. De
+// grens is fysiek, geen beleid: elke stream kost de HOP-kern een TLS-sessie
+// plus één leesbuffer, en TLS is op een klein board CPU-werk op de kern-core.
+// Wie in de rij staat is gewoon "queued" — zichtbaar, en de capaciteit is al
+// geteld.
+const maxConcurrentDownloads = 4
+
+// downloadStallTimeout is hoe lang een download STIL mag zijn — niet hoe lang
+// hij mag duren. Zelfde les als de apploader (07-08): een 30MB-image over een
+// gedeeld hart heeft de tijd nodig die hij nodig heeft; alleen een stroom
+// zonder bytes is stuk.
+const downloadStallTimeout = 60 * time.Second
+
+// ProgressSink ontvangt de startfase-voortgang van een runner. De agent
+// implementeert hem: hij zet de task op Downloading en draagt de bytes, zodat
+// /tasks en de CLI laten zien wat er gebeurt.
+type ProgressSink interface {
+	TaskDownloading(taskID string, downloaded, total uint64)
+}
+
+// ProgressReporter is de optionele runner-kant: de agent injecteert zijn sink
+// bij het opzetten. Runners zonder startfase (docker, exec vandaag) hoeven er
+// niets van te weten.
+type ProgressReporter interface {
+	SetProgressSink(ProgressSink)
+}
+
+// SetProgressSink implementeert ProgressReporter.
+func (r *HopRunner) SetProgressSink(s ProgressSink) {
+	r.mu.Lock()
+	r.progress = s
+	r.mu.Unlock()
+}
+
+// runViaStream is de one-phase start. Contract naar Run: als (false, nil)
+// terugkomt is de task tijdens de start gestopt en heeft Stop de opruiming;
+// bij een fout is alles al vrijgegeven behalve de runner-boekhouding (de
+// aanroeper released). Bij (true, nil) draait de app.
+func (r *HopRunner) runViaStream(ss hopos.StreamStarter, job *types.Job, task *types.Task, slot, cores int, sharegroup string, poolCores int, env map[string]string) (started bool, err error) {
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	r.mu.Lock()
+	if r.stopping[task.ID] {
+		r.mu.Unlock()
+		cancel()
+		return false, nil
+	}
+	r.cancels[task.ID] = cancel
+	r.dones[task.ID] = done
+	r.mu.Unlock()
+	defer func() {
+		cancel()
+		r.mu.Lock()
+		delete(r.cancels, task.ID)
+		delete(r.dones, task.ID)
+		r.mu.Unlock()
+		close(done) // Stop wacht hierop: node-kant is nu opgeruimd of gearmd
+	}()
+
+	// De downloadbeurt. Wachten is zichtbaar (de task staat "queued") en
+	// afbreekbaar (delete/stop tijdens de rij).
+	select {
+	case r.downloads <- struct{}{}:
+		defer func() { <-r.downloads }()
+	case <-ctx.Done():
+		return false, nil
+	}
+
+	art := job.Artifacts[0]
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, art.URL, nil)
+	if err != nil {
+		r.release(task.ID)
+		return false, fmt.Errorf("hop driver: artifact URL: %w", err)
+	}
+	for k, v := range art.Headers {
+		req.Header.Set(k, v)
+	}
+	if art.Auth["username"] != "" && art.Auth["password"] != "" {
+		auth := base64.StdEncoding.EncodeToString(
+			[]byte(art.Auth["username"] + ":" + art.Auth["password"]))
+		req.Header.Set("Authorization", "Basic "+auth)
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.ResponseHeaderTimeout = downloadStallTimeout // de fase vóór de eerste byte
+	resp, err := (&http.Client{Transport: tr}).Do(req)
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, nil // Stop brak de download af; die ruimt op
+		}
+		r.release(task.ID)
+		return false, fmt.Errorf("hop driver: GET %s: %w", art.URL, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		r.release(task.ID)
+		return false, fmt.Errorf("hop driver: GET %s: HTTP %s", art.URL, resp.Status)
+	}
+	if resp.ContentLength <= 0 {
+		// Verplicht: de plaatsing valideert segmenten tegen de image-maat, en
+		// een afgekapte stroom moet een luide fout zijn — niet een halve app.
+		r.release(task.ID)
+		return false, fmt.Errorf("hop driver: GET %s: no Content-Length", art.URL)
+	}
+
+	// Stilte-bewaking op de bodyfase + voortgang naar de agent.
+	stall := time.AfterFunc(downloadStallTimeout, func() { resp.Body.Close() })
+	defer stall.Stop()
+	body := &meteredReader{
+		r:     resp.Body,
+		total: uint64(resp.ContentLength),
+		tick: func(done, total uint64) {
+			stall.Reset(downloadStallTimeout)
+			if s := r.sink(); s != nil {
+				s.TaskDownloading(task.ID, done, total)
+			}
+		},
+	}
+	if s := r.sink(); s != nil {
+		s.TaskDownloading(task.ID, 0, uint64(resp.ContentLength)) // queued → downloading
+	}
+
+	err = ss.StartStream(slot, body, resp.ContentLength, hopos.StartSpec{
+		MemLimit:   job.MemoryLimit,
+		Cores:      cores,
+		Sharegroup: sharegroup,
+		PoolCores:  poolCores,
+		Env:        env,
+		Mounts:     job.Volumes,
+		Ports:      task.Ports,
+		Job:        job.Name,
+	})
+	if err != nil {
+		if ctx.Err() != nil {
+			return false, nil // Stop brak de download af; die ruimt op
+		}
+		r.release(task.ID)
+		if !stall.Stop() {
+			// De stilte-timer sloot de body: dat hoort er anders te staan dan
+			// een kale leesfout op een gesloten stream.
+			return false, fmt.Errorf("hop driver: slot %d: stalled after %d of %d bytes: no data for %s",
+				slot, body.done, resp.ContentLength, downloadStallTimeout)
+		}
+		return false, fmt.Errorf("hop driver: place stream slot %d: %w", slot, placementErr(err))
+	}
+
+	// Gearmd: een Stop vanaf nu is een gewone app-stop (sm.Stop), geen
+	// download-abort meer.
+	r.mu.Lock()
+	r.armed[task.ID] = true
+	r.mu.Unlock()
+	log.Printf("hop driver: slot %d: streamed %d MB and started (job %s)", slot, resp.ContentLength>>20, job.Name)
+	return true, nil
+}
+
+func (r *HopRunner) sink() ProgressSink {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.progress
+}
+
+// meteredReader telt de bytes en meldt ze gedoseerd: elke ~1% (met een vloer
+// van 256KB) plus de laatste byte — genoeg voor een levend voortgangsbeeld,
+// zonder per 64KB-blok de agent-state-loop te raken.
+type meteredReader struct {
+	r           io.Reader
+	done, total uint64
+	lastReport  uint64
+	tick        func(done, total uint64)
+}
+
+func (m *meteredReader) Read(p []byte) (int, error) {
+	n, err := m.r.Read(p)
+	if n > 0 {
+		m.done += uint64(n)
+		step := m.total / 100
+		if step < 256<<10 {
+			step = 256 << 10
+		}
+		if m.done-m.lastReport >= step || m.done == m.total {
+			m.lastReport = m.done
+			m.tick(m.done, m.total)
+		}
+	}
+	return n, err
+}

@@ -43,6 +43,11 @@ type Options struct {
 	// MemoryBytes is the slot memory this node offers; bare metal cannot
 	// auto-detect it the way sysinfo_{linux,darwin} do.
 	MemoryBytes uint64
+
+	// Temp reports the node's CPU temperature in milli-°C, sent along with
+	// every heartbeat and shown by `hop agents`. One number per node — the
+	// hottest sensor if there are several. nil or 0 = no sensor.
+	Temp func() int
 }
 
 // Run boots the agent (+ leader zodra deze node de election wint) and blocks
@@ -198,7 +203,11 @@ func Run(ctx context.Context, o Options) error {
 			return agentloop.Register(leaderAddr, id, ep, Version, placed, key)
 		},
 		DoHeartbeat: func(leaderAddr, id, ep, key string) error {
-			return agentloop.Heartbeat(leaderAddr, id, ep, Version, key)
+			temp := 0
+			if o.Temp != nil {
+				temp = o.Temp()
+			}
+			return agentloop.Heartbeat(leaderAddr, id, ep, Version, key, temp)
 		},
 		DoBecomeLeader: becomeLeader,
 	}
