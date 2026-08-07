@@ -328,7 +328,7 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 				}
 			})
 			a.notifyLeader(job.Name, "crash")
-			a.restartTask(task)
+			a.restartTask(task, false)
 		}
 	}()
 }
@@ -487,6 +487,9 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 	if err := a.runnerFor(runJob.Driver).Run(runJob, task); err != nil {
 		return fmt.Errorf("failed to start: %w", err)
 	}
+	// Vanaf hier draait de app pas — zie de stempel in restartTask voor waarom
+	// de aanmaaktijd geen uptime is.
+	task.StartedAt = time.Now()
 
 	// Store in state. If /stop marked the task as Stopping while we were
 	// starting, don't re-add it (prevents ghost tasks after preemption race).
@@ -570,8 +573,10 @@ func (a *Agent) releaseUnplaceable(jobName string, task *types.Task, err error) 
 	a.notifyLeader(jobName, "unplaceable")
 }
 
-// restartTask restarts a failed task
-func (a *Agent) restartTask(task *types.Task) {
+// restartTask restarts a failed task. ran zegt of de vorige poging de app ook
+// écht aan de praat had (een crash of een gezakte health-check) of dat het
+// starten zélf mislukte — alleen het eerste kan een schone lei verdienen.
+func (a *Agent) restartTask(task *types.Task, ran bool) {
 	job := a.GetJob(task.JobName)
 	if job == nil {
 		log.Printf("Cannot restart task %s: job %s not found", task.ID, task.JobName)
@@ -589,8 +594,20 @@ func (a *Agent) restartTask(task *types.Task) {
 
 	restartCount := query(a, func(s *agentState) int {
 		if t := s.tasks[task.ID]; t != nil {
-			// Grace period: reset count if last crash was longer ago than restart window
-			if !t.LastFailedAt.IsZero() && time.Since(t.LastFailedAt) > restartWindow {
+			// Genadeperiode: een app die het venster lang overeind stond, mag met
+			// een schone lei verder. Dat is UPTIME — de tijd sinds de runner hem
+			// aan de praat kreeg (StartedAt wordt daar gestempeld) — en het geldt
+			// alleen als hij ook echt gedraaid heeft.
+			//
+			// Hier stond "tijd sinds de vorige fout", en dan telt de tijd die het
+			// STARTEN kostte mee als gezonde uptime. Gemeten LicheeRV 07-08: de
+			// apploader valt na vijf minuten op zijn HTTP-timeout — precies
+			// defaultRestartWindow — dus elke mislukte start was uit zichzelf al
+			// "lang genoeg geleden", de teller ging elke ronde terug naar nul,
+			// maxRestarts werd nooit bereikt en de node bleef eeuwig herstarten
+			// met "restart #1" op het scherm. Een loop of death die zichzelf als
+			// gezond boekte.
+			if ran && !t.StartedAt.IsZero() && time.Since(t.StartedAt) > restartWindow {
 				t.RestartCount = 0
 			}
 			t.LastFailedAt = time.Now()
@@ -655,7 +672,7 @@ func (a *Agent) restartTask(task *types.Task) {
 				t.RestartCount++
 			}
 		})
-		a.restartTask(task)
+		a.restartTask(task, false)
 		return
 	}
 
@@ -701,9 +718,19 @@ func (a *Agent) restartTask(task *types.Task) {
 				t.State = types.TaskFailed
 			}
 		})
-		a.restartTask(replacement)
+		a.restartTask(replacement, false)
 		return
 	}
+
+	// Pas hier draait de app. StartedAt op de aanmaaktijd laten staan telt de
+	// starttijd — bij de hop-driver de hele download van het image — als uptime,
+	// en dat vergiftigt zowel de genadeperiode hierboven als de
+	// health-check-grace en de uptime die de operator ziet.
+	a.do(func(s *agentState) {
+		if t := s.tasks[replacement.ID]; t != nil {
+			t.StartedAt = time.Now()
+		}
+	})
 
 	log.Printf("Restarted task %s -> %s (job %s), restart #%d", task.ID, replacement.ID, job.Name, replacement.RestartCount)
 	go a.notifyLeader(job.Name, "started")

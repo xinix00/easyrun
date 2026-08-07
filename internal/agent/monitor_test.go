@@ -610,7 +610,7 @@ func TestRestartTaskSuccess(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	task := &types.Task{ID: "task-restart", JobName: "restart-me"}
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 	time.Sleep(50 * time.Millisecond)
 
 	// After restart: new task ID, old one gone
@@ -675,7 +675,7 @@ func TestRestartTaskMaxRestartsExceeded(t *testing.T) {
 	mockRunner.mu.Unlock()
 
 	task := &types.Task{ID: "task-max", JobName: "max-restart"}
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 	time.Sleep(50 * time.Millisecond)
 
 	if runCalled.Load() {
@@ -723,7 +723,7 @@ func TestRestartTaskUnlimitedRestarts(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	task := &types.Task{ID: "task-unlimited", JobName: "unlimited"}
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 	time.Sleep(50 * time.Millisecond)
 
 	// Should have restarted despite high restart count (new task ID)
@@ -764,14 +764,14 @@ func TestRestartTaskGracePeriodResetsCount(t *testing.T) {
 			ID:           "task-grace",
 			JobName:      "grace-test",
 			State:        types.TaskFailed,
-			RestartCount: 3,                                          // At max
-			LastFailedAt: time.Now().Add(-200 * time.Millisecond),    // But last crash was outside window
+			RestartCount: 3,                                       // At max
+			StartedAt:    time.Now().Add(-200 * time.Millisecond), // But it stayed up past the window
 		}
 	})
 	time.Sleep(10 * time.Millisecond)
 
 	task := &types.Task{ID: "task-grace", JobName: "grace-test"}
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 	time.Sleep(50 * time.Millisecond)
 
 	// Should have restarted because grace period reset the counter
@@ -828,7 +828,7 @@ func TestRestartTaskJobNotFound(t *testing.T) {
 
 	// Should not panic
 	task := &types.Task{ID: "orphan-task", JobName: "deleted-job"}
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 	time.Sleep(50 * time.Millisecond)
 
 	if runCalled.Load() {

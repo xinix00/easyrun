@@ -87,7 +87,7 @@ func (a *Agent) checkTasks() {
 			})
 			delete(a.checkStates, task.ID)
 			go a.notifyLeader(task.JobName, "crash")
-			go a.restartTask(task)
+			go a.restartTask(task, true)
 			continue
 		}
 
@@ -112,7 +112,7 @@ func (a *Agent) checkTasks() {
 				go func() {
 					a.notifyLeader(task.JobName, "crash")
 					_ = a.runnerFor(task.Driver).Stop(task)
-					a.restartTask(task)
+					a.restartTask(task, true)
 				}()
 			} else if cs := a.checkStates[task.ID]; cs != nil && !cs.notifiedHealthy {
 				// First health check pass → task is ready to serve traffic

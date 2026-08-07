@@ -1124,7 +1124,7 @@ func TestMaxRestartsZeroMeansNoRestarts(t *testing.T) {
 	})
 
 	// Simulate the crash path: monitor detects death → restartTask.
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 	time.Sleep(50 * time.Millisecond)
 
 	if n := runCalls.Load(); n != 0 {
@@ -1167,7 +1167,7 @@ func TestMaxRestartsOneAllowsExactlyOneRestart(t *testing.T) {
 		s.tasks[task.ID] = task
 	})
 
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 	time.Sleep(100 * time.Millisecond)
 
 	if n := runCalls.Load(); n != 1 {
@@ -1184,6 +1184,102 @@ func TestMaxRestartsOneAllowsExactlyOneRestart(t *testing.T) {
 	})
 	if failed != 1 {
 		t.Errorf("Expected 1 failed task in state, got %d", failed)
+	}
+}
+
+// TestSlowFailingStartDoesNotResetRestartCount pint het verschil tussen "de app
+// heeft gedraaid" en "de startpoging duurde lang". Alleen het eerste verdient
+// een schone lei.
+//
+// Gemeten LicheeRV 07-08: de apploader valt na vijf minuten op zijn
+// HTTP-timeout — precies defaultRestartWindow. Zolang de genadeperiode naar de
+// vorige FOUT keek in plaats van naar uptime, was elke mislukte start uit
+// zichzelf al "lang genoeg geleden": teller terug naar nul, maxRestarts nooit
+// bereikt, en de node bleef eeuwig herstarten met "restart #1" op het scherm.
+func TestSlowFailingStartDoesNotResetRestartCount(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+
+	const window = 40 * time.Millisecond
+	var runCalls atomic.Int32
+	mockRunner.onRun = func(job *types.Job) error {
+		n := runCalls.Add(1)
+		time.Sleep(2 * window) // de poging duurt zélf langer dan het venster
+		if n > 20 {
+			return nil // noodrem: zonder dit spint een kapotte teller dit proces vol
+		}
+		return ErrSimulated
+	}
+
+	agent := New(cfg, "test-agent", mockRunner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{Name: "slow-fail", Command: "./app", MaxRestarts: intPtr(2), RestartWindow: window}
+	task := newTask(job)
+	agent.do(func(s *agentState) {
+		s.jobs[job.Name] = job
+		s.tasks[task.ID] = task
+	})
+
+	done := make(chan struct{})
+	go func() { agent.restartTask(task, true); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("restartTask gaf nooit op: %d runner-aanroepen en doorgaand", runCalls.Load())
+	}
+
+	if n := runCalls.Load(); n != 2 {
+		t.Errorf("Runner was invoked %d time(s), want exactly 2 (MaxRestarts=2)", n)
+	}
+}
+
+// TestHealthyUptimeStillResetsRestartCount is de tegenhanger: een app die het
+// venster lang overeind stond, houdt zijn schone lei. Zonder reset zou deze
+// task (RestartCount == MaxRestarts) meteen opgegeven worden.
+func TestHealthyUptimeStillResetsRestartCount(t *testing.T) {
+	cfg := testConfig()
+	mockRunner := NewMockRunner()
+
+	var runCalls atomic.Int32
+	mockRunner.onRun = func(job *types.Job) error {
+		runCalls.Add(1)
+		return nil // deze start slaagt
+	}
+
+	agent := New(cfg, "test-agent", mockRunner)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go agent.stateLoop(ctx)
+	time.Sleep(10 * time.Millisecond)
+
+	job := &types.Job{Name: "long-lived", Command: "./app", MaxRestarts: intPtr(2), RestartWindow: 20 * time.Millisecond}
+	task := newTask(job)
+	task.RestartCount = 2 // zonder reset is dit "opgebruikt"
+	task.StartedAt = time.Now().Add(-time.Second)
+	agent.do(func(s *agentState) {
+		s.jobs[job.Name] = job
+		s.tasks[task.ID] = task
+	})
+
+	agent.restartTask(task, true)
+
+	if n := runCalls.Load(); n != 1 {
+		t.Fatalf("Runner was invoked %d time(s), want 1 (uptime > restart window = clean slate)", n)
+	}
+	count := query(agent, func(s *agentState) int {
+		for _, tk := range s.tasks {
+			if tk.JobName == job.Name {
+				return tk.RestartCount
+			}
+		}
+		return -1
+	})
+	if count != 1 {
+		t.Errorf("RestartCount = %d, want 1 (teller was gereset en telt vanaf nul)", count)
 	}
 }
 
@@ -1219,7 +1315,7 @@ func TestUnplaceableJobIsNotRestarted(t *testing.T) {
 		s.tasks[task.ID] = task
 	})
 
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 
 	// Exactly one attempt: no backoff ladder, no recursion.
 	mu.Lock()

@@ -530,7 +530,7 @@ func TestRunnerNeverSeesMismatchedArtifactOnRestart(t *testing.T) {
 	// startJob fails → handleRun's caller (or test driver here) calls restartTask.
 	// We mimic that path directly to keep the test focused on the runner-facing
 	// invariant rather than the dispatch wrapper.
-	agent.restartTask(task)
+	agent.restartTask(task, true)
 
 	// Backoff is 1s before the first restart (see handlers.go).
 	time.Sleep(1500 * time.Millisecond)

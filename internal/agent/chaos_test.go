@@ -111,7 +111,7 @@ func TestChaos_TaskExceedsMaxRestarts(t *testing.T) {
 		}
 
 		// Agent detects and restarts
-		agent.restartTask(currentTask)
+		agent.restartTask(currentTask, true)
 		time.Sleep(10 * time.Millisecond)
 
 		// Find new task ID after restart
