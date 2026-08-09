@@ -23,7 +23,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/xinix00/HopOS/metal/app/applib/apphttp"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // CoreState zegt of deze app de fysieke core voor zichzelf heeft. HopOS geeft
@@ -172,7 +172,7 @@ func (s *Server) Status() Status {
 
 // Handle is de hele mux: drie paden, de rest 404. Routeren op r.Path doet een
 // apphttp-handler zelf — een mux is een switch, en die kun je beter zien.
-func (s *Server) Handle(w apphttp.ResponseWriter, r *apphttp.Request) {
+func (s *Server) Handle(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 	// /healthz telt niet mee: een uptime-check die elke seconde langskomt
 	// hoort de bezoekersteller niet op te blazen.
 	if r.Path == "/healthz" {
@@ -181,7 +181,7 @@ func (s *Server) Handle(w apphttp.ResponseWriter, r *apphttp.Request) {
 	}
 	if r.Method != "GET" && r.Method != "HEAD" {
 		w.Header().Set("Allow", "GET, HEAD")
-		apphttp.Error(w, "method not allowed", apphttp.StatusMethodNotAllowed)
+		leanhttp.Error(w, "method not allowed", leanhttp.StatusMethodNotAllowed)
 		return
 	}
 	switch r.Path {
@@ -195,17 +195,17 @@ func (s *Server) Handle(w apphttp.ResponseWriter, r *apphttp.Request) {
 		s.respond(w, r, "application/json", StatusJSON(s.Status()))
 	default:
 		s.reqs.Add(1)
-		apphttp.Error(w, "not found — this node serves / and /api/status\n", apphttp.StatusNotFound)
+		leanhttp.Error(w, "not found — this node serves / and /api/status\n", leanhttp.StatusNotFound)
 	}
 }
 
 // respond schrijft het antwoord. Op een HEAD gaat alleen de kop de deur uit:
 // apphttp leidt Content-Length af uit wat de handler schrijft, dus dat is een
 // eerlijke lege 200 in plaats van een verzonnen lengte.
-func (s *Server) respond(w apphttp.ResponseWriter, r *apphttp.Request, ctype string, body []byte) {
+func (s *Server) respond(w leanhttp.ResponseWriter, r *leanhttp.Request, ctype string, body []byte) {
 	w.Header().Set("Content-Type", ctype)
 	if r.Method == "HEAD" {
-		w.WriteHeader(apphttp.StatusOK)
+		w.WriteHeader(leanhttp.StatusOK)
 		return
 	}
 	w.Write(body)

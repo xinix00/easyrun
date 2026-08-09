@@ -28,9 +28,9 @@ import (
 
 	"github.com/xinix00/HopOS/metal/abi/layout"
 	"github.com/xinix00/HopOS/metal/app/applib"
-	"github.com/xinix00/HopOS/metal/app/applib/apphttp"
 	"github.com/xinix00/HopOS/metal/app/applib/appnet"
 	"github.com/xinix00/HopOS/metal/dev"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/hop/apps/welcome/internal/welcome"
 )
@@ -67,7 +67,7 @@ func main() {
 	}, coreState(app))
 
 	app.Logf("%s", welcome.Banner(srv.Node()))
-	app.Logf("http: %v", apphttp.ListenAndServe(":"+port, srv.Handle))
+	app.Logf("http: %v", leanhttp.ListenAndServe(":"+port, srv.Handle))
 	app.Exit(1) // een service die stopt met serveren is een crash, by design
 }
 

@@ -13,6 +13,8 @@ go 1.26.4
 // go.work.
 require github.com/xinix00/HopOS/metal v1.8.3
 
+require github.com/xinix00/lean v0.1.0
+
 require (
 	github.com/google/btree v1.1.2 // indirect
 	github.com/soypat/lneto v0.1.1-0.20260609173350-82f946154800 // indirect

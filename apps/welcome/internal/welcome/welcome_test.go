@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xinix00/HopOS/metal/app/applib/apphttp"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // testNode is een node zoals HOP hem meegeeft: gepubliceerd op poort 80 van het
@@ -314,12 +314,12 @@ func TestServeEndToEnd(t *testing.T) {
 	t.Cleanup(func() { l.Close() })
 
 	s := NewServer(testNode(), nil)
-	go apphttp.Serve(l, s.Handle)
+	go leanhttp.Serve(l, s.Handle)
 	base := "http://" + l.Addr().String()
 
-	get := func(path string) (*apphttp.Response, string) {
+	get := func(path string) (*leanhttp.Response, string) {
 		t.Helper()
-		resp, err := apphttp.Get(base + path)
+		resp, err := leanhttp.Get(base + path)
 		if err != nil {
 			t.Fatalf("GET %s: %v", path, err)
 		}
@@ -333,7 +333,7 @@ func TestServeEndToEnd(t *testing.T) {
 
 	// De pagina.
 	resp, body := get("/")
-	if resp.StatusCode != apphttp.StatusOK {
+	if resp.StatusCode != leanhttp.StatusOK {
 		t.Errorf("GET / = %d, wil 200", resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
@@ -345,7 +345,7 @@ func TestServeEndToEnd(t *testing.T) {
 
 	// De status-JSON: na één pagina-hit staat de teller op 1.
 	resp, body = get("/api/status")
-	if resp.StatusCode != apphttp.StatusOK {
+	if resp.StatusCode != leanhttp.StatusOK {
 		t.Errorf("GET /api/status = %d, wil 200", resp.StatusCode)
 	}
 	if ct := resp.Header.Get("Content-Type"); ct != "application/json" {
@@ -360,29 +360,29 @@ func TestServeEndToEnd(t *testing.T) {
 
 	// /healthz: kort, en het telt niet mee in de tellers.
 	resp, body = get("/healthz")
-	if resp.StatusCode != apphttp.StatusOK || body != "ok\n" {
+	if resp.StatusCode != leanhttp.StatusOK || body != "ok\n" {
 		t.Errorf("GET /healthz = %d %q, wil 200 \"ok\\n\"", resp.StatusCode, body)
 	}
 	if _, body = get("/api/status"); !strings.Contains(body, `"views":1`) {
 		t.Errorf("healthz heeft de bezoekersteller aangeraakt: %s", body)
 	}
 
-	// Onbekend pad en verkeerde methode. Via Do, want apphttp.Get maakt van een
+	// Onbekend pad en verkeerde methode. Via Do, want leanhttp.Get maakt van een
 	// 404 zelf een fout.
-	miss, err := apphttp.Do(apphttp.Call{URL: base + "/favicon.ico"})
+	miss, err := leanhttp.Do(leanhttp.Call{URL: base + "/favicon.ico"})
 	if err != nil {
 		t.Fatalf("GET /favicon.ico: %v", err)
 	}
 	miss.Body.Close()
-	if miss.StatusCode != apphttp.StatusNotFound {
+	if miss.StatusCode != leanhttp.StatusNotFound {
 		t.Errorf("GET /favicon.ico = %d, wil 404", miss.StatusCode)
 	}
-	post, err := apphttp.Do(apphttp.Call{Method: "POST", URL: base + "/", Body: []byte("x")})
+	post, err := leanhttp.Do(leanhttp.Call{Method: "POST", URL: base + "/", Body: []byte("x")})
 	if err != nil {
 		t.Fatalf("POST /: %v", err)
 	}
 	post.Body.Close()
-	if post.StatusCode != apphttp.StatusMethodNotAllowed {
+	if post.StatusCode != leanhttp.StatusMethodNotAllowed {
 		t.Errorf("POST / = %d, wil 405", post.StatusCode)
 	}
 	if got := post.Header.Get("Allow"); got != "GET, HEAD" {
@@ -390,12 +390,12 @@ func TestServeEndToEnd(t *testing.T) {
 	}
 
 	// HEAD: een kop zonder body (een uptime-check hoort geen 28 kB te trekken).
-	head, err := apphttp.Do(apphttp.Call{Method: "HEAD", URL: base + "/"})
+	head, err := leanhttp.Do(leanhttp.Call{Method: "HEAD", URL: base + "/"})
 	if err != nil {
 		t.Fatalf("HEAD /: %v", err)
 	}
 	defer head.Body.Close()
-	if head.StatusCode != apphttp.StatusOK {
+	if head.StatusCode != leanhttp.StatusOK {
 		t.Errorf("HEAD / = %d, wil 200", head.StatusCode)
 	}
 	if hbody, _ := io.ReadAll(head.Body); len(hbody) != 0 {
