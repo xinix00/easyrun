@@ -2,4 +2,3 @@ bin/
 data/
 *.log
 /agent
-apps/welcome/out/
