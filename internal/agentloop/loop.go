@@ -57,6 +57,7 @@ type Loop struct {
 	l              LeaderAPI
 	stopLeader     func()
 	failCount      int
+	selfBeatFails  int // opeenvolgende mislukte self-heartbeats (zie Tick)
 	registered     bool
 	lastLeaderAddr string
 }
@@ -169,7 +170,24 @@ func (s *Loop) Tick() {
 		// Self-heartbeat: puur liveness (LastSeen); job-sync is gesloopt —
 		// gewenste staat heeft één auteur (leader → S3, leader/persist.go).
 		leaderAddr = fmt.Sprintf("%s:%d", s.Cfg.Node.IP, s.Cfg.Node.Port+1000)
-		_ = s.DoHeartbeat(leaderAddr, s.Ag.ID(), s.Ag.Endpoint(), s.Cfg.APIKey)
+		if err := s.DoHeartbeat(leaderAddr, s.Ag.ID(), s.Ag.Endpoint(), s.Cfg.APIKey); err != nil {
+			// Deze fout werd weggegooid met `_ =`, en dat kostte een middag
+			// zoeken (11-08 op een LicheeRV): de leader meldt "Agent is dead",
+			// de agent zwijgt, /v1/agents blijft leeg en de node herstelt nooit
+			// — terwijl de niet-leader-tak hieronder élke fout logt en opnieuw
+			// registreert. Een falende self-heartbeat betekent dat onze EIGEN
+			// leader-API geen nieuwe verbinding meer accepteert. Dat is geen
+			// leiderschapsprobleem (de lease is hierboven net vernieuwd), dus
+			// blijft de leader-state met opzet ongemoeid: we maken het
+			// zichtbaar in plaats van erop te reageren. Eigen teller, want
+			// failCount wordt hierboven elke tick door de lease op 0 gezet.
+			s.selfBeatFails++
+			log.Printf("Self-heartbeat to own leader API %s failed (%d): %v",
+				leaderAddr, s.selfBeatFails, err)
+		} else if s.selfBeatFails > 0 {
+			log.Printf("Self-heartbeat to own leader API recovered after %d failure(s)", s.selfBeatFails)
+			s.selfBeatFails = 0
+		}
 	} else if leaderAddr != "" {
 		// On startup (or after leader change): register first with placed counts
 		if !s.registered {
