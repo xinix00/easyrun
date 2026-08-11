@@ -245,7 +245,7 @@ type Task struct {
     Image        string         // Docker image (only for driver=docker)
     Ports        map[string]int // Named port -> host port number
     Pid          int            // Process ID (Docker: 0; HopOS: primary slot index)
-    State        TaskState      // running, stopping, stopped, failed
+    State        TaskState      // queued, downloading, running, stopping, stopped, failed
     StartedAt    time.Time
     RestartCount int            // Number of times restarted
     LastFailedAt time.Time      // Last crash time (drives the restart window)
@@ -253,6 +253,9 @@ type Task struct {
     MemoryLimit  uint64         // Copied from the job (capacity accounting)
     CPUPercent   float64        // Live usage, measured by the agent monitor (5s)
     MemPercent   float64        // Live usage, measured by the agent monitor (5s)
+
+    Downloaded   uint64         // Bytes in so far   (state "downloading" only)
+    ImageSize    uint64         // Total image size  (state "downloading" only)
 }
 ```
 
@@ -268,10 +271,21 @@ type Task struct {
 
 | State | Meaning |
 |-------|---------|
+| `queued` | Accepted, capacity already reserved, waiting for its turn to download |
+| `downloading` | The image is streaming in — progress in `Downloaded` / `ImageSize` |
 | `running` | Process is running |
 | `stopping` | Being stopped (shutdown, restart swap, preemption) |
 | `stopped` | Intentionally stopped |
 | `failed` | Crashed, OOM killed, exceeded max restarts, etc |
+
+`queued` and `downloading` exist because a task used to be called `running`
+from birth, and on HopOS the image download before it can take minutes — ten
+minutes of "running, 0% cpu" while nothing runs at all. Only runners that
+stream fill the progress fields.
+
+**Every state counts against capacity.** Presence is the measure, never the
+state: a `queued`, `failed` or `stopped` task still occupies its share, and
+capacity is freed by *deleting the record* — never by filtering on state.
 
 ## Agent
 
@@ -279,12 +293,17 @@ A registered agent with the leader.
 
 ```go
 type Agent struct {
-    ID       string    // Unique identifier
-    Endpoint string    // HTTP endpoint (http://ip:port)
-    Version  string    // Agent version (injected at build time)
-    LastSeen time.Time // Last heartbeat
+    ID         string    // Unique identifier
+    Endpoint   string    // HTTP endpoint (http://ip:port)
+    Version    string    // Agent version (injected at build time)
+    LastSeen   time.Time // Last heartbeat
+    TempMilliC int       // Node CPU temperature in milli-°C, 0 = no sensor
 }
 ```
+
+`TempMilliC` rides along on every heartbeat — one number per node, on purpose:
+a node with several sensors reports the hottest one, because that is the number
+you act on.
 
 ## Leader State (in-memory)
 

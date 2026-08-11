@@ -249,6 +249,24 @@ instance is the oldest task, so "newest task wins" would be exactly backwards.
 - Optional isolation (chroot on Linux)
 - Artifact download with extraction support (tar.gz, tar.bz2, zip, raw binary)
 
+### HopRunner (HopOS nodes)
+- One-phase start: the image is **streamed from the artifact URL straight into
+  the slot's partition** (`hopos.StreamStarter`, `internal/runner/hopos_stream.go`).
+  No loader in the slot and no staged copy, so a partition carries the app and
+  nothing else
+- The start phase is **visible as real states**: `queued` → `downloading` →
+  `running`, with bytes in `Task.Downloaded` / `Task.ImageSize`. Before this, a
+  task was called `running` from birth, which on a small board meant ten
+  minutes of "running, 0% cpu" while nothing ran
+- **At most 4 concurrent downloads** per node (`maxConcurrentDownloads`). The
+  limit is physical, not policy: each stream costs the HOP core a TLS session
+  plus a read buffer, and TLS is CPU work on that one core. Whoever waits is
+  plainly `queued`, and its capacity is already counted
+- A download times out on **silence** (60s without bytes), not on duration — a
+  big image over a shared hart may take as long as it takes
+- Isolation and memory limits are enforced in hardware by the cage; the runner
+  is registered via `agent.WithHopRunner(...)` and falls back to exec elsewhere
+
 ### DockerRunner
 - Runs Docker containers via `docker` CLI (no SDK, no external dependencies)
 - Container naming: `hop-<taskID>` for predictable lifecycle management

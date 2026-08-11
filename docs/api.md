@@ -130,9 +130,14 @@ Agents send this every 10s to stay registered:
 {
   "id": "agent-1",
   "endpoint": "http://10.0.0.5:8080",
-  "version": "dev"
+  "version": "dev",
+  "temp_milli_c": 45000
 }
 ```
+
+`temp_milli_c` is the node's CPU temperature in milli-°C, or absent when the
+node has no sensor. One number per node: a node with several sensors sends the
+hottest, because that is the one you act on.
 
 **Response (known agent):**
 ```json
@@ -322,11 +327,14 @@ Returns the current leader address:
 GET /capacity
 ```
 
-Returns detected system resources and node attributes:
+Returns capacity, live usage and node attributes:
 ```json
 {
   "cpu_cores": 14,
   "memory_bytes": 51539607552,
+  "cpu_used_shares": 3072,
+  "memory_used_bytes": 402653184,
+  "tasks_running": 3,
   "attributes": {
     "node.id": "agent-1",
     "node.arch": "arm64",
@@ -334,6 +342,16 @@ Returns detected system resources and node attributes:
   }
 }
 ```
+
+- `cpu_cores` / `memory_bytes` are the **effective** cap this agent schedules
+  against (the configured `capacity.*` where set), not raw hardware — that is
+  what a caller like hopprom or hoplb needs to see.
+- `cpu_used_shares` and `memory_used_bytes` are what the tasks on this node
+  claim, counted from **every** task present regardless of its state. Members
+  of one sharegroup share a pool of cores, so that pool's CPU counts **once**;
+  memory counts per member, because every app keeps its own partition.
+- `tasks_running` is a display count of tasks in state `running` — it is not
+  what capacity is computed from.
 
 ### Tasks
 

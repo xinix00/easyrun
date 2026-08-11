@@ -1,17 +1,17 @@
-# Configuratie
+# Configuration
 
 ## Config File
 
 ```yaml
 node:
-  id: ""                    # Auto-generate UUID als leeg
-  ip: ""                    # Auto-detect als leeg (advertised IP voor cluster comms)
-  network: ""               # Optioneel CIDR (bv. "10.0.0.0/24") — als `ip` leeg is
-                            # pakt hop het eerste interface-IP binnen deze range.
-                            # Handig voor multi-homed nodes: HTTP luistert nog
-                            # steeds op 0.0.0.0, alleen de advertised IP wordt
-                            # vastgepind op de LAN/VPN.
-  port: 8080                # Agent port (leader draait op port+1000)
+  id: ""                    # Auto-generate a UUID when empty
+  ip: ""                    # Auto-detect when empty (advertised IP for cluster comms)
+  network: ""               # Optional CIDR (e.g. "10.0.0.0/24") — when `ip` is
+                            # empty, hop takes the first interface IP inside
+                            # this range. Handy on multi-homed nodes: HTTP still
+                            # listens on 0.0.0.0, only the advertised IP is
+                            # pinned to the LAN/VPN.
+  port: 8080                # Agent port (the leader runs on port+1000)
   attributes:               # Custom node attributes (merged with auto-detected)
     # region: eu-west-1
     # gpu: "true"
@@ -19,9 +19,9 @@ node:
 cluster:
   name: "my-cluster"
   lock:                     # Leader election backend (hoplock)
-    type: "hoplockserver"   # "hoplockserver" (default), "s3", of "mem"
+    type: "hoplockserver"   # "hoplockserver" (default), "s3" or "mem"
     url: "http://10.0.0.1:8090"   # hoplockserver base URL (type=hoplockserver)
-    api_key: ""             # hoplockserver API key (aparte key, optioneel)
+    api_key: ""             # hoplockserver API key (a separate key, optional)
     # key: ""               # lease object key (default: clusters/<name>/lease.json)
     # s3:                   # type=s3: AWS / Cloudflare R2 / MinIO / B2
     #   endpoint: "https://s3.eu-west-1.amazonaws.com"
@@ -30,16 +30,16 @@ cluster:
     #   access_key_id: "..."
     #   secret_access_key: "..."
     #   use_path_style: false
-  # init_jobs:              # Baseline die een leeg cluster bij clean boot krijgt
-  #   - name: hopdns        # (zie "Init jobs" hieronder)
+  # init_jobs:              # Baseline an empty cluster gets on a clean boot
+  #   - name: hopdns        # (see "Init jobs" below)
   #     command: /usr/local/bin/hopdns
   #     count: -1
 
-api_key: ""                 # Gedeelde secret voor HMAC request-auth (X-Hop-Auth)
-                            # over alle hop endpoints. Leeg = auth uit (dev).
+api_key: ""                 # Shared secret for HMAC request auth (X-Hop-Auth)
+                            # on every hop endpoint. Empty = auth off (dev).
 
 capacity:
-  cpu_shares: 14000         # Relatieve CPU capaciteit
+  cpu_shares: 14000         # Relative CPU capacity
   memory: 8589934592        # 8GB in bytes
 
 paths:
@@ -60,11 +60,12 @@ timeouts:
 
 ## Init jobs
 
-`cluster.init_jobs` is de baseline die een **leeg** cluster automatisch krijgt.
-Een leader die start zonder committed snapshot én zonder lokale jobs (een
-"clean boot") seedt deze jobs eenmalig via het normale upsert-pad — alsof een
-operator ze met `run apply` indiende. Zo komt een kale node (Pi, HopOS) uit de
-doos met zijn taken, zonder dat iemand iets hoeft te deployen.
+`cluster.init_jobs` is the baseline an **empty** cluster gets by itself. A
+leader that starts without a committed snapshot *and* without local jobs (a
+"clean boot") seeds these jobs once through the normal upsert path — exactly as
+if an operator had submitted them with `run apply`. That is how a blank node
+(a Pi, a HopOS node) comes up with its work already on it, with nobody
+deploying anything.
 
 ```yaml
 cluster:
@@ -72,7 +73,7 @@ cluster:
   init_jobs:
     - name: hopdns
       command: /usr/local/bin/hopdns
-      count: -1               # op elke node
+      count: -1               # on every node
       ports:
         dns: 5353
     - name: my-app
@@ -80,24 +81,24 @@ cluster:
       count: 2
 ```
 
-**Semantiek:**
+**Semantics:**
 
-- Veldnamen zijn het **job JSON-schema** (zelfde als `POST /v1/jobs` /
-  [data-structures.md](data-structures.md)) — een spec is copy-pastbaar
-  tussen config en API.
-- **Alleen bij clean boot**: geen snapshot in de state store (of geen store
-  geconfigureerd) én een lege job store. Init jobs zijn géén continue
-  enforcement — een geseedde job verwijderen blijft verwijderd tot de
-  volgende clean boot (deletion is absence).
-- **Storing ≠ leeg**: is de state store onbereikbaar, dan wordt er nooit
-  geseed — anders zou een S3-storing het cluster naar de baseline resetten.
-- Een bestaande jobnaam wordt overgeslagen; een seed overschrijft nooit
-  operator-state.
-- Typo's zijn boot-fouten: onbekende velden, een ontbrekende `name` of een
-  job zonder `command`/`image` stoppen de agent bij het starten.
-- **Factory reset**: verwijder het `state/<cluster>`-object uit de bucket
-  (en op de node z'n lokale state) → volgende leader-start is een clean
-  boot → de baseline komt terug.
+- Field names are the **job JSON schema** (the same as `POST /v1/jobs` /
+  [data-structures.md](data-structures.md)) — a spec is copy-pastable between
+  config and API.
+- **Clean boot only**: no snapshot in the state store (or no store configured)
+  *and* an empty job store. Init jobs are not continuous enforcement — delete a
+  seeded job and it stays deleted until the next clean boot (deletion is
+  absence).
+- **An outage is not an empty cluster**: if the state store is unreachable,
+  nothing is ever seeded — otherwise an S3 outage would reset the cluster to
+  the baseline.
+- An existing job name is skipped; a seed never overwrites operator state.
+- Typos are boot errors: unknown fields, a missing `name`, or a job without
+  `command`/`image` stop the agent at startup.
+- **Factory reset**: delete the `state/<cluster>` object from the bucket (and
+  the node's local state) → the next leader start is a clean boot → the
+  baseline comes back.
 
 ## CLI Flags
 
@@ -123,8 +124,8 @@ node:
 
 cluster:
   name: "dev"
-  # Geen lock config → standalone (in-memory).
-  # Multi-node lokaal: lock: { url: "http://127.0.0.1:8090" } + hoplockserver starten.
+  # No lock config → standalone (in-memory).
+  # Multi-node locally: lock: { url: "http://127.0.0.1:8090" } + run hoplockserver.
 
 capacity:
   cpu_shares: 14000
@@ -146,13 +147,13 @@ runner:
 
 ### CPU Shares
 
-Relatieve waarde. Hoe meer shares, hoe hoger de prioriteit.
+A relative value: more shares means higher priority.
 
-- `0` = geen limiting (default nice value)
-- `1000` = lage prioriteit
-- `14000` = hoogste prioriteit
+- `0` = no limiting (default nice value)
+- `1000` = low priority
+- `14000` = highest priority
 
-Intern wordt dit vertaald naar nice values (0-19).
+Internally this is translated to nice values (0-19).
 
 Capacity check: agents have `cpu_cores * 1024` total shares. Requests exceeding available shares are rejected (503).
 
@@ -160,13 +161,13 @@ Capacity check: agents have `cpu_cores * 1024` total shares. Requests exceeding 
 
 In bytes.
 
-- `0` = geen limiting
+- `0` = no limiting
 - `536870912` = 512MB
 - `1073741824` = 1GB
 
-Platform-specifieke implementatie:
-- **Linux**: cgroups v2 (na process start, OOM killer integration)
-- **macOS**: ulimit -v wrapper (voor exec)
+Per-platform implementation:
+- **Linux**: cgroups v2 (after process start, OOM killer integration)
+- **macOS**: an `ulimit -v` wrapper (before exec)
 
 Capacity check: agents check total system memory. Requests exceeding available memory are rejected (503).
 
@@ -177,16 +178,16 @@ runner:
   isolate: true
 ```
 
-Met isolation enabled:
-- Elke task draait in een chroot jail (Linux)
-- Minimale shell environment wordt automatisch gelinkt (`/bin/sh`, libraries)
-- Command is relatief aan chroot root (bv. `/app/mybin`)
+With isolation enabled:
+- Every task runs in a chroot jail (Linux)
+- A minimal shell environment is linked in automatically (`/bin/sh`, libraries)
+- The command is relative to the chroot root (e.g. `/app/mybin`)
 
-Zonder isolation (default in dev):
-- Tasks draaien in eigen werkdirectory maar niet geïsoleerd
+Without isolation (the dev default):
+- Tasks run in their own working directory, but are not isolated
 
-In beide modes:
-- Command kan shell syntax gebruiken
+In both modes:
+- The command may use shell syntax
 - Memory limiting via ulimit (macOS) of cgroups (Linux)
 - CPU limiting via nice
 - Volume mounts via symlinks

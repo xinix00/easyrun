@@ -116,8 +116,14 @@ Task IDs are random UUIDs, regenerated on every restart.
    - Spawns a goroutine that runs `startJob`.
 
 **Invariant**: a task in `s.tasks` always represents reserved capacity, no
-matter what State it is in (Running / Stopping / Failed). Capacity is
-released only when the task is DELETED from `s.tasks`.
+matter what State it is in (Queued / Downloading / Running / Stopping /
+Failed). Capacity is released only when the task is DELETED from `s.tasks`.
+
+A task is born `queued` and becomes `running` only when it actually runs. On
+HopOS the step in between is `downloading`, where the image streams into the
+slot's partition (at most 4 at a time per node, progress in
+`Task.Downloaded` / `Task.ImageSize`) — see
+[architecture.md](architecture.md#hoprunner-hopos-nodes).
 
 ### 3.2 Start: setupTaskDir → mount → cmd.Start
 

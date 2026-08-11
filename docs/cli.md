@@ -45,11 +45,15 @@ api     2 / 3     DEGRADED
 
 AGENT     TASK      JOB    PORTS              STATE
 agent-1   abc123    web    http:54321         running
-agent-1   def456    web    http:54322         running
+agent-1   def456    web    http:54322         downloading
 agent-2   ghi789    api    http:8080,grpc:9090 running
 ```
 
 Shows jobs with expected vs running counts. Daemon jobs (count=-1) show `all(N)` where N = number of agents.
+
+A task starts out `queued` and only reports `running` once it really runs; on
+HopOS nodes `downloading` sits in between while the image streams into the slot
+([task states](data-structures.md#task-states)). All of them occupy capacity.
 
 ## Jobs
 
@@ -167,16 +171,21 @@ Deletes the job and stops all of its tasks.
 
 List output:
 ```
-ID        ENDPOINT              LAST SEEN
-agent-1   http://10.0.0.1:8080  15:04:05
-agent-2   http://10.0.0.2:8080  15:04:03
-agent-3   http://10.0.0.3:8080  15:04:07
+ID        ENDPOINT              TEMP     LAST SEEN
+agent-1   http://10.0.0.1:8080  45.0°C   15:04:05
+agent-2   http://10.0.0.2:8080  52.5°C   15:04:03
+agent-3   http://10.0.0.3:8080  -        15:04:07
 ```
+
+`TEMP` is the node's CPU temperature from its heartbeat — a dash when the node
+has no sensor, never a fake zero. A node with several sensors reports the
+hottest one.
 
 Detail output:
 ```
 Agent:    agent-1
 Endpoint: http://10.0.0.1:8080
+CPU temp: 45.0°C
 LastSeen: 15:04:05
 
 Tasks:    3 running

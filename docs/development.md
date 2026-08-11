@@ -3,26 +3,26 @@
 ## Build
 
 ```bash
-# Binaries bouwen
+# Build the binaries
 go build -o bin/agent ./cmd/agent
 go build -o bin/run ./cmd/cli
 
-# Cross compile voor Linux
+# Cross compile for Linux
 GOOS=linux GOARCH=amd64 go build -o bin/agent-linux ./cmd/agent
 ```
 
-## Test Lokaal
+## Testing locally
 
-1. Start agent (standalone = in-memory lock backend, geen extra services):
+1. Start an agent (standalone = in-memory lock backend, no other services):
 ```bash
 ./bin/agent --cluster=dev --standalone
-# of met config:
+# or with a config file:
 ./bin/agent --config ./dev-config.yaml
 ```
 
-Multi-node lokaal? Start hoplockserver en geef elke agent `--lock`:
+Multi-node locally? Run hoplockserver and point every agent at it with `--lock`:
 ```bash
-../bin/hoplockserver -listen :8090 -data ./data/lock   # vanuit de monorepo
+../bin/hoplockserver -listen :8090 -data ./data/lock   # from the monorepo root
 ./bin/agent --cluster=dev --lock http://127.0.0.1:8090 --config dev-node1.yaml
 ```
 
@@ -35,7 +35,7 @@ Multi-node lokaal? Start hoplockserver en geef elke agent `--lock`:
 ./bin/run --leader localhost:9080 logs <task-id>
 ```
 
-## Project Structuur
+## Project structure
 
 ```
 /cmd
@@ -62,6 +62,9 @@ Multi-node lokaal? Start hoplockserver en geef elke agent `--lock`:
         process_linux.go   # Linux: cgroups, chroot
         process_darwin.go  # macOS: ulimit, sandbox
         docker.go          # Docker runner (via docker CLI, no SDK)
+        hopos.go           # HopRunner: jobs onto HopOS slots (driver=hop)
+        hopos_stream.go    # The one-phase start: stream the image into the
+                           # slot, queued → downloading → running
         download.go        # Artifact download router + extraction (tar.gz, tar.bz2, zip)
         download_http.go   # HTTP/HTTPS downloader
         download_s3.go     # S3 downloader
@@ -70,24 +73,40 @@ Multi-node lokaal? Start hoplockserver en geef elke agent `--lock`:
         server.go          # Leader HTTP API
     /discovery/
         discovery.go       # hoplock backends (hoplockserver / S3 / mem) + leader discovery
+    /agentloop/
+        loop.go            # The shared election + heartbeat loop: become
+                           # leader via the lock backend, or find the leader
+                           # and register/heartbeat there. cmd/agent (Linux)
+                           # and pkg/agentboot (HopOS) run the same loop
     /types/
         types.go           # Core data types (Job, Task, Agent, etc.)
 /pkg
+    /agentboot/            # Boots a whole single-node agent for HopOS —
+                           # the public entry point hop-os links against
+    /hopos/                # The HOP↔HopOS contract: the SlotManager
+                           # interface HopOS implements, HopRunner consumes
     /config/
-        config.go          # Configuratie laden
+        config.go          # Loading the config file
     /httputil/
         auth.go            # HMAC request auth (X-Hop-Auth): RequireHMAC + SignRequest
         response.go        # JSON response helpers
-/docs                      # Documentatie
+/docs                      # Documentation
 ```
 
-Daarnaast: `internal/leader/persist.go` (committed cluster state naar S3) en
-`internal/runner/hopos.go` (HopRunner voor HopOS-nodes, driver=`hop`).
+Also: `internal/leader/persist.go` (committed cluster state to S3).
 
-## Poorten
+The HopOS app images (`welcome`, `vitals`, `cloudflared`) used to live here under
+`apps/`. They moved to [HopOS](https://github.com/xinix00/HopOS) under `apps/`,
+next to the kernel they link against: an app image is a metal artifact — it links
+`applib`, the app netstack and the slot ABI, and its link address comes from
+HopOS' partition layout. This repo does not depend on metal at all, so it should
+never have to be re-released because metal moved. `hopdns`, `hoplb` and `hopprom`
+keep their own repos; only their `cmd/<name>-hopos` main is built over there.
 
-| Service | Poort | Beschrijving |
-|---------|-------|--------------|
+## Ports
+
+| Service | Port | Description |
+|---------|------|-------------|
 | Agent | 8080 | Agent HTTP API |
 | Leader | 9080 | Leader HTTP API (port+1000) |
 | hoplockserver | 8090 | CAS lease store (default lock backend) |
@@ -95,13 +114,13 @@ Daarnaast: `internal/leader/persist.go` (committed cluster state naar S3) en
 ## Tests
 
 ```bash
-# Alle tests
+# All tests
 go test ./...
 
-# Met race detector
+# With the race detector
 go test -race ./...
 
-# Specifiek package
+# A single package
 go test -v ./internal/leader
 go test -v ./internal/agent
 go test -v ./internal/api
