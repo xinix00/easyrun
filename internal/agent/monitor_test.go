@@ -9,7 +9,10 @@ import (
 	"os"
 	"sync/atomic"
 	"testing"
+
 	"time"
+
+	"github.com/xinix00/hop/pkg/hophttp"
 
 	"github.com/xinix00/hop/internal/types"
 )
@@ -398,7 +401,7 @@ func TestCheckHealthFailureThresholdResets(t *testing.T) {
 		if healthy.Load() {
 			w.WriteHeader(http.StatusOK)
 		} else {
-			w.WriteHeader(http.StatusInternalServerError)
+			w.WriteHeader(hophttp.StatusInternalServerError)
 		}
 	}))
 	defer srv.Close()

@@ -7,12 +7,12 @@ import (
 	"io"
 	"log"
 	"net"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/xinix00/hop/internal/runner"
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
 
 	"github.com/google/uuid"
@@ -23,37 +23,40 @@ import (
 // against the leader (the whole cluster shares one key). Nothing is forwarded
 // when the caller didn't sign — the proxy endpoints sit behind RequireHMAC, so
 // a missing signature only happens in empty-key (auth-off) mode.
-func (a *Agent) setAuth(req, incoming *http.Request) {
+func (a *Agent) setAuth(call *hophttp.Call, incoming *hophttp.Request) {
 	if incoming == nil {
 		return
 	}
 	if sig := incoming.Header.Get(httputil.AuthHeader); sig != "" {
-		req.Header.Set(httputil.AuthHeader, sig)
+		call.SetHeader(httputil.AuthHeader, sig)
 	}
 }
 
 // proxyToLeader forwards requests to the current leader.
 // For long-lived endpoints (SSE events, log tailing) use proxyStreamToLeader
 // instead — io.Copy's buffering would delay chunk delivery here.
-func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) proxyToLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
 	leaderAddr := a.getLeader()
 	if leaderAddr == "" {
-		httputil.WriteError(w, http.StatusServiceUnavailable, "no leader available")
+		httputil.WriteError(w, hophttp.StatusServiceUnavailable, "no leader available")
 		return
 	}
 
-	url := fmt.Sprintf("http://%s%s", leaderAddr, r.URL.Path)
-	req, err := http.NewRequest(r.Method, url, r.Body)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "failed to create request")
+	body, ok := proxyBody(w, r)
+	if !ok {
 		return
 	}
-	req.Header.Set("Content-Type", r.Header.Get("Content-Type"))
-	a.setAuth(req, r)
+	call := hophttp.Call{
+		Method: r.Method,
+		URL:    fmt.Sprintf("http://%s%s", leaderAddr, r.Path),
+		Body:   body,
+	}
+	call.SetHeader("Content-Type", r.Header.Get("Content-Type"))
+	a.setAuth(&call, r)
 
-	resp, err := a.httpClient.Do(req)
+	resp, err := a.httpClient.DoContext(r.Context(), call)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadGateway, "failed to contact leader")
+		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact leader")
 		return
 	}
 	defer resp.Body.Close()
@@ -66,31 +69,29 @@ func (a *Agent) proxyToLeader(w http.ResponseWriter, r *http.Request) {
 // proxyStreamToLeader forwards a request to the leader and streams the
 // response back chunk-by-chunk, flushing as data arrives. Used for SSE
 // (/v1/events) and live log tailing where buffering would delay output.
-func (a *Agent) proxyStreamToLeader(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) proxyStreamToLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
 	leaderAddr := a.getLeader()
 	if leaderAddr == "" {
-		httputil.WriteError(w, http.StatusServiceUnavailable, "no leader available")
+		httputil.WriteError(w, hophttp.StatusServiceUnavailable, "no leader available")
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
+	body, ok := proxyBody(w, r)
 	if !ok {
-		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
-
-	url := fmt.Sprintf("http://%s%s", leaderAddr, r.URL.Path)
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, url, r.Body)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "failed to create request")
-		return
+	call := hophttp.Call{
+		Method: r.Method,
+		URL:    fmt.Sprintf("http://%s%s", leaderAddr, r.Path),
+		Body:   body,
 	}
-	a.setAuth(req, r)
+	a.setAuth(&call, r)
 
-	// No timeout — these are long-lived streams.
-	resp, err := (&http.Client{}).Do(req)
+	// No timeout — these are long-lived streams. streamClient exists for exactly
+	// that: a.httpClient carries proxyTimeout, which would cut an SSE tail off.
+	resp, err := a.streamClient.DoContext(r.Context(), call)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadGateway, "failed to contact leader")
+		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact leader")
 		return
 	}
 	defer resp.Body.Close()
@@ -107,12 +108,36 @@ func (a *Agent) proxyStreamToLeader(w http.ResponseWriter, r *http.Request) {
 			if _, werr := w.Write(buf[:n]); werr != nil {
 				return
 			}
-			flusher.Flush()
+			// Flush per chunk: that is the whole difference with proxyToLeader.
+			if ferr := w.Flush(); ferr != nil {
+				return
+			}
 		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+// proxyBody reads the request body the proxy is about to forward. hophttp sends
+// a body as bytes, so it has to be read here — and therefore bounded, because
+// this runs before the leader ever sees the request. On the authenticated routes
+// RequireHMAC has already read and capped it; this bound is for the ones that
+// are not (and for the day one is added).
+func proxyBody(w hophttp.ResponseWriter, r *hophttp.Request) ([]byte, bool) {
+	if r.Body == nil {
+		return nil, true
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, proxyMaxBody+1))
+	switch {
+	case err != nil:
+		httputil.WriteError(w, hophttp.StatusBadRequest, "failed to read body")
+		return nil, false
+	case len(body) > proxyMaxBody:
+		httputil.WriteError(w, hophttp.StatusRequestEntityTooLarge, "request body too large")
+		return nil, false
+	}
+	return body, true
 }
 
 // notifyLeader sends a lightweight event to the leader's /v1/notify endpoint.
@@ -127,13 +152,14 @@ func (a *Agent) notifyLeader(jobName, event string) {
 	// en denkt reconcile voorgoed "1/1" (gemeten 01-08: cloudflared voor eeuwig
 	// pending terwijl de node ruimte had).
 	payload := fmt.Sprintf(`{"job":%q,"event":%q,"agent":%q}`, jobName, event, a.id)
-	req, err := http.NewRequest("POST", fmt.Sprintf("http://%s/v1/notify", addr), strings.NewReader(payload))
-	if err != nil {
-		return
+	call := hophttp.Call{
+		Method: hophttp.MethodPost,
+		URL:    fmt.Sprintf("http://%s/v1/notify", addr),
+		Body:   []byte(payload),
 	}
-	req.Header.Set("Content-Type", "application/json")
-	httputil.SignRequest(req, a.apiKey, []byte(payload))
-	resp, err := http.DefaultClient.Do(req)
+	call.SetHeader("Content-Type", "application/json")
+	httputil.SignCall(&call, a.apiKey)
+	resp, err := a.httpClient.Do(call)
 	if err != nil {
 		return
 	}
@@ -141,13 +167,13 @@ func (a *Agent) notifyLeader(jobName, event string) {
 }
 
 // handleLeader returns the current leader address
-func (a *Agent) handleLeader(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{"leader": a.getLeader()})
+func (a *Agent) handleLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]string{"leader": a.getLeader()})
 }
 
 // handleHealth returns basic health status
-func (a *Agent) handleHealth(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (a *Agent) handleHealth(w hophttp.ResponseWriter, r *hophttp.Request) {
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]string{"status": "ok"})
 }
 
 // CapacityResponse shows system resources and actual usage
@@ -161,7 +187,7 @@ type CapacityResponse struct {
 }
 
 // handleCapacity returns detected system capacity with actual usage from running tasks
-func (a *Agent) handleCapacity(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) handleCapacity(w hophttp.ResponseWriter, r *hophttp.Request) {
 	usage := query(a, func(s *agentState) CapacityResponse {
 		cpuUsed, memUsed := s.resourceUsage()
 		var running int
@@ -185,11 +211,11 @@ func (a *Agent) handleCapacity(w http.ResponseWriter, r *http.Request) {
 			Attributes:      a.attributes,
 		}
 	})
-	httputil.WriteJSON(w, http.StatusOK, usage)
+	httputil.WriteJSON(w, hophttp.StatusOK, usage)
 }
 
 // handleTasks returns all running tasks
-func (a *Agent) handleTasks(w http.ResponseWriter, r *http.Request) {
+func (a *Agent) handleTasks(w hophttp.ResponseWriter, r *hophttp.Request) {
 	tasks := query(a, func(s *agentState) []*types.Task {
 		result := make([]*types.Task, 0, len(s.tasks))
 		for _, t := range s.tasks {
@@ -198,7 +224,7 @@ func (a *Agent) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 		return result
 	})
-	httputil.WriteJSON(w, http.StatusOK, tasks)
+	httputil.WriteJSON(w, hophttp.StatusOK, tasks)
 }
 
 // handleRun starts a new job. Met ?replace=1 vervangt hij de lopende taken van
@@ -208,22 +234,22 @@ func (a *Agent) handleTasks(w http.ResponseWriter, r *http.Request) {
 // draaien. Dat is het update-pad van de leader op een node zonder headroom:
 // vóór deze vorm werd zo'n update via de preemptie-pas over een búúrman
 // uitgevochten (gemeten 01-08, welcome-update offerde cloudflared).
-func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (a *Agent) handleRun(w hophttp.ResponseWriter, r *hophttp.Request) {
+	if r.Method != hophttp.MethodPost {
+		hophttp.Error(w, "method not allowed", hophttp.StatusMethodNotAllowed)
 		return
 	}
-	replace := r.URL.Query().Get("replace") == "1"
+	replace := r.Query().Get("replace") == "1"
 
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		httputil.WriteJSON(w, hophttp.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
 
 	// Check affinity before capacity (agent-side: leader stays dumb)
 	if !a.matchesAffinity(job.Affinity) {
-		httputil.WriteJSON(w, http.StatusNotAcceptable, map[string]string{
+		httputil.WriteJSON(w, hophttp.StatusNotAcceptable, map[string]string{
 			"error": "affinity mismatch",
 		})
 		return
@@ -291,14 +317,14 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if !added {
-		httputil.WriteJSON(w, http.StatusServiceUnavailable, map[string]string{
+		httputil.WriteJSON(w, hophttp.StatusServiceUnavailable, map[string]string{
 			"error": "insufficient capacity",
 		})
 		return
 	}
 
 	// Accept job immediately (fire-and-forget)
-	httputil.WriteJSON(w, http.StatusAccepted, map[string]string{
+	httputil.WriteJSON(w, hophttp.StatusAccepted, map[string]string{
 		"status":  "accepted",
 		"job":     job.Name,
 		"message": "job accepted, starting in background",
@@ -334,51 +360,51 @@ func (a *Agent) handleRun(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDelete deletes a job and cleans up all its tasks (by job name)
-func (a *Agent) handleDelete(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodDelete {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (a *Agent) handleDelete(w hophttp.ResponseWriter, r *hophttp.Request) {
+	if r.Method != hophttp.MethodDelete {
+		hophttp.Error(w, "method not allowed", hophttp.StatusMethodNotAllowed)
 		return
 	}
 
-	jobName := strings.TrimPrefix(r.URL.Path, "/delete/")
+	jobName := strings.TrimPrefix(r.Path, "/delete/")
 	if jobName == "" {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job name required"})
+		httputil.WriteJSON(w, hophttp.StatusBadRequest, map[string]string{"error": "job name required"})
 		return
 	}
 
 	deleted := a.deleteJob(jobName)
-	httputil.WriteJSON(w, http.StatusOK, map[string]int{"deleted": deleted})
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]int{"deleted": deleted})
 }
 
 // handleStop stops all tasks for a job WITHOUT removing the job definition (by job name).
 // Used by the leader for preemption — the job definition must remain for rescheduling.
-func (a *Agent) handleStop(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (a *Agent) handleStop(w hophttp.ResponseWriter, r *hophttp.Request) {
+	if r.Method != hophttp.MethodPost {
+		hophttp.Error(w, "method not allowed", hophttp.StatusMethodNotAllowed)
 		return
 	}
 
-	jobName := strings.TrimPrefix(r.URL.Path, "/stop/")
+	jobName := strings.TrimPrefix(r.Path, "/stop/")
 	if jobName == "" {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "job name required"})
+		httputil.WriteJSON(w, hophttp.StatusBadRequest, map[string]string{"error": "job name required"})
 		return
 	}
 
 	stopped := a.stopJobTasks(jobName)
-	httputil.WriteJSON(w, http.StatusOK, map[string]int{"stopped": stopped})
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]int{"stopped": stopped})
 }
 
 // handleStopTask stops a single specific task by task ID.
 // Used by rolling and blue-green updates to stop precise old instances.
-func (a *Agent) handleStopTask(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (a *Agent) handleStopTask(w hophttp.ResponseWriter, r *hophttp.Request) {
+	if r.Method != hophttp.MethodPost {
+		hophttp.Error(w, "method not allowed", hophttp.StatusMethodNotAllowed)
 		return
 	}
 
-	taskID := strings.TrimPrefix(r.URL.Path, "/stop-task/")
+	taskID := strings.TrimPrefix(r.Path, "/stop-task/")
 	if taskID == "" {
-		httputil.WriteJSON(w, http.StatusBadRequest, map[string]string{"error": "task id required"})
+		httputil.WriteJSON(w, hophttp.StatusBadRequest, map[string]string{"error": "task id required"})
 		return
 	}
 
@@ -391,7 +417,7 @@ func (a *Agent) handleStopTask(w http.ResponseWriter, r *http.Request) {
 	})
 
 	if task == nil {
-		httputil.WriteJSON(w, http.StatusNotFound, map[string]string{"error": "task not found"})
+		httputil.WriteJSON(w, hophttp.StatusNotFound, map[string]string{"error": "task not found"})
 		return
 	}
 
@@ -404,7 +430,7 @@ func (a *Agent) handleStopTask(w http.ResponseWriter, r *http.Request) {
 		})
 	}()
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{"stopped": taskID})
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]string{"stopped": taskID})
 }
 
 // stopJobTasks stops all tasks for a job WITHOUT removing the job definition.
@@ -778,10 +804,10 @@ func (a *Agent) deleteJob(jobName string) int {
 }
 
 // handleLogs streams task logs (stdout or stderr)
-func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
-	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/logs/"), "/")
+func (a *Agent) handleLogs(w hophttp.ResponseWriter, r *hophttp.Request) {
+	parts := strings.Split(strings.TrimPrefix(r.Path, "/logs/"), "/")
 	if len(parts) != 2 {
-		http.Error(w, "usage: /logs/{taskID}/stdout or /logs/{taskID}/stderr", http.StatusBadRequest)
+		hophttp.Error(w, "usage: /logs/{taskID}/stdout or /logs/{taskID}/stderr", hophttp.StatusBadRequest)
 		return
 	}
 
@@ -795,7 +821,7 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 	case "stderr":
 		get = func(r runner.Runner) *runner.LogBroadcaster { return r.GetStderr(taskID) }
 	default:
-		http.Error(w, "stream must be stdout or stderr", http.StatusBadRequest)
+		hophttp.Error(w, "stream must be stdout or stderr", hophttp.StatusBadRequest)
 		return
 	}
 	broadcaster := get(a.execRunner)
@@ -807,13 +833,13 @@ func (a *Agent) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if broadcaster == nil {
-		http.Error(w, "task not found or not running", http.StatusNotFound)
+		hophttp.Error(w, "task not found or not running", hophttp.StatusNotFound)
 		return
 	}
 
 	sse := httputil.SSEWriter(w)
 	if sse == nil {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		hophttp.Error(w, "streaming not supported", hophttp.StatusInternalServerError)
 		return
 	}
 

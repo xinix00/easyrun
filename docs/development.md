@@ -87,9 +87,15 @@ Multi-node locally? Run hoplockserver and point every agent at it with `--lock`:
                            # interface HopOS implements, HopRunner consumes
     /config/
         config.go          # Loading the config file
+    /hophttp/              # The HTTP layer: one handler and client shape, with
+                           # net/http underneath on a host and leanhttp on a
+                           # HopOS node (see architecture.md). Own router, so
+                           # both platforms route identically.
     /httputil/
-        auth.go            # HMAC request auth (X-Hop-Auth): RequireHMAC + SignRequest
-        response.go        # JSON response helpers
+        auth.go            # HMAC request auth (X-Hop-Auth): RequireHMAC + SignCall
+                           # (SignRequest stays in sign_host.go for the CLI, which
+                           # is host-only and holds a *http.Request)
+        response.go        # JSON + SSE response helpers
 /docs                      # Documentation
 ```
 

@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"runtime"
 	"testing"
+
 	"time"
+
+	"github.com/xinix00/hop/pkg/hophttp"
 
 	"github.com/xinix00/hop/internal/types"
 	"github.com/xinix00/hop/pkg/config"
@@ -164,13 +165,13 @@ func TestHandleRunAffinityMismatch(t *testing.T) {
 	}
 	body, _ := json.Marshal(job)
 
-	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
-	w := httptest.NewRecorder()
+	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
+	w := hophttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != http.StatusNotAcceptable {
-		t.Errorf("Status = %d, want %d (406 Not Acceptable)", w.Code, http.StatusNotAcceptable)
+	if w.Code != hophttp.StatusNotAcceptable {
+		t.Errorf("Status = %d, want %d (406 Not Acceptable)", w.Code, hophttp.StatusNotAcceptable)
 	}
 
 	var resp map[string]string
@@ -197,13 +198,13 @@ func TestHandleRunAffinityMatch(t *testing.T) {
 	}
 	body, _ := json.Marshal(job)
 
-	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
-	w := httptest.NewRecorder()
+	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
+	w := hophttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, http.StatusAccepted)
+	if w.Code != hophttp.StatusAccepted {
+		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, hophttp.StatusAccepted)
 	}
 }
 
@@ -223,13 +224,13 @@ func TestHandleRunNoAffinity(t *testing.T) {
 	}
 	body, _ := json.Marshal(job)
 
-	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
-	w := httptest.NewRecorder()
+	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
+	w := hophttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != http.StatusAccepted {
-		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, http.StatusAccepted)
+	if w.Code != hophttp.StatusAccepted {
+		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, hophttp.StatusAccepted)
 	}
 }
 
@@ -255,14 +256,14 @@ func TestHandleRunAffinityBeforeCapacity(t *testing.T) {
 	}
 	body, _ := json.Marshal(job)
 
-	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
-	w := httptest.NewRecorder()
+	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
+	w := hophttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
 	// Should be 406 (affinity), not 503 (capacity)
-	if w.Code != http.StatusNotAcceptable {
-		t.Errorf("Status = %d, want %d (affinity should be checked before capacity)", w.Code, http.StatusNotAcceptable)
+	if w.Code != hophttp.StatusNotAcceptable {
+		t.Errorf("Status = %d, want %d (affinity should be checked before capacity)", w.Code, hophttp.StatusNotAcceptable)
 	}
 }
 
@@ -383,8 +384,8 @@ func TestCapacityIncludesAttributes(t *testing.T) {
 	go agent.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	req := httptest.NewRequest(http.MethodGet, "/capacity", nil)
-	w := httptest.NewRecorder()
+	req := hophttp.NewRequest(hophttp.MethodGet, "/capacity", nil)
+	w := hophttp.NewRecorder()
 
 	agent.handleCapacity(w, req)
 

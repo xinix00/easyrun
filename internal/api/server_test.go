@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/xinix00/hop/internal/leader"
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 func init() {
@@ -31,21 +33,24 @@ func setupTestServer(t *testing.T) (*Server, *leader.Leader, context.CancelFunc)
 	return server, l, cancel
 }
 
-func doRequest(server *Server, method, path string, body any) *httptest.ResponseRecorder {
-	var req *http.Request
+// doRequest routes through the server's own mux, so the wildcards in patterns
+// like /v1/jobs/{name}/status are filled exactly as they are in production.
+func doRequest(server *Server, method, path string, body any) *hophttp.Recorder {
+	payload := ""
 	if body != nil {
 		data, _ := json.Marshal(body)
-		req = httptest.NewRequest(method, path, bytes.NewReader(data))
-		req.Header.Set("Content-Type", "application/json")
-	} else {
-		req = httptest.NewRequest(method, path, nil)
+		payload = string(data)
 	}
-	w := httptest.NewRecorder()
-	server.server.Handler.ServeHTTP(w, req)
+	req := hophttp.NewRequest(method, path, strings.NewReader(payload))
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	w := hophttp.NewRecorder()
+	server.mux.ServeHTTP(w, req)
 	return w
 }
 
-func decodeJSON(t *testing.T, w *httptest.ResponseRecorder, v any) {
+func decodeJSON(t *testing.T, w *hophttp.Recorder, v any) {
 	t.Helper()
 	if err := json.NewDecoder(w.Body).Decode(v); err != nil {
 		t.Fatalf("Failed to decode response: %v (body: %s)", err, w.Body.String())
@@ -171,9 +176,9 @@ func TestHeartbeatInvalidJSON(t *testing.T) {
 	server, _, cancel := setupTestServer(t)
 	defer cancel()
 
-	req := httptest.NewRequest("POST", "/v1/heartbeat", bytes.NewReader([]byte("not json")))
-	w := httptest.NewRecorder()
-	server.server.Handler.ServeHTTP(w, req)
+	req := hophttp.NewRequest("POST", "/v1/heartbeat", strings.NewReader("not json"))
+	w := hophttp.NewRecorder()
+	server.mux.ServeHTTP(w, req)
 
 	if w.Code != 400 {
 		t.Errorf("Status = %d, want 400", w.Code)
@@ -284,9 +289,9 @@ func TestRunJobInvalidJSON(t *testing.T) {
 	server, _, cancel := setupTestServer(t)
 	defer cancel()
 
-	req := httptest.NewRequest("POST", "/v1/jobs", bytes.NewReader([]byte("not json")))
-	w := httptest.NewRecorder()
-	server.server.Handler.ServeHTTP(w, req)
+	req := hophttp.NewRequest("POST", "/v1/jobs", strings.NewReader("not json"))
+	w := hophttp.NewRecorder()
+	server.mux.ServeHTTP(w, req)
 
 	if w.Code != 400 {
 		t.Errorf("Status = %d, want 400", w.Code)
@@ -626,7 +631,8 @@ func TestNotifyEventTypes(t *testing.T) {
 }
 
 // TestSSEEventFormat verifies the SSE output includes event type.
-// Uses a real HTTP server since httptest.Recorder doesn't support Flusher.
+// Uses a real HTTP server because the handler only returns when its client goes
+// away: the events have to be read off a live connection while it still runs.
 func TestSSEEventFormat(t *testing.T) {
 	store := newMockJobStore()
 	l := leader.New("local-agent", store, nil)
@@ -635,12 +641,14 @@ func TestSSEEventFormat(t *testing.T) {
 	go l.Run(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	server := NewServer(l, ":0", "", "test")
-	ts := httptest.NewServer(server.server.Handler)
-	defer ts.Close()
+	addr := fmt.Sprintf("127.0.0.1:%d", freePort(t))
+	server := NewServer(l, addr, "", "test")
+	go func() { _ = server.Run(ctx) }()
+	defer server.Stop()
+	waitForPort(t, addr)
 
 	// Connect to SSE endpoint
-	resp, err := http.Get(ts.URL + "/v1/events")
+	resp, err := http.Get("http://" + addr + "/v1/events")
 	if err != nil {
 		t.Fatalf("Failed to connect to SSE: %v", err)
 	}

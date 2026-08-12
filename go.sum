@@ -4,6 +4,8 @@ github.com/xinix00/hoplock v0.3.0 h1:JRmWy78PEV7LYf9/21ZP5fZqbHREQigqEOaHMYMXUus
 github.com/xinix00/hoplock v0.3.0/go.mod h1:cOs6dvSyw5Xvgv+x4J/ixXLFUmK6rFxkV+7OG5w5a5M=
 github.com/xinix00/hoplockserver v0.1.2 h1:5jbNUHEStXIWOByvW8d1kRl1NFQN2RJREviKVisAiJE=
 github.com/xinix00/hoplockserver v0.1.2/go.mod h1:TCYG/Wb7E9GfZgnpCzLO6Ldu5OyHv4+2hHZVscbcVnY=
+github.com/xinix00/lean v0.4.0 h1:Ux36j+tGu9ztD+DIImjM6AzLUIpA9dq7xa7/Z+2f6Og=
+github.com/xinix00/lean v0.4.0/go.mod h1:gRIa2nL/SIEsi1L/eq9EUqrKQ+jnjxUGb3IAsuVQX7U=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=

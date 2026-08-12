@@ -3,12 +3,12 @@ package leader
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 // TestConcurrentDispatchNewAgentJoinOverScheduling reproduces the over-scheduling bug:
@@ -26,7 +26,7 @@ func TestConcurrentDispatchNewAgentJoinOverScheduling(t *testing.T) {
 	defer agent2.Close()
 
 	store := NewMockJobStore()
-	ldr := New("leader", store, &http.Client{Timeout: 200 * time.Millisecond})
+	ldr := New("leader", store, &hophttp.Client{Timeout: 200 * time.Millisecond})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

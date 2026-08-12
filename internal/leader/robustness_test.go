@@ -3,11 +3,11 @@ package leader
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 // ============== ROBUSTNESS TESTS ==============
@@ -24,7 +24,7 @@ func TestThreeNodeClusterOneDies(t *testing.T) {
 	defer agentC.Close()
 
 	store := NewMockJobStore()
-	l := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	l.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -99,7 +99,7 @@ func TestDaemonStableDuringBlipNewNodeJoins(t *testing.T) {
 	defer agentC.Close()
 
 	store := NewMockJobStore()
-	l := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	l.agentTimeout = 2 * time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -172,7 +172,7 @@ func TestHeartbeatReducedPlacedTriggersReconcile(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	l := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -225,7 +225,7 @@ func TestMixedJobsAgentDies(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	l := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	l.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -302,7 +302,7 @@ func TestGracefulLeaveThreeNodes(t *testing.T) {
 	defer agentC.Close()
 
 	store := NewMockJobStore()
-	l := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -368,7 +368,7 @@ func TestAgentDiesAndRejoinsGetsDaemon(t *testing.T) {
 	defer agentA.Close()
 
 	store := NewMockJobStore()
-	l := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	l.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -442,7 +442,7 @@ func TestZombieAgentNoOverScheduling(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	l := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	l.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())

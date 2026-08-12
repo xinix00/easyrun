@@ -1,18 +1,16 @@
 package leader
 
 import (
-	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
 	"math"
-	"net/http"
 	"sync"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
 )
 
@@ -444,25 +442,22 @@ func (l *Leader) sendRunToAgent(agent *types.Agent, job *types.Job, replace bool
 		return err
 	}
 
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	httputil.SignRequest(req, l.apiKey, body)
+	call := hophttp.Call{Method: hophttp.MethodPost, URL: url, Body: body}
+	call.SetHeader("Content-Type", "application/json")
+	httputil.SignCall(&call, l.apiKey) // signs method+path+body, so it goes last
 
-	resp, err := l.httpClient.Do(req)
+	resp, err := l.httpClient.Do(call)
 	if err != nil {
 		return fmt.Errorf("failed to contact agent %s: %w", agent.ID, err)
 	}
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
-	case http.StatusOK, http.StatusCreated, http.StatusAccepted:
+	case hophttp.StatusOK, hophttp.StatusCreated, hophttp.StatusAccepted:
 		// success
-	case http.StatusNotAcceptable: // 406: affinity mismatch — agent can never run this job
+	case hophttp.StatusNotAcceptable: // 406: affinity mismatch — agent can never run this job
 		return errAffinityMismatch
-	case http.StatusServiceUnavailable: // 503: capacity full — agent could run it later
+	case hophttp.StatusServiceUnavailable: // 503: capacity full — agent could run it later
 		return errNoCapacity
 	default:
 		return fmt.Errorf("agent %s returned status %d", agent.ID, resp.StatusCode)
@@ -475,33 +470,23 @@ func (l *Leader) sendRunToAgent(agent *types.Agent, job *types.Job, replace bool
 // stopTasksOnAgent stops tasks for a job on a specific agent WITHOUT removing the job definition.
 // Used for preemption and rolling updates. Returns true if the stop was confirmed successful.
 func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobName string) bool {
-	url := fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobName)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		log.Printf("Failed to create stop request for %s on %s: %v", jobName, agent.ID, err)
-		return false
-	}
-	httputil.SignRequest(req, l.apiKey, nil)
-	resp, err := l.deleteClient.Do(req)
+	call := hophttp.Call{Method: hophttp.MethodPost, URL: fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobName)}
+	httputil.SignCall(&call, l.apiKey)
+	resp, err := l.deleteClient.Do(call)
 	if err != nil {
 		log.Printf("Failed to stop %s on %s: %v", jobName, agent.ID, err)
 		return false
 	}
 	resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+	return resp.StatusCode == hophttp.StatusOK
 }
 
 // stopTaskByID stops a single specific task on an agent by task ID.
 // Used for rolling and blue-green updates to stop precise old instances.
 func (l *Leader) stopTaskByID(agent *types.Agent, taskID string) {
-	url := fmt.Sprintf("%s/stop-task/%s", agent.Endpoint, taskID)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		log.Printf("Failed to create stop-task request for %s on %s: %v", taskID, agent.ID, err)
-		return
-	}
-	httputil.SignRequest(req, l.apiKey, nil)
-	resp, err := l.deleteClient.Do(req)
+	call := hophttp.Call{Method: hophttp.MethodPost, URL: fmt.Sprintf("%s/stop-task/%s", agent.Endpoint, taskID)}
+	httputil.SignCall(&call, l.apiKey)
+	resp, err := l.deleteClient.Do(call)
 	if err != nil {
 		log.Printf("Failed to stop task %s on %s: %v", taskID, agent.ID, err)
 		return
@@ -511,14 +496,9 @@ func (l *Leader) stopTaskByID(agent *types.Agent, taskID string) {
 
 // deleteTaskOnAgent deletes a job on specific agent (by job name).
 func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobName string) {
-	url := fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobName)
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
-	if err != nil {
-		log.Printf("Failed to create delete request for %s on %s: %v", jobName, agent.ID, err)
-		return
-	}
-	httputil.SignRequest(req, l.apiKey, nil)
-	resp, err := l.deleteClient.Do(req)
+	call := hophttp.Call{Method: hophttp.MethodDelete, URL: fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobName)}
+	httputil.SignCall(&call, l.apiKey)
+	resp, err := l.deleteClient.Do(call)
 	if err != nil {
 		log.Printf("Failed to delete %s on %s: %v", jobName, agent.ID, err)
 		return

@@ -1,32 +1,33 @@
 package runner
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 const downloadTimeout = 5 * time.Minute
 
+// artifactClient is the runner's one outbound client, shared with the streamed
+// image path (hopos_stream.go): pooled connections, so several artifacts from
+// the same host cost one handshake instead of one each. The deadline sits on the
+// call, because a streamed image is bounded by silence, not by total time.
+var artifactClient hophttp.Client
+
 // downloadHTTP downloads from HTTP/HTTPS URL
 func downloadHTTP(artifact *types.Artifact, destPath string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), downloadTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, artifact.URL, nil)
-	if err != nil {
-		return err
-	}
+	// Timeout on the call, not on a context: Call.Timeout covers the body read
+	// too, and unlike a context it also holds on a node (see hophttp).
+	call := hophttp.Call{Method: hophttp.MethodGet, URL: artifact.URL, Timeout: downloadTimeout}
 
 	// Add custom headers
 	for k, v := range artifact.Headers {
-		req.Header.Set(k, v)
+		call.SetHeader(k, v)
 	}
 
 	// Helper: Basic Auth from username/password
@@ -34,17 +35,16 @@ func downloadHTTP(artifact *types.Artifact, destPath string) error {
 		auth := base64.StdEncoding.EncodeToString(
 			[]byte(artifact.Auth["username"] + ":" + artifact.Auth["password"]),
 		)
-		req.Header.Set("Authorization", "Basic "+auth)
+		call.SetHeader("Authorization", "Basic "+auth)
 	}
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
+	resp, err := artifactClient.Do(call)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != hophttp.StatusOK {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 

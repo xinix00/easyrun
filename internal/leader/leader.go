@@ -4,11 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 	"sort"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 const (
@@ -84,8 +84,8 @@ type Leader struct {
 
 	ops chan func(*leaderState) // all state access goes through here
 
-	httpClient   *http.Client
-	deleteClient *http.Client
+	httpClient   *hophttp.Client
+	deleteClient *hophttp.Client
 	agentTimeout time.Duration
 	settleDelay  time.Duration // wait before first reconciliation (0 = settled immediately)
 	eventBus     *EventBus
@@ -99,9 +99,9 @@ type Leader struct {
 }
 
 // New creates a new leader with optional HTTP client (nil uses default)
-func New(localAgentID string, jobStore JobStore, client *http.Client) *Leader {
+func New(localAgentID string, jobStore JobStore, client *hophttp.Client) *Leader {
 	if client == nil {
-		client = &http.Client{Timeout: HTTPClientTimeout}
+		client = &hophttp.Client{Timeout: HTTPClientTimeout}
 	}
 	return &Leader{
 		localAgentID: localAgentID,
@@ -109,7 +109,7 @@ func New(localAgentID string, jobStore JobStore, client *http.Client) *Leader {
 		ops:          make(chan func(*leaderState), stateChannelBufferSize),
 		agentTimeout: defaultAgentTimeout,
 		httpClient:   client,
-		deleteClient: &http.Client{Timeout: DeleteClientTimeout},
+		deleteClient: &hophttp.Client{Timeout: DeleteClientTimeout},
 		eventBus:     NewEventBus(),
 	}
 }

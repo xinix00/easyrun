@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 // ============== EDGE CASE TESTS ==============
@@ -193,7 +194,7 @@ func TestLeaderDispatchWithHTTPTimeout(t *testing.T) {
 	defer server.Close()
 
 	// Use a short timeout client
-	shortTimeoutClient := &http.Client{Timeout: 50 * time.Millisecond}
+	shortTimeoutClient := &hophttp.Client{Timeout: 50 * time.Millisecond}
 	leader := New("local-agent", store, shortTimeoutClient)
 
 	ctx, cancel := context.WithCancel(context.Background())

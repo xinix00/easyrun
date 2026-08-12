@@ -11,12 +11,13 @@ import (
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 // TestChaos_CascadingFailure tests multiple agents failing simultaneously
 func TestChaos_CascadingFailure(t *testing.T) {
 	store := NewMockJobStore()
-	leader := New("local-agent", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader := New("local-agent", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 200 * time.Millisecond // Short timeout for testing
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -67,7 +68,7 @@ func TestChaos_CascadingFailure(t *testing.T) {
 // TestChaos_NetworkPartition tests agent isolation from leader
 func TestChaos_NetworkPartition(t *testing.T) {
 	store := NewMockJobStore()
-	leader := New("local-agent", store, &http.Client{Timeout: 50 * time.Millisecond})
+	leader := New("local-agent", store, &hophttp.Client{Timeout: 50 * time.Millisecond})
 	leader.agentTimeout = 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -124,7 +125,7 @@ func TestChaos_NetworkPartition(t *testing.T) {
 // TestChaos_AllAgentsDownExceptOne tests cluster surviving with 1 agent
 func TestChaos_AllAgentsDownExceptOne(t *testing.T) {
 	store := NewMockJobStore()
-	leader := New("local-agent", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader := New("local-agent", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -172,7 +173,7 @@ func TestChaos_AllAgentsDownExceptOne(t *testing.T) {
 // TestChaos_RapidAgentChurn tests agents joining/leaving quickly
 func TestChaos_RapidAgentChurn(t *testing.T) {
 	store := NewMockJobStore()
-	leader := New("local-agent", store, &http.Client{Timeout: 50 * time.Millisecond})
+	leader := New("local-agent", store, &hophttp.Client{Timeout: 50 * time.Millisecond})
 	leader.agentTimeout = 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -213,7 +214,7 @@ func TestChaos_RapidAgentChurn(t *testing.T) {
 // TestChaos_JobDispatchToDeadAgent tests dispatch handling when agent dies during dispatch
 func TestChaos_JobDispatchToDeadAgent(t *testing.T) {
 	store := NewMockJobStore()
-	leader := New("local-agent", store, &http.Client{Timeout: 50 * time.Millisecond})
+	leader := New("local-agent", store, &hophttp.Client{Timeout: 50 * time.Millisecond})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -388,7 +389,7 @@ func TestChaos_ZeroAgentsAvailable(t *testing.T) {
 // TestChaos_AgentFlapping tests agent rapidly going up/down
 func TestChaos_AgentFlapping(t *testing.T) {
 	store := NewMockJobStore()
-	leader := New("local-agent", store, &http.Client{Timeout: 50 * time.Millisecond})
+	leader := New("local-agent", store, &hophttp.Client{Timeout: 50 * time.Millisecond})
 	leader.agentTimeout = 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())

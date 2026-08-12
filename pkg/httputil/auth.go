@@ -5,9 +5,10 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"io"
-	"net/http"
+	"net/url"
+
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 // maxBodyBytes caps the request body RequireHMAC buffers to verify the
@@ -40,14 +41,25 @@ func Sign(key, method, path string, body []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-// SignRequest sets the X-Hop-Auth header on req. body must be the exact bytes
-// that will be sent (nil for bodyless requests). No-op when key is empty, so
+// SignCall sets the X-Hop-Auth header on call. No-op when key is empty, so
 // empty-key mode keeps dev/standalone setups unauthenticated.
-func SignRequest(req *http.Request, key string, body []byte) {
+//
+// It signs call.Body rather than taking the bytes as a separate argument (which
+// is what the net/http version did): the signature covers what is actually
+// sent, so the two can no longer disagree.
+func SignCall(call *hophttp.Call, key string) {
 	if key == "" {
 		return
 	}
-	req.Header.Set(AuthHeader, Sign(key, req.Method, req.URL.Path, body))
+	method := call.Method
+	if method == "" {
+		method = hophttp.MethodGet
+	}
+	path := call.URL
+	if u, err := url.Parse(call.URL); err == nil {
+		path = u.Path
+	}
+	call.SetHeader(AuthHeader, Sign(key, method, path, call.Body))
 }
 
 // RequireHMAC returns middleware that verifies the X-Hop-Auth signature.
@@ -59,32 +71,34 @@ func SignRequest(req *http.Request, key string, body []byte) {
 // and the key itself never appears on the wire, so it cannot be lifted and
 // reused to forge new requests. (A verbatim replay of a captured request is
 // still possible; see SECURITY.md for the threat model.)
-func RequireHMAC(key string, next http.HandlerFunc) http.HandlerFunc {
+func RequireHMAC(key string, next hophttp.Handler) hophttp.Handler {
 	if key == "" {
 		return next
 	}
-	return func(w http.ResponseWriter, r *http.Request) {
+	return func(w hophttp.ResponseWriter, r *hophttp.Request) {
 		var body []byte
 		if r.Body != nil {
-			r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-			b, err := io.ReadAll(r.Body)
-			if err != nil {
-				var maxErr *http.MaxBytesError
-				if errors.As(err, &maxErr) {
-					WriteError(w, http.StatusRequestEntityTooLarge, "request body too large")
-				} else {
-					WriteError(w, http.StatusBadRequest, "failed to read body")
-				}
+			// One byte past the cap, so a body that is exactly too large is
+			// distinguishable from one that just fits. The cap is enforced here
+			// rather than by the transport because the two transports do not
+			// agree: leanhttp caps the body itself, net/http does not.
+			b, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
+			switch {
+			case err != nil:
+				WriteError(w, hophttp.StatusBadRequest, "failed to read body")
+				return
+			case len(b) > maxBodyBytes:
+				WriteError(w, hophttp.StatusRequestEntityTooLarge, "request body too large")
 				return
 			}
 			body = b
-			r.Body = io.NopCloser(bytes.NewReader(body))
+			r.Body = bytes.NewReader(body) // the handler reads it as if untouched
 		}
-		expected := Sign(key, r.Method, r.URL.Path, body)
+		expected := Sign(key, r.Method, r.Path, body)
 		got := r.Header.Get(AuthHeader)
 		// Constant-time compare — avoids a timing side channel on the signature.
 		if !hmac.Equal([]byte(expected), []byte(got)) {
-			WriteError(w, http.StatusUnauthorized, "unauthorized")
+			WriteError(w, hophttp.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)

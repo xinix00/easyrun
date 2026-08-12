@@ -143,6 +143,46 @@ it would dispatch everything → duplicates.
 
 ## Components
 
+### HTTP layer (`pkg/hophttp`)
+
+Everything in hop that speaks HTTP goes through one shape, with two transports
+underneath:
+
+| where hop runs | transport | why |
+|---|---|---|
+| host (linux, darwin) | `net/http` | free in a normal binary, and a decade of hardening behind it |
+| HopOS node (`GOOS=tamago`) | [`leanhttp`](https://github.com/xinix00/lean) | `net/http` links `crypto/tls` unconditionally, which costs about 2 MB in a kernel image that never opens an https URL |
+
+The shape is leanhttp's, not net/http's: leanhttp is the smaller of the two, so
+the intersection lives there. Handlers take `hophttp.Handler`
+(`func(ResponseWriter, *Request)`), clients build a `hophttp.Call`.
+
+Three things are deliberate:
+
+- **The router is ours on both platforms** (`hophttp.Mux`). Method-prefixed
+  patterns, `{wildcards}` with `PathValue`, and subtree `/` patterns, with
+  most-specific-wins precedence. Using each platform's own mux would mean the
+  node routing by one set of precedence rules and the developer's machine by
+  another, differing exactly in the corner cases nobody tests. The full route
+  table of both the agent and the leader API is asserted in
+  `pkg/hophttp/mux_test.go`.
+- **`Flush() error` is on the ResponseWriter interface**, not behind a type
+  assertion. Every writer here can flush, and an assertion that can fail invites
+  a handler that silently buffers `/v1/events`.
+- **Paths are normalised in the transport** (`cleanPath`), the way net/http's
+  ServeMux does it, so a handler never sees `..` and both platforms route the
+  same path.
+
+Two deadlines exist because they answer different questions: `Call.Timeout`
+covers a whole call, `Call.HeaderTimeout` only the wait for the response head. An
+artifact download wants no total timeout (it would truncate the file) but must
+not hang forever on a server that accepts the connection and then says nothing.
+
+Docker is host-only (`internal/runner/docker.go` carries `//go:build !tamago`):
+a HopOS node runs slot apps in a cage, not containers. On a node the runner is a
+stub that refuses loudly, because a docker job landing there is a scheduling
+mistake the operator needs to see.
+
 ### hoplock (leader election)
 - Lease-based election: CAS (compare-and-swap) over a blob store — no quorum, no log replication
 - Backends: `hoplockserver` (mini HTTP server, default), any S3-compatible store (AWS/R2/MinIO/B2), or in-memory (`--standalone`)

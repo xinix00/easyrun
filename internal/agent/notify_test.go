@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+
 	"time"
 
 	"github.com/xinix00/hop/internal/types"

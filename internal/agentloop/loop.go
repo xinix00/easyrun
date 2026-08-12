@@ -7,14 +7,13 @@
 package agentloop
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"net/http"
 	"time"
 
+	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
 
 	"github.com/xinix00/hop/internal/types"
@@ -223,21 +222,21 @@ func (s *Loop) Tick() {
 	}
 }
 
-var httpClient = &http.Client{Timeout: 5 * time.Second}
+// One client for the whole loop, not one per call: an agent knocks on its
+// leader's door every second, so the pooled connection is the difference
+// between one handshake and one per heartbeat.
+var httpClient = &hophttp.Client{Timeout: 5 * time.Second}
 
 // ErrNotRegistered: de leader kent deze agent niet (herstart) — herregistreren.
 var ErrNotRegistered = errors.New("not registered with leader")
 
 // postJSON sends a POST request with JSON body and API key to the leader.
-func postJSON(path string, payload any, apiKey string) (*http.Response, error) {
+func postJSON(path string, payload any, apiKey string) (*hophttp.Response, error) {
 	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", path, bytes.NewReader(body))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	httputil.SignRequest(req, apiKey, body)
-	return httpClient.Do(req)
+	call := hophttp.Call{Method: hophttp.MethodPost, URL: path, Body: body}
+	call.SetHeader("Content-Type", "application/json")
+	httputil.SignCall(&call, apiKey) // signs method+path+body, so it goes last
+	return httpClient.Do(call)
 }
 
 // Register meldt een agent (met placed counts) aan bij de leader.
@@ -249,7 +248,7 @@ func Register(leaderAddr, agentID, agentEndpoint, version string, placed map[str
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != hophttp.StatusOK {
 		return fmt.Errorf("leader returned %d", resp.StatusCode)
 	}
 	return nil
@@ -271,10 +270,10 @@ func Heartbeat(leaderAddr, agentID, agentEndpoint, version, apiKey string, tempM
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == http.StatusNotFound {
+	if resp.StatusCode == hophttp.StatusNotFound {
 		return ErrNotRegistered
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != hophttp.StatusOK {
 		return fmt.Errorf("leader returned %d", resp.StatusCode)
 	}
 	return nil

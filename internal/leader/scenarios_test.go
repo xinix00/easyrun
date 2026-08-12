@@ -3,11 +3,11 @@ package leader
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 // ============== SCENARIO TESTS ==============
@@ -638,7 +638,7 @@ func TestNodeLeave_WithMixedTaskStates(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	l := New("local", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("local", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	l.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -803,7 +803,7 @@ func TestNodeLeave_DuringRollingUpdate(t *testing.T) {
 	defer agent2.Close()
 
 	store := NewMockJobStore()
-	l := New("local", store, &http.Client{Timeout: 100 * time.Millisecond})
+	l := New("local", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	l.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -883,7 +883,7 @@ func TestPriorityPatch_DuringActiveDispatch(t *testing.T) {
 	defer agent.Close()
 
 	store := NewMockJobStore()
-	l := New("local", store, &http.Client{Timeout: 200 * time.Millisecond})
+	l := New("local", store, &hophttp.Client{Timeout: 200 * time.Millisecond})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

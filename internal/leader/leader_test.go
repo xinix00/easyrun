@@ -1,11 +1,11 @@
 package leader
 
 import (
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 // ============== BASIC LEADER TESTS ==============
@@ -24,7 +24,7 @@ func TestLeaderNew(t *testing.T) {
 
 func TestLeaderNewWithCustomClient(t *testing.T) {
 	store := NewMockJobStore()
-	customClient := &http.Client{Timeout: 30 * time.Second}
+	customClient := &hophttp.Client{Timeout: 30 * time.Second}
 	leader := New("agent-1", store, customClient)
 
 	if leader.httpClient != customClient {

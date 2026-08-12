@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"net/http"
 	"sort"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
 )
 
@@ -305,15 +305,10 @@ func (l *Leader) GetJobStatus(jobName string) (map[string][]*types.Task, []*type
 
 // fetchAgentTasks gets the task list from an agent
 func (l *Leader) fetchAgentTasks(ctx context.Context, agent *types.Agent) ([]*types.Task, error) {
-	url := fmt.Sprintf("%s/tasks", agent.Endpoint)
+	call := hophttp.Call{Method: hophttp.MethodGet, URL: fmt.Sprintf("%s/tasks", agent.Endpoint)}
+	httputil.SignCall(&call, l.apiKey)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, err
-	}
-	httputil.SignRequest(req, l.apiKey, nil)
-
-	resp, err := l.httpClient.Do(req)
+	resp, err := l.httpClient.DoContext(ctx, call)
 	if err != nil {
 		return nil, err
 	}

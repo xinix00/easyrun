@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/hopos"
 )
 
@@ -31,6 +31,11 @@ const maxConcurrentDownloads = 4
 // gedeeld hart heeft de tijd nodig die hij nodig heeft; alleen een stroom
 // zonder bytes is stuk.
 const downloadStallTimeout = 60 * time.Second
+
+// downloadHeaderTimeout is hoe lang een server mag zwijgen vóór de eerste byte.
+// Vóór dat moment kan de stilte-bewaking niet werken: die reset op ontvangen
+// data, en er is nog geen data.
+const downloadHeaderTimeout = 60 * time.Second
 
 // ProgressSink ontvangt de startfase-voortgang van een runner. De agent
 // implementeert hem: hij zet de task op Downloading en draagt de bytes, zodat
@@ -88,22 +93,25 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 	}
 
 	art := job.Artifacts[0]
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, art.URL, nil)
-	if err != nil {
-		r.release(task.ID)
-		return false, fmt.Errorf("hop driver: artifact URL: %w", err)
+	// Geen Timeout op de call: een image mag zo lang duren als hij duurt, de
+	// stilte-bewaking hieronder is de grens. Wél een grens op de KOP: een server
+	// die de verbinding aanneemt en dan zwijgt heeft nog geen byte gestuurd, dus
+	// de stilte-bewaking is er nog niet en zou de download eeuwig laten hangen.
+	// (Dit was net/http's ResponseHeaderTimeout op de gekloonde transport.)
+	call := hophttp.Call{
+		Method:        hophttp.MethodGet,
+		URL:           art.URL,
+		HeaderTimeout: downloadHeaderTimeout,
 	}
 	for k, v := range art.Headers {
-		req.Header.Set(k, v)
+		call.SetHeader(k, v)
 	}
 	if art.Auth["username"] != "" && art.Auth["password"] != "" {
 		auth := base64.StdEncoding.EncodeToString(
 			[]byte(art.Auth["username"] + ":" + art.Auth["password"]))
-		req.Header.Set("Authorization", "Basic "+auth)
+		call.SetHeader("Authorization", "Basic "+auth)
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.ResponseHeaderTimeout = downloadStallTimeout // de fase vóór de eerste byte
-	resp, err := (&http.Client{Transport: tr}).Do(req)
+	resp, err := artifactClient.DoContext(ctx, call)
 	if err != nil {
 		if ctx.Err() != nil {
 			return false, nil // Stop brak de download af; die ruimt op
@@ -112,11 +120,16 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 		return false, fmt.Errorf("hop driver: GET %s: %w", art.URL, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != hophttp.StatusOK {
 		r.release(task.ID)
 		return false, fmt.Errorf("hop driver: GET %s: HTTP %s", art.URL, resp.Status)
 	}
-	if resp.ContentLength <= 0 {
+	// Length is wat het transport BESLOTEN heeft te lezen, niet wat de header
+	// beweert. Die twee lopen uiteen bij een chunked antwoord dat óók een
+	// Content-Length draagt (zo ziet request smuggling eruit), en dan zou een
+	// downloader die de header vertrouwt zijn bestand op de verkeerde maat zetten.
+	size := resp.Length
+	if size <= 0 {
 		// Verplicht: de plaatsing valideert segmenten tegen de image-maat, en
 		// een afgekapte stroom moet een luide fout zijn — niet een halve app.
 		r.release(task.ID)
@@ -128,7 +141,7 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 	defer stall.Stop()
 	body := &meteredReader{
 		r:     resp.Body,
-		total: uint64(resp.ContentLength),
+		total: uint64(size),
 		tick: func(done, total uint64) {
 			stall.Reset(downloadStallTimeout)
 			if s := r.sink(); s != nil {
@@ -137,10 +150,10 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 		},
 	}
 	if s := r.sink(); s != nil {
-		s.TaskDownloading(task.ID, 0, uint64(resp.ContentLength)) // queued → downloading
+		s.TaskDownloading(task.ID, 0, uint64(size)) // queued → downloading
 	}
 
-	err = r.sm.StartStream(slot, body, resp.ContentLength, hopos.StartSpec{
+	err = r.sm.StartStream(slot, body, size, hopos.StartSpec{
 		MemLimit:   job.MemoryLimit,
 		Cores:      cores,
 		Sharegroup: sharegroup,
@@ -159,7 +172,7 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 			// De stilte-timer sloot de body: dat hoort er anders te staan dan
 			// een kale leesfout op een gesloten stream.
 			return false, fmt.Errorf("hop driver: slot %d: stalled after %d of %d bytes: no data for %s",
-				slot, body.done, resp.ContentLength, downloadStallTimeout)
+				slot, body.done, size, downloadStallTimeout)
 		}
 		return false, fmt.Errorf("hop driver: place stream slot %d: %w", slot, placementErr(err))
 	}
@@ -169,7 +182,7 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 	r.mu.Lock()
 	r.armed[task.ID] = true
 	r.mu.Unlock()
-	log.Printf("hop driver: slot %d: streamed %d MB and started (job %s)", slot, resp.ContentLength>>20, job.Name)
+	log.Printf("hop driver: slot %d: streamed %d MB and started (job %s)", slot, size>>20, job.Name)
 	return true, nil
 }
 

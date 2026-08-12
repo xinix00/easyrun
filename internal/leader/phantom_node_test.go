@@ -3,11 +3,11 @@ package leader
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 // TestNetworkBlipNewNodeJoins test het scenario:
@@ -29,7 +29,7 @@ func TestNetworkBlipNewNodeJoins(t *testing.T) {
 	defer agentC.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	// agentTimeout = 2s: agent-a's blip van ~300ms triggert geen dead detection
 	leader.agentTimeout = 2 * time.Second
 
@@ -165,7 +165,7 @@ func TestNetworkBlipAgentUnreachable(t *testing.T) {
 	defer agentC.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 2 * time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -286,7 +286,7 @@ func TestNetworkBlipNoRedistribution(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 1 * time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -373,7 +373,7 @@ func TestPendingTasksScheduledOnNewNode(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &http.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 2 * time.Second
 
 	ctx, cancel := context.WithCancel(context.Background())

@@ -5,11 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"sync"
 	"testing"
+
 	"time"
+
+	"github.com/xinix00/hop/pkg/hophttp"
 
 	"github.com/xinix00/hop/internal/types"
 )
@@ -442,8 +443,8 @@ func TestConcurrentDispatchRespectsCapacity(t *testing.T) {
 				CPUShares: 1024,
 			}
 			body, _ := json.Marshal(job)
-			req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
-			w := httptest.NewRecorder()
+			req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
+			w := hophttp.NewRecorder()
 			agent.handleRun(w, req)
 			codes[n] = w.Code
 		}(i)
@@ -512,8 +513,8 @@ func TestTaskInStateImmediatelyAfterAccept(t *testing.T) {
 		CPUShares: 1024,
 	}
 	body, _ := json.Marshal(job)
-	req := httptest.NewRequest(http.MethodPost, "/run", bytes.NewReader(body))
-	w := httptest.NewRecorder()
+	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
+	w := hophttp.NewRecorder()
 	agent.handleRun(w, req)
 
 	if w.Code != 202 {

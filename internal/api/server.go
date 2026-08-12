@@ -8,21 +8,29 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"strings"
 	"time"
 
 	"github.com/xinix00/hop/internal/leader"
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
 )
 
 // Server provides the HTTP API for the leader
 type Server struct {
-	leader      *leader.Leader
-	server      *http.Server
+	leader *leader.Leader
+	// mux is kept next to the server so handler tests route through the real
+	// route table instead of a copy of it — precedence is part of the API.
+	mux         *hophttp.Mux
+	server      *hophttp.Server
 	clusterName string
 	apiKey      string
+
+	// client proxies to agents. One per server, not one per request: it pools
+	// connections, and it deliberately has no timeout because a log tail is a
+	// stream that must be allowed to stay open.
+	client *hophttp.Client
 }
 
 // NewServer creates a new API server
@@ -31,13 +39,14 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 		leader:      l,
 		clusterName: clusterName,
 		apiKey:      apiKey,
+		client:      &hophttp.Client{},
 	}
 
-	auth := func(h http.HandlerFunc) http.HandlerFunc {
+	auth := func(h hophttp.Handler) hophttp.Handler {
 		return httputil.RequireHMAC(apiKey, h)
 	}
 
-	mux := http.NewServeMux()
+	mux := hophttp.NewServeMux()
 
 	// Health (public - needed for discovery)
 	mux.HandleFunc("/health", s.handleHealth)
@@ -66,14 +75,11 @@ func NewServer(l *leader.Leader, addr string, apiKey string, clusterName string)
 	mux.HandleFunc("GET /v1/jobs/{name}/status", auth(s.handleJobStatus))
 	mux.HandleFunc("PATCH /v1/jobs/{name}/priority", auth(s.handlePatchJobPriority))
 
-	s.server = &http.Server{
-		Addr:    addr,
-		Handler: mux,
-		// Slowloris guard: headers (incl. the X-Hop-Auth signature) must arrive
-		// promptly. No WriteTimeout — /v1/events is a long-lived SSE stream.
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	// The slowloris guard lives in hophttp.NewServer: headers (incl. the
+	// X-Hop-Auth signature) must arrive promptly, and there is no WriteTimeout
+	// because /v1/events is a long-lived SSE stream.
+	s.mux = mux
+	s.server = hophttp.NewServer(addr, mux.Handler())
 
 	return s
 }
@@ -85,8 +91,8 @@ func (s *Server) Run(ctx context.Context) error {
 		s.Stop()
 	}()
 
-	log.Printf("API server listening on %s", s.server.Addr)
-	if err := s.server.ListenAndServe(); err != http.ErrServerClosed {
+	log.Printf("API server listening on %s", s.server.Addr())
+	if err := s.server.ListenAndServe(); err != hophttp.ErrServerClosed {
 		return err
 	}
 	return nil
@@ -99,19 +105,19 @@ func (s *Server) Stop() {
 	_ = s.server.Shutdown(ctx)
 }
 
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+func (s *Server) handleHealth(w hophttp.ResponseWriter, r *hophttp.Request) {
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]string{"status": "ok"})
 }
 
-func (s *Server) handleGetAgents(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteJSON(w, http.StatusOK, s.leader.GetAgents())
+func (s *Server) handleGetAgents(w hophttp.ResponseWriter, r *hophttp.Request) {
+	httputil.WriteJSON(w, hophttp.StatusOK, s.leader.GetAgents())
 }
 
 // handleHeartbeat is puur liveness: id/endpoint/version in, "ok" uit. De
 // job-lijsten die hier vroeger heen en weer reisden zijn gesloopt (16-07):
 // gewenste staat heeft één auteur (de leader, gecommit naar S3) en agents
 // zijn uitvoerders. Onbekende velden in oudere agents worden genegeerd.
-func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleHeartbeat(w hophttp.ResponseWriter, r *hophttp.Request) {
 	var req struct {
 		ID         string `json:"id"`
 		Endpoint   string `json:"endpoint"`
@@ -119,22 +125,22 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 		TempMilliC int    `json:"temp_milli_c,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "invalid json")
 		return
 	}
 	if req.ID == "" || req.Endpoint == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "id and endpoint required")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "id and endpoint required")
 		return
 	}
 
 	if !s.leader.Heartbeat(req.ID, req.Version, req.TempMilliC) {
-		httputil.WriteError(w, http.StatusNotFound, "not registered")
+		httputil.WriteError(w, hophttp.StatusNotFound, "not registered")
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"status": "ok"})
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]any{"status": "ok"})
 }
 
-func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRegisterAgent(w hophttp.ResponseWriter, r *hophttp.Request) {
 	var req struct {
 		ID       string         `json:"id"`
 		Endpoint string         `json:"endpoint"`
@@ -142,49 +148,49 @@ func (s *Server) handleRegisterAgent(w http.ResponseWriter, r *http.Request) {
 		Placed   map[string]int `json:"placed,omitempty"` // jobName -> count
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "invalid json")
 		return
 	}
 	if req.ID == "" || req.Endpoint == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "id and endpoint required")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "id and endpoint required")
 		return
 	}
 
 	if !s.leader.RegisterAgent(req.ID, req.Endpoint, req.Version, req.Placed) {
-		httputil.WriteError(w, http.StatusConflict, fmt.Sprintf("agent %s already registered with different endpoint", req.ID))
+		httputil.WriteError(w, hophttp.StatusConflict, fmt.Sprintf("agent %s already registered with different endpoint", req.ID))
 		return
 	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]any{
 		"status":     "registered",
 		"jobs":       s.leader.GetJobs(),
 		"state_time": s.leader.GetStateTime(),
 	})
 }
 
-func (s *Server) handleUnregisterAgent(w http.ResponseWriter, r *http.Request) {
-	id := strings.TrimPrefix(r.URL.Path, "/v1/agents/")
+func (s *Server) handleUnregisterAgent(w hophttp.ResponseWriter, r *hophttp.Request) {
+	id := strings.TrimPrefix(r.Path, "/v1/agents/")
 	if id == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "agent id required")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "agent id required")
 		return
 	}
 	s.leader.UnregisterAgent(id)
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(hophttp.StatusNoContent)
 }
 
-func (s *Server) handleGetJobs(w http.ResponseWriter, r *http.Request) {
-	httputil.WriteJSON(w, http.StatusOK, s.leader.GetJobs())
+func (s *Server) handleGetJobs(w hophttp.ResponseWriter, r *hophttp.Request) {
+	httputil.WriteJSON(w, hophttp.StatusOK, s.leader.GetJobs())
 }
 
 // handleApplyJob creates or updates a job by name (upsert).
 // Name exists → UpdateJob with update_policy. Name unknown → DispatchJob.
-func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleApplyJob(w hophttp.ResponseWriter, r *hophttp.Request) {
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "invalid json")
 		return
 	}
 	if job.Name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "name required")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "name required")
 		return
 	}
 	// hop driver: the artifact IS the program (a native app image); there is
@@ -200,7 +206,7 @@ func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 	// (resolveJobForRun), so the runner still sees exactly one.
 	hopImage := job.Driver == types.DriverHop && len(job.Artifacts) >= 1
 	if job.Command == "" && job.Image == "" && !hopImage {
-		httputil.WriteError(w, http.StatusBadRequest, "command or image required (or driver \"hop\" with at least one artifact)")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "command or image required (or driver \"hop\" with at least one artifact)")
 		return
 	}
 
@@ -213,13 +219,13 @@ func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.leader.UpdateJob(&job); err != nil {
 			if errors.Is(err, leader.ErrJobLocked) {
-				httputil.WriteError(w, http.StatusConflict, err.Error())
+				httputil.WriteError(w, hophttp.StatusConflict, err.Error())
 				return
 			}
-			httputil.WriteError(w, http.StatusInternalServerError, err.Error())
+			httputil.WriteError(w, hophttp.StatusInternalServerError, err.Error())
 			return
 		}
-		httputil.WriteJSON(w, http.StatusOK, map[string]string{
+		httputil.WriteJSON(w, hophttp.StatusOK, map[string]string{
 			"name":   job.Name,
 			"status": "updated",
 			"policy": string(policy),
@@ -234,7 +240,7 @@ func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 		job.Priority = &n
 	}
 	if err := s.leader.DispatchJob(&job); err != nil {
-		httputil.WriteJSON(w, http.StatusCreated, map[string]string{
+		httputil.WriteJSON(w, hophttp.StatusCreated, map[string]string{
 			"name":   job.Name,
 			"status": "pending",
 			"error":  err.Error(),
@@ -244,25 +250,25 @@ func (s *Server) handleApplyJob(w http.ResponseWriter, r *http.Request) {
 	if explicitPriority != nil {
 		_ = s.leader.PatchJobPriority(job.Name, *explicitPriority)
 	}
-	httputil.WriteJSON(w, http.StatusCreated, map[string]string{
+	httputil.WriteJSON(w, hophttp.StatusCreated, map[string]string{
 		"name":   job.Name,
 		"status": "dispatched",
 	})
 }
 
 // handleDeleteJob deletes a job and cleans up all its tasks
-func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(r.URL.Path, "/v1/jobs/")
+func (s *Server) handleDeleteJob(w hophttp.ResponseWriter, r *hophttp.Request) {
+	name := strings.TrimPrefix(r.Path, "/v1/jobs/")
 	if name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job name required")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "job name required")
 		return
 	}
 	s.leader.DeleteJobByName(name)
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(hophttp.StatusNoContent)
 }
 
 // handleStatus returns cluster overview from placed data (no HTTP calls to agents).
-func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleStatus(w hophttp.ResponseWriter, r *hophttp.Request) {
 	agents := s.leader.GetAgents()
 	jobs := s.leader.GetJobs()
 	placed := s.leader.GetPlacedCounts()
@@ -272,7 +278,7 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		totalPlaced += count
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]any{
 		"cluster_name": s.clusterName,
 		"agents":       len(agents),
 		"jobs":         len(jobs),
@@ -283,12 +289,8 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleEvents streams SSE notifications when cluster state changes.
-func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleEvents(w hophttp.ResponseWriter, r *hophttp.Request) {
 	sse := httputil.SSEWriter(w)
-	if sse == nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
-		return
-	}
 
 	ch := s.leader.EventBus().Subscribe()
 	defer s.leader.EventBus().Unsubscribe(ch)
@@ -321,7 +323,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleNotify receives agent task-change notifications and fires the event bus.
-func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleNotify(w hophttp.ResponseWriter, r *hophttp.Request) {
 	var req struct {
 		Job   string `json:"job"`
 		Event string `json:"event"`
@@ -344,50 +346,50 @@ func (s *Server) handleNotify(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.leader.EventBus().Notify("")
 	}
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(hophttp.StatusNoContent)
 }
 
 // handlePatchJobPriority updates only the priority of a job.
-func (s *Server) handlePatchJobPriority(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handlePatchJobPriority(w hophttp.ResponseWriter, r *hophttp.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job name required")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "job name required")
 		return
 	}
 	var body struct {
 		Priority int `json:"priority"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid json")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "invalid json")
 		return
 	}
 	if err := s.leader.PatchJobPriority(name, body.Priority); err != nil {
-		httputil.WriteError(w, http.StatusNotFound, err.Error())
+		httputil.WriteError(w, hophttp.StatusNotFound, err.Error())
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	w.WriteHeader(hophttp.StatusNoContent)
 }
 
 // handleJobStatus returns tasks and agents for a specific job.
-func (s *Server) handleJobStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleJobStatus(w hophttp.ResponseWriter, r *hophttp.Request) {
 	name := r.PathValue("name")
 	if name == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "job name required")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "job name required")
 		return
 	}
 
 	tasks, agents := s.leader.GetJobStatus(name)
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{
+	httputil.WriteJSON(w, hophttp.StatusOK, map[string]any{
 		"agents":         agents,
 		"tasks_by_agent": tasks,
 	})
 }
 
 // handleAgentCapacity proxies capacity query to specific agent
-func (s *Server) handleAgentCapacity(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAgentCapacity(w hophttp.ResponseWriter, r *hophttp.Request) {
 	agentID := r.PathValue("agent_id")
 	if agentID == "" {
-		httputil.WriteError(w, http.StatusBadRequest, "agent id required")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "agent id required")
 		return
 	}
 
@@ -402,13 +404,13 @@ func (s *Server) handleAgentCapacity(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleAgentLogs proxies SSE log streaming from specific agent
-func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleAgentLogs(w hophttp.ResponseWriter, r *hophttp.Request) {
 	agentID := r.PathValue("agent_id")
 	taskID := r.PathValue("task_id")
 	stream := r.PathValue("stream")
 
 	if agentID == "" || taskID == "" || (stream != "stdout" && stream != "stderr") {
-		httputil.WriteError(w, http.StatusBadRequest, "invalid request parameters")
+		httputil.WriteError(w, hophttp.StatusBadRequest, "invalid request parameters")
 		return
 	}
 
@@ -420,10 +422,6 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	sse := httputil.SSEWriter(w)
-	if sse == nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "streaming not supported")
-		return
-	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
@@ -435,33 +433,29 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 }
 
 // proxyToAgent forwards an HTTP request to an agent, checking existence and setting API headers
-func (s *Server) proxyToAgent(w http.ResponseWriter, r *http.Request, agentID string, path string) *http.Response {
+func (s *Server) proxyToAgent(w hophttp.ResponseWriter, r *hophttp.Request, agentID string, path string) *hophttp.Response {
 	agent := s.leader.GetAgent(agentID)
 	if agent == nil {
-		httputil.WriteError(w, http.StatusNotFound, "agent not found")
+		httputil.WriteError(w, hophttp.StatusNotFound, "agent not found")
 		return nil
 	}
 
-	url := agent.Endpoint + path
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, url, nil)
-	if err != nil {
-		httputil.WriteError(w, http.StatusInternalServerError, "failed to create proxy request")
-		return nil
-	}
-
+	call := hophttp.Call{Method: r.Method, URL: agent.Endpoint + path}
 	if accept := r.Header.Get("Accept"); accept != "" {
-		req.Header.Set("Accept", accept)
+		call.SetHeader("Accept", accept)
 	}
 
-	httputil.SignRequest(req, s.apiKey, nil)
+	httputil.SignCall(&call, s.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	// The inbound request's context travels with the call, so a proxied log tail
+	// ends when the client that asked for it walks away.
+	resp, err := s.client.DoContext(r.Context(), call)
 	if err != nil {
-		httputil.WriteError(w, http.StatusBadGateway, "failed to contact agent")
+		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact agent")
 		return nil
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != hophttp.StatusOK {
 		w.WriteHeader(resp.StatusCode)
 		_, _ = io.Copy(w, resp.Body)
 		resp.Body.Close()

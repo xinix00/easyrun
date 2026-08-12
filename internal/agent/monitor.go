@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/hop/pkg/hophttp"
 )
 
 const defaultFailureThreshold = 3
@@ -275,7 +275,12 @@ func (a *Agent) checkHealthHTTP(task *types.Task, hc *types.HealthCheck) bool {
 		return false
 	}
 
-	resp, err := (&http.Client{Timeout: timeout}).Get(fmt.Sprintf("http://127.0.0.1:%d%s", port, hc.Path))
+	// A fresh client per check on purpose: a health check is one request every
+	// few seconds to a port that may have just died, and a pooled connection to
+	// a dead process is a slower failure than a new one.
+	resp, err := (&hophttp.Client{Timeout: timeout}).Do(hophttp.Call{
+		URL: fmt.Sprintf("http://127.0.0.1:%d%s", port, hc.Path),
+	})
 	if err != nil {
 		return false
 	}

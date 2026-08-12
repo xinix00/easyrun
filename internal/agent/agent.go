@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/http"
 	"os/exec"
 	"runtime"
 	"sync"
@@ -14,14 +13,21 @@ import (
 	"github.com/xinix00/hop/internal/runner"
 	"github.com/xinix00/hop/internal/types"
 	"github.com/xinix00/hop/pkg/config"
+	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
 )
 
 const (
-	defaultMaxRestarts     = 5
-	defaultRestartWindow   = 5 * time.Minute
-	shutdownTimeout        = 5 * time.Second
-	proxyTimeout           = 10 * time.Second
+	defaultMaxRestarts   = 5
+	defaultRestartWindow = 5 * time.Minute
+	shutdownTimeout      = 5 * time.Second
+	proxyTimeout         = 10 * time.Second
+
+	// proxyMaxBody caps a body the proxy forwards to the leader. hophttp sends a
+	// body as bytes, so the proxy has to read it before it can pass it on, and an
+	// unbounded read on a route that has not been authenticated yet is a
+	// pre-auth memory DoS. Same size as httputil's cap, for the same reason.
+	proxyMaxBody           = 8 << 20
 	stateChannelBufferSize = 256
 )
 
@@ -45,11 +51,16 @@ type Agent struct {
 
 	ops chan func(*agentState) // all state access goes through here
 
-	server     *http.Server
-	getLeader  func() string // returns current leader address (for proxying)
-	httpClient *http.Client
-	apiKey     string        // API key for authenticating with leader and protecting local endpoints
-	shutdownCh chan struct{} // closed by shutdown() — long-running goroutines select on this
+	server    *hophttp.Server
+	getLeader func() string // returns current leader address (for proxying)
+
+	// Two clients, and the split is the timeout: httpClient carries
+	// proxyTimeout, streamClient carries none. An SSE tail or a log stream must
+	// not be cut off by the deadline that a buffered proxy call wants.
+	httpClient   *hophttp.Client
+	streamClient *hophttp.Client
+	apiKey       string        // API key for authenticating with leader and protecting local endpoints
+	shutdownCh   chan struct{} // closed by shutdown() — long-running goroutines select on this
 
 	checkStates map[string]*checkState // health check state per task (monitor goroutine only)
 }
@@ -92,7 +103,8 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		sysInfo:      GetSystemInfo(), // detect once at startup
 		attributes:   attrs,
 		ops:          make(chan func(*agentState), stateChannelBufferSize),
-		httpClient:   &http.Client{Timeout: proxyTimeout},
+		httpClient:   &hophttp.Client{Timeout: proxyTimeout},
+		streamClient: &hophttp.Client{},
 		apiKey:       cfg.APIKey,
 		checkStates:  make(map[string]*checkState),
 		getLeader:    func() string { return "" }, // overridden by SetLeaderFunc; default = "no leader"
@@ -292,11 +304,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	// Start the state loop
 	go a.stateLoop(ctx)
 
-	auth := func(h http.HandlerFunc) http.HandlerFunc {
+	auth := func(h hophttp.Handler) hophttp.Handler {
 		return httputil.RequireHMAC(a.apiKey, h)
 	}
 
-	mux := http.NewServeMux()
+	mux := hophttp.NewServeMux()
 	mux.HandleFunc("/health", a.handleHealth)
 	mux.HandleFunc("/capacity", auth(a.handleCapacity))
 	mux.HandleFunc("/tasks", auth(a.handleTasks))
@@ -321,14 +333,11 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/v1/events", auth(a.proxyStreamToLeader))
 
 	addr := fmt.Sprintf(":%d", a.config.Node.Port)
-	a.server = &http.Server{
-		Addr:    addr,
-		Handler: corsMiddleware(mux),
-		// Slowloris guard: headers (incl. the X-Hop-Auth signature) must arrive
-		// promptly. No WriteTimeout — /v1/events is a long-lived SSE stream.
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       120 * time.Second,
-	}
+	// The slowloris guard (a header deadline, and deliberately no write timeout
+	// because /v1/events is a long-lived SSE stream) lives in hophttp.NewServer:
+	// it is a property of the transport, and only the host transport has one to
+	// set — a node's port sits on the node network behind the switch.
+	a.server = hophttp.NewServer(addr, corsMiddleware(mux.Handler()))
 
 	go a.monitorTasks(ctx)
 
@@ -342,7 +351,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 
 	log.Printf("Agent listening on %s", addr)
-	if err := a.server.ListenAndServe(); err != http.ErrServerClosed {
+	if err := a.server.ListenAndServe(); err != hophttp.ErrServerClosed {
 		return err
 	}
 	<-shutdownDone
@@ -428,8 +437,8 @@ func (a *Agent) shutdown() {
 }
 
 // corsMiddleware adds CORS headers for browser access
-func corsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func corsMiddleware(next hophttp.Handler) hophttp.Handler {
+	return func(w hophttp.ResponseWriter, r *hophttp.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Hop-Auth")
@@ -444,12 +453,12 @@ func corsMiddleware(next http.Handler) http.Handler {
 
 		// Handle preflight
 		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusOK)
+			w.WriteHeader(hophttp.StatusOK)
 			return
 		}
 
-		next.ServeHTTP(w, r)
-	})
+		next(w, r)
+	}
 }
 
 // GetJob returns a specific job by name
