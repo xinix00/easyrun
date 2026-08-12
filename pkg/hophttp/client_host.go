@@ -77,3 +77,7 @@ func (cl *Client) DoContext(ctx context.Context, call Call) (*Response, error) {
 		Length:     resp.ContentLength, // -1 when chunked or unknown, like ours
 	}, nil
 }
+
+// CloseIdle drops the pooled connections. Same method as the node transport has,
+// so a caller does not need to know which one it is talking to.
+func (cl *Client) CloseIdle() { cl.c.CloseIdleConnections() }
