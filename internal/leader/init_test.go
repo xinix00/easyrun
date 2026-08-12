@@ -2,16 +2,15 @@ package leader
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/xinix00/hop/internal/types"
 	"github.com/xinix00/hop/pkg/config"
 )
 
-// TestDecodeInitJobs: YAML-config-specs (JSON-veldnamen) worden strikte,
-// geldige Jobs — en typo's/halve specs zijn luide fouten.
+// TestDecodeInitJobs: config-specs (JSON-veldnamen, zoals POST /v1/jobs)
+// worden strikte, geldige Jobs — en typo's/halve specs zijn luide fouten.
 func TestDecodeInitJobs(t *testing.T) {
 	zero := 0
 	jobs, err := DecodeInitJobs([]map[string]any{
@@ -57,30 +56,33 @@ func TestDecodeInitJobs(t *testing.T) {
 	}
 }
 
-// TestDecodeInitJobs_FromYAML: het hele configpad — YAML zoals de operator
-// hem schrijft, via config.ClusterConfig (map[string]any) naar Jobs. Dekt de
-// aanname dat yaml.v3 geneste maps met string-keys levert (JSON-marshalbaar).
-func TestDecodeInitJobs_FromYAML(t *testing.T) {
-	src := `
-cluster:
-  name: dev
-  init_jobs:
-    - name: hopdns
-      command: /usr/local/bin/hopdns
-      count: -1
-      ports:
-        dns: 5353
-      env:
-        HOP_MODE: init
-    - name: my-app
-      image: myapp:v1
-      count: 2
-      tags:
-        hoplb-urlprefix: "*.app.local"
-`
+// TestDecodeInitJobs_FromConfig: het hele configpad — het bestand zoals de
+// operator het schrijft, via config.ClusterConfig (map[string]any) naar Jobs.
+// Dekt de aanname dat de configdecoder geneste maps met string-keys levert.
+func TestDecodeInitJobs_FromConfig(t *testing.T) {
+	src := `{
+	  "cluster": {
+	    "name": "dev",
+	    "init_jobs": [
+	      {
+	        "name": "hopdns",
+	        "command": "/usr/local/bin/hopdns",
+	        "count": -1,
+	        "ports": {"dns": 5353},
+	        "env": {"HOP_MODE": "init"}
+	      },
+	      {
+	        "name": "my-app",
+	        "image": "myapp:v1",
+	        "count": 2,
+	        "tags": {"hoplb-urlprefix": "*.app.local"}
+	      }
+	    ]
+	  }
+	}`
 	var cfg config.Config
-	if err := yaml.Unmarshal([]byte(src), &cfg); err != nil {
-		t.Fatalf("yaml: %v", err)
+	if err := json.Unmarshal([]byte(src), &cfg); err != nil {
+		t.Fatalf("config: %v", err)
 	}
 	jobs, err := DecodeInitJobs(cfg.Cluster.InitJobs)
 	if err != nil {
@@ -90,7 +92,7 @@ cluster:
 		t.Fatalf("verwacht 2 jobs, kreeg %d", len(jobs))
 	}
 	if jobs[0].Ports["dns"] != 5353 || jobs[0].Env["HOP_MODE"] != "init" {
-		t.Fatalf("geneste YAML-maps niet gedecodeerd: %+v", jobs[0])
+		t.Fatalf("geneste maps niet gedecodeerd: %+v", jobs[0])
 	}
 	if jobs[1].Tags["hoplb-urlprefix"] != "*.app.local" {
 		t.Fatalf("tags niet gedecodeerd: %+v", jobs[1])

@@ -17,13 +17,13 @@ GOOS=linux GOARCH=amd64 go build -o bin/agent-linux ./cmd/agent
 ```bash
 ./bin/agent --cluster=dev --standalone
 # or with a config file:
-./bin/agent --config ./dev-config.yaml
+./bin/agent --config ./dev-config.json
 ```
 
 Multi-node locally? Run hoplockserver and point every agent at it with `--lock`:
 ```bash
 ../bin/hoplockserver -listen :8090 -data ./data/lock   # from the monorepo root
-./bin/agent --cluster=dev --lock http://127.0.0.1:8090 --config dev-node1.yaml
+./bin/agent --cluster=dev --lock http://127.0.0.1:8090 --config dev-node1.json
 ```
 
 2. Test CLI:
@@ -141,9 +141,15 @@ go test -bench=. -benchmem ./internal/...
 
 ## Dependencies
 
-- `github.com/google/uuid` — UUID generation
 - `github.com/xinix00/hoplock` — lease-based leader election (CAS over blob store)
 - `github.com/xinix00/hoplockserver` — client for the hoplockserver backend
-- `gopkg.in/yaml.v3` — YAML config parsing (only in pkg/config)
+- `github.com/xinix00/lean` — our own building blocks: `leanhttp` (the node-side
+  HTTP client in `pkg/hophttp`) and `leanrand` (node and task IDs, backoff jitter)
 
-All core logic uses Go stdlib only (the CLI uses stdlib `flag`).
+Everything else is Go stdlib (the CLI uses stdlib `flag`, the config is
+`encoding/json`). That is on purpose and not a coincidence: HopOS' kernel
+imports this module, so every dependency here also has to be defensible inside a
+bare-metal image. `github.com/google/uuid` was dropped because it dragged
+`database/sql/driver` in there for two ID calls, and `gopkg.in/yaml.v3` because
+its package `init` linked the whole `regexp` engine into a kernel that never
+parses a config file.

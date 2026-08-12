@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os/exec"
 	"runtime"
 	"sync"
 	"time"
@@ -71,7 +70,7 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 
 	// Build node attributes: auto-detected + user-configured (config overrides)
 	hasDocker := "false"
-	if _, err := exec.LookPath("docker"); err == nil {
+	if dockerPresent() {
 		hasDocker = "true"
 	}
 

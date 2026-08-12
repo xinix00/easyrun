@@ -2,61 +2,105 @@
 
 ## Config File
 
-```yaml
-node:
-  id: ""                    # Auto-generate a UUID when empty
-  ip: ""                    # Auto-detect when empty (advertised IP for cluster comms)
-  network: ""               # Optional CIDR (e.g. "10.0.0.0/24") — when `ip` is
-                            # empty, hop takes the first interface IP inside
-                            # this range. Handy on multi-homed nodes: HTTP still
-                            # listens on 0.0.0.0, only the advertised IP is
-                            # pinned to the LAN/VPN.
-  port: 8080                # Agent port (the leader runs on port+1000)
-  attributes:               # Custom node attributes (merged with auto-detected)
-    # region: eu-west-1
-    # gpu: "true"
+The config file is **JSON** — the same format as a job spec, the API and the
+state file. Two rules that make a config file behave:
 
-cluster:
-  name: "my-cluster"
-  lock:                     # Leader election backend (hoplock)
-    type: "hoplockserver"   # "hoplockserver" (default), "s3" or "mem"
-    url: "http://10.0.0.1:8090"   # hoplockserver base URL (type=hoplockserver)
-    api_key: ""             # hoplockserver API key (a separate key, optional)
-    # key: ""               # lease object key (default: clusters/<name>/lease.json)
-    # s3:                   # type=s3: AWS / Cloudflare R2 / MinIO / B2
-    #   endpoint: "https://s3.eu-west-1.amazonaws.com"
-    #   bucket: "hop-cluster"
-    #   region: "eu-west-1"
-    #   access_key_id: "..."
-    #   secret_access_key: "..."
-    #   use_path_style: false
-  # init_jobs:              # Baseline an empty cluster gets on a clean boot
-  #   - name: hopdns        # (see "Init jobs" below)
-  #     command: /usr/local/bin/hopdns
-  #     count: -1
+- **An unknown key is an error**, not a silently ignored line. A typo in a key
+  used to look like a setting and do nothing.
+- **Durations are strings**: `"30s"`, `"1m30s"`, `"500ms"`. A bare number is an
+  error, because a `leader_lease` of `30` silently meaning 30 *nanoseconds* is a
+  cluster that loses its leader thousands of times a second.
 
-api_key: ""                 # Shared secret for HMAC request auth (X-Hop-Auth)
-                            # on every hop endpoint. Empty = auth off (dev).
+Everything is optional; what you leave out keeps its default. A missing file is
+not an error either — then the defaults *are* the configuration.
 
-capacity:
-  cpu_shares: 14000         # Relative CPU capacity
-  memory: 8589934592        # 8GB in bytes
-
-paths:
-  state_file: "/var/lib/hop/state.json"
-  rootfs_base: "/var/lib/hop/rootfs"
-  artifacts: "/var/lib/hop/artifacts"
-  cache: "/var/lib/hop/cache"
-
-runner:
-  isolate: true             # Enable process isolation (chroot on Linux)
-
-timeouts:
-  health_check_interval: 10s
-  health_check_timeout: 5s
-  node_dead_threshold: 30s
-  leader_lease: 30s
+```json
+{
+  "node": {
+    "id": "",
+    "ip": "",
+    "network": "",
+    "port": 8080,
+    "attributes": {"region": "eu-west-1", "gpu": "true"}
+  },
+  "cluster": {
+    "name": "my-cluster",
+    "lock": {
+      "type": "hoplockserver",
+      "url": "http://10.0.0.1:8090",
+      "api_key": "",
+      "key": ""
+    }
+  },
+  "api_key": "",
+  "capacity": {"cpu_shares": 14000, "memory": 8589934592},
+  "paths": {
+    "state_file": "/var/lib/hop/state.json",
+    "rootfs_base": "/var/lib/hop/rootfs"
+  },
+  "runner": {"isolate": true, "docker_socket": "/var/run/docker.sock"},
+  "timeouts": {
+    "health_check_interval": "10s",
+    "health_check_timeout": "5s",
+    "node_dead_threshold": "30s",
+    "leader_lease": "30s"
+  }
+}
 ```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `node.id` | auto | Node ID. Empty = generated at startup |
+| `node.ip` | auto | The IP the node advertises to the cluster. Empty = detected from the outbound interface |
+| `node.network` | `""` | Optional CIDR (e.g. `"10.0.0.0/24"`). When `ip` is empty, hop takes the first interface IP inside this range. Handy on multi-homed nodes: HTTP still listens on `0.0.0.0`, only the advertised IP is pinned to the LAN/VPN. Ignored when `ip` is set |
+| `node.port` | `8080` | Agent port. The leader runs on `port+1000` |
+| `node.attributes` | `{}` | Custom node attributes, merged with the auto-detected ones (config wins). Used for placement constraints |
+| `cluster.name` | `"default"` | Cluster name. Also the default lease key and state-file suffix |
+| `cluster.lock.type` | `""` | Leader-election backend: `""`/`"hoplockserver"`, `"s3"`, or `"mem"`. No lock config at all = standalone |
+| `cluster.lock.url` | `""` | hoplockserver base URL (`type=hoplockserver`) |
+| `cluster.lock.api_key` | `""` | `X-API-Key` for hoplockserver — a *separate* key from `api_key` below |
+| `cluster.lock.key` | auto | Lease object key. Default `clusters/<cluster.name>/lease.json` |
+| `cluster.lock.s3` | — | `type=s3`: see the block below (AWS, Cloudflare R2, MinIO, B2, Ceph RGW) |
+| `cluster.init_jobs` | `[]` | The baseline an empty cluster gets on a clean boot — see [Init jobs](#init-jobs) |
+| `api_key` | `""` | Shared secret for HMAC request auth (`X-Hop-Auth`) on every hop endpoint. Empty = auth off (dev) |
+| `capacity.cpu_shares` | `0` | Relative CPU capacity. `0` = auto-detect from the hardware |
+| `capacity.memory` | `0` | Memory to commit, in bytes. `0` = auto-detect |
+| `paths.state_file` | `./data/state.json` | Local state snapshot |
+| `paths.rootfs_base` | `/tmp/hop` | Base directory for task rootfs/working dirs |
+| `runner.isolate` | `true` | Process isolation (chroot on Linux, sandbox on macOS) |
+| `runner.docker_socket` | `/var/run/docker.sock` | Docker daemon socket for the docker driver |
+| `timeouts.health_check_interval` | `"5s"` | How often a task's health check runs |
+| `timeouts.health_check_timeout` | `"5s"` | Deadline for one health check |
+| `timeouts.node_dead_threshold` | `"30s"` | No heartbeat for this long = the node is dead |
+| `timeouts.leader_lease` | `"30s"` | Leader lease duration |
+
+An S3 lock backend instead of hoplockserver:
+
+```json
+{
+  "cluster": {
+    "name": "my-cluster",
+    "lock": {
+      "type": "s3",
+      "s3": {
+        "endpoint": "https://s3.eu-west-1.amazonaws.com",
+        "bucket": "hop-cluster",
+        "region": "eu-west-1",
+        "access_key_id": "...",
+        "secret_access_key": "",
+        "session_token": "",
+        "use_path_style": false
+      }
+    }
+  }
+}
+```
+
+`use_path_style` is `true` for MinIO and B2, `false` (default) for AWS and R2.
+`session_token` is for STS temporary credentials.
+
+**Coming from a YAML config?** It converts one-to-one: the same keys, in braces,
+durations quoted. hop tells you so if you hand it the old file.
 
 ## Init jobs
 
@@ -67,19 +111,24 @@ if an operator had submitted them with `run apply`. That is how a blank node
 (a Pi, a HopOS node) comes up with its work already on it, with nobody
 deploying anything.
 
-```yaml
-cluster:
-  name: "my-cluster"
-  init_jobs:
-    - name: hopdns
-      command: /usr/local/bin/hopdns
-      count: -1               # on every node
-      ports:
-        dns: 5353
-    - name: my-app
-      image: myapp:v1
-      count: 2
+```json
+{
+  "cluster": {
+    "name": "my-cluster",
+    "init_jobs": [
+      {
+        "name": "hopdns",
+        "command": "/usr/local/bin/hopdns",
+        "count": -1,
+        "ports": {"dns": 5353}
+      },
+      {"name": "my-app", "image": "myapp:v1", "count": 2}
+    ]
+  }
+}
 ```
+
+(`count: -1` = one on every node.)
 
 **Semantics:**
 
@@ -115,31 +164,20 @@ No lock backend configured → hop runs standalone automatically.
 
 ## Development Config
 
-```yaml
-# dev-config.yaml
-node:
-  id: "dev-node"
-  ip: "127.0.0.1"
-  port: 8080
-
-cluster:
-  name: "dev"
-  # No lock config → standalone (in-memory).
-  # Multi-node locally: lock: { url: "http://127.0.0.1:8090" } + run hoplockserver.
-
-capacity:
-  cpu_shares: 14000
-  memory: 8589934592
-
-paths:
-  state_file: "./data/state.json"
-  rootfs_base: "./data/rootfs"
-  artifacts: "./data/artifacts"
-  cache: "./data/cache"
-
-runner:
-  isolate: false
+```json
+{
+  "node": {"id": "dev-node", "ip": "127.0.0.1", "port": 8080},
+  "cluster": {"name": "dev"},
+  "capacity": {"cpu_shares": 14000, "memory": 8589934592},
+  "paths": {"state_file": "./data/state.json", "rootfs_base": "./data/rootfs"},
+  "runner": {"isolate": false}
+}
 ```
+
+That is `dev-config.json` in the repo root, minus `runner.isolate` (isolation
+stays on there). No lock config = standalone, in-memory. Multi-node locally:
+add `"cluster": {"lock": {"url": "http://127.0.0.1:8090"}}` and run
+hoplockserver.
 
 **Note:** State file path is automatically adjusted per cluster name (`./data/state-{cluster}.json`) when using the default path.
 
@@ -173,9 +211,8 @@ Capacity check: agents check total system memory. Requests exceeding available m
 
 ## Process Isolation
 
-```yaml
-runner:
-  isolate: true
+```json
+{"runner": {"isolate": true}}
 ```
 
 With isolation enabled:

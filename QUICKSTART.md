@@ -60,26 +60,25 @@ S3-compatible object store). Point every agent at the same backend.
 
 Only needed for custom requirements:
 
-```yaml
-# config.yaml
-cluster:
-  name: "my-cluster"
-  lock:
-    type: "hoplockserver"   # "" (default) | "hoplockserver" | "s3" | "mem"
-    url: "http://10.0.0.1:8090"
-
-node:
-  port: 8080
-
-paths:
-  state_file: /var/lib/hop/state.json
-
-runner:
-  isolate: true  # chroot on Linux, sandbox on macOS
+```json
+{
+  "cluster": {
+    "name": "my-cluster",
+    "lock": {"type": "hoplockserver", "url": "http://10.0.0.1:8090"}
+  },
+  "node": {"port": 8080},
+  "paths": {"state_file": "/var/lib/hop/state.json"},
+  "runner": {"isolate": true}
+}
 ```
 
+`lock.type` is `""` (default) | `"hoplockserver"` | `"s3"` | `"mem"`;
+`runner.isolate` is chroot on Linux, sandbox on macOS. Unknown keys and
+unquoted durations are startup errors — see
+[docs/configuration.md](docs/configuration.md).
+
 ```bash
-../bin/agent --config=config.yaml
+../bin/agent --config=config.json
 ```
 
 ## Production (systemd)

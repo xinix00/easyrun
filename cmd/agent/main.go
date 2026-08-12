@@ -20,8 +20,8 @@ import (
 	"github.com/xinix00/hop/internal/leader"
 	"github.com/xinix00/hop/pkg/config"
 
-	"github.com/google/uuid"
 	"github.com/xinix00/hoplock"
+	"github.com/xinix00/lean/leanrand"
 )
 
 // version is set at build time via -ldflags "-X main.version=v1.0.0"
@@ -312,7 +312,9 @@ func getOrCreateNodeID(cfg *config.Config) string {
 	}
 
 	// 3. Generate new ID and persist
-	nodeID := uuid.New().String()[:8]
+	// Acht tekens uit leanrand: 40 bits, en dit is een naam die een mens
+	// leest in een log en overtypt in een curl.
+	nodeID := leanrand.ID(8)
 	_ = os.MkdirAll(stateDir, 0755)
 	if err := os.WriteFile(idFile, []byte(nodeID), 0644); err != nil {
 		log.Printf("Warning: failed to persist node ID: %v", err)

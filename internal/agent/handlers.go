@@ -15,7 +15,7 @@ import (
 	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
 
-	"github.com/google/uuid"
+	"github.com/xinix00/lean/leanrand"
 )
 
 // setAuth forwards the caller's X-Hop-Auth signature to the leader. The proxy
@@ -455,7 +455,7 @@ func (a *Agent) stopJobTasks(jobName string) int {
 // newTask creates a Task from a Job.
 func newTask(job *types.Job) *types.Task {
 	return &types.Task{
-		ID:      uuid.New().String(),
+		ID:      leanrand.ID(16),
 		JobName: job.Name,
 		Driver:  job.Driver,
 		Image:   job.Image,
@@ -662,15 +662,19 @@ func (a *Agent) restartTask(task *types.Task, ran bool) {
 		return
 	}
 
-	// Exponential backoff: 1s, 2s, 4s, 8s, 16s, ... capped at 30s.
-	// Cancellable so agent shutdown isn't stalled by a goroutine napping
-	// for half a minute. On cancel we just exit — the task entry is dropped
-	// by shutdown's stopTasks pass.
+	// Exponential backoff: 1s, 2s, 4s, 8s, 16s, ... capped at 30s, met ±50%
+	// jitter. Zonder die jitter wachten alle nodes van een cluster exact
+	// hetzelfde: valt een gedeelde afhankelijkheid weg (een origin, een
+	// registry, een lock-backend), dan komen ze er ook precies gelijk weer
+	// bovenop. Cancellable so agent shutdown isn't stalled by a goroutine
+	// napping for half a minute. On cancel we just exit — the task entry is
+	// dropped by shutdown's stopTasks pass.
 	if restartCount > 0 {
 		backoff := time.Second << uint(restartCount-1)
 		if backoff > 30*time.Second {
 			backoff = 30 * time.Second
 		}
+		backoff = leanrand.Jitter(backoff)
 		log.Printf("Task %s restart #%d, waiting %s before retry", task.ID, restartCount, backoff)
 		select {
 		case <-a.shutdownCh:
