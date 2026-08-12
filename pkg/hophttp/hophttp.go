@@ -29,6 +29,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/xinix00/lean/leanhttp"
 )
@@ -106,6 +107,17 @@ type Request struct {
 
 	ctx  context.Context
 	vals map[string]string // filled by the mux from {wildcards}
+
+	// done is set by the node transport and is NOT called until a handler asks
+	// for Context(). That laziness is load-bearing: on a node, asking for the
+	// request's lifetime puts a watchdog on the connection (leanhttp's
+	// Request.Done reads it to notice the client leaving), and a connection with
+	// a watchdog on it can never be reused. Building the context eagerly for
+	// every request therefore killed keep-alive for every request — MEASURED on
+	// hardware as 200/502/200/502 through hop's agent proxy: the server closed
+	// each connection after answering while its own response header still said
+	// keep-alive, so the client pooled a dead one and every second call failed.
+	done func() <-chan struct{}
 }
 
 // PathValue returns the value a {wildcard} in the matched pattern captured, or
@@ -120,13 +132,39 @@ func (r *Request) Query() url.Values {
 	return v
 }
 
-// Context is the request's lifetime. It is cancelled when the client goes
-// away, which is what a long-lived stream watches to stop producing.
+// Context is the request's lifetime. It is cancelled when the client goes away,
+// which is what a long-lived stream watches to stop producing.
+//
+// On a node the lifetime is not free: see the done field. So only ask for it if
+// you are going to watch it — a handler that answers and returns should not.
 func (r *Request) Context() context.Context {
-	if r.ctx == nil {
-		return context.Background()
+	switch {
+	case r.ctx != nil:
+		return r.ctx
+	case r.done != nil:
+		return connContext{done: r.done()}
 	}
-	return r.ctx
+	return context.Background()
+}
+
+// connContext is a lifetime with nothing but an end: no deadline, no values.
+// It exists because the node transport has a done-channel where the host has a
+// context, and hop asks for neither a deadline nor a value.
+type connContext struct {
+	done <-chan struct{}
+}
+
+func (connContext) Deadline() (time.Time, bool) { return time.Time{}, false }
+func (c connContext) Done() <-chan struct{}     { return c.done }
+func (connContext) Value(any) any               { return nil }
+
+func (c connContext) Err() error {
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
 }
 
 // WithContext returns a copy of the request bound to ctx. The transports set the

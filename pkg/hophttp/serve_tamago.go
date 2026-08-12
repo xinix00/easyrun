@@ -17,7 +17,6 @@ import (
 	"errors"
 	"net"
 	"sync"
-	"time"
 
 	"github.com/xinix00/lean/leanhttp"
 )
@@ -96,28 +95,6 @@ func (s *Server) serve(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 		Header:     r.Header,
 		Body:       r.Body,
 		RemoteAddr: r.RemoteAddr,
-		ctx:        doneContext(r.Done()),
+		done:       r.Done, // the method, NOT called: see Request.done
 	})
-}
-
-// doneContext lifts leanhttp's done-channel into a context, so handlers that
-// watch r.Context().Done() (the SSE streams) work unchanged on both platforms.
-// It carries no deadline and no values — nothing in hop asks for either.
-func doneContext(done <-chan struct{}) context.Context { return connContext{done: done} }
-
-type connContext struct {
-	done <-chan struct{}
-}
-
-func (connContext) Deadline() (deadline time.Time, ok bool) { return time.Time{}, false }
-func (c connContext) Done() <-chan struct{}                 { return c.done }
-func (c connContext) Value(any) any                         { return nil }
-
-func (c connContext) Err() error {
-	select {
-	case <-c.done:
-		return context.Canceled
-	default:
-		return nil
-	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"testing"
+	"time"
 )
 
 // record is a handler that reports which pattern answered, plus the wildcards it
@@ -217,5 +218,55 @@ func TestCleanPath(t *testing.T) {
 		if got := cleanPath(tc.in); got != tc.want {
 			t.Errorf("cleanPath(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// TestContextIsLazy pins the cause of the 200/502/200/502 that showed up on
+// hardware: on a node, asking for a request's lifetime puts a watchdog on the
+// connection, and a watched connection cannot be reused. The node transport
+// therefore hands over the DONE FUNCTION, not a context, and Context() calls it
+// only when a handler actually wants it.
+//
+// A handler that answers and returns must not trigger it, or keep-alive dies for
+// every request in the system.
+func TestContextIsLazy(t *testing.T) {
+	gevraagd := 0
+	done := make(chan struct{})
+	req := &Request{Method: "GET", Path: "/x", Header: Header{}}
+	req.done = func() <-chan struct{} {
+		gevraagd++
+		return done
+	}
+
+	// Een handler die niets met de levensduur doet, raakt hem ook niet aan.
+	if gevraagd != 0 {
+		t.Fatalf("done was called %d times before anyone asked", gevraagd)
+	}
+
+	// En wie hem wél vraagt, krijgt een context die eindigt als de verbinding
+	// eindigt.
+	ctx := req.Context()
+	if gevraagd != 1 {
+		t.Fatalf("done was called %d times, want 1", gevraagd)
+	}
+	if ctx.Err() != nil {
+		t.Errorf("a live request already reports %v", ctx.Err())
+	}
+	close(done)
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("the context did not end when the connection did")
+	}
+	if ctx.Err() == nil {
+		t.Error("Err() is nil after the connection ended")
+	}
+	if _, ok := ctx.Deadline(); ok {
+		t.Error("this context has no deadline to report")
+	}
+
+	// Zonder naad is het gewoon een achtergrond-context, geen nil.
+	if got := (&Request{}).Context(); got == nil {
+		t.Error("Context() returned nil")
 	}
 }

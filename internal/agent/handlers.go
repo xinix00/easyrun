@@ -56,7 +56,11 @@ func (a *Agent) proxyToLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
 
 	resp, err := a.httpClient.DoContext(r.Context(), call)
 	if err != nil {
-		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact leader")
+		// De transportfout gaat MEE. Zonder hem is een 502 niet te
+		// diagnosticeren: hij zegt alleen dat de leader niet antwoordde, niet
+		// of dat een timeout, een geweigerde verbinding of een kapotte
+		// verbinding uit de pool was — drie storingen met drie andere oorzaken.
+		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact leader: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -91,7 +95,11 @@ func (a *Agent) proxyStreamToLeader(w hophttp.ResponseWriter, r *hophttp.Request
 	// that: a.httpClient carries proxyTimeout, which would cut an SSE tail off.
 	resp, err := a.streamClient.DoContext(r.Context(), call)
 	if err != nil {
-		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact leader")
+		// De transportfout gaat MEE. Zonder hem is een 502 niet te
+		// diagnosticeren: hij zegt alleen dat de leader niet antwoordde, niet
+		// of dat een timeout, een geweigerde verbinding of een kapotte
+		// verbinding uit de pool was — drie storingen met drie andere oorzaken.
+		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact leader: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
