@@ -292,6 +292,13 @@ func (s *Server) handleStatus(w hophttp.ResponseWriter, r *hophttp.Request) {
 func (s *Server) handleEvents(w hophttp.ResponseWriter, r *hophttp.Request) {
 	sse := httputil.SSEWriter(w)
 
+	// De levensduur VÓÓR de eerste write claimen: op de node draagt
+	// r.Context() leanhttp's Request.Done, en die is na de eerste Flush
+	// terecht te laat (de kop heeft dan al keep-alive beloofd; fail-fast
+	// sinds lean-review 13-08). De ping hieronder flusht — GEMETEN 14-08 op
+	// QEMU: één /v1/events-verzoek legde anders de héle node om.
+	done := r.Context().Done()
+
 	ch := s.leader.EventBus().Subscribe()
 	defer s.leader.EventBus().Unsubscribe(ch)
 
@@ -299,7 +306,7 @@ func (s *Server) handleEvents(w hophttp.ResponseWriter, r *hophttp.Request) {
 
 	for {
 		select {
-		case <-r.Context().Done():
+		case <-done:
 			return
 		case msg, ok := <-ch:
 			if !ok {
