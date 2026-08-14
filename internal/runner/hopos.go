@@ -89,7 +89,36 @@ func NewHopRunner(sm hopos.SlotManager, nodeAttrs map[string]string) *HopRunner 
 
 // Run loads the job's artifact (the native app image) and starts it on a free
 // slot. The slot number is recorded as task.Pid ("process id" = core index).
+//
+// Whatever goes wrong on the way lands in THIS task's log (see runLogged): on a
+// node there is no console to fall back on, and a start that fails has no app
+// yet to tell you why. MEASURED 12-08 on a LicheeRV: a job sat at "failed,
+// restarts 5" and the reason ("no free cage of class …") existed only as text on
+// a serial line nobody was reading — `hop logs <task>` said "not found".
 func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
+	// De log van deze task bestaat vóór de eerste faalbare stap, want anders is
+	// er geen plek om de fout in te schrijven. De slot-pomp die er later regels
+	// in giet komt bij de start van de app (zie onder) — die hoort NIET hier,
+	// want zonder slot is er niets te pompen.
+	stdout := r.logs.stdout(task.ID)
+	if stdout == nil {
+		stdout = NewLogBroadcaster()
+		// hop apps have a single log ring; stderr stays empty
+		r.logs.put(task.ID, stdout, NewLogBroadcaster())
+	}
+	err := r.run(job, task)
+	if err != nil {
+		_, _ = stdout.Write([]byte("hop: this task did not start: " + err.Error() + "\n"))
+		// Meteen met pensioen: er komt hierna geen regel meer bij, en zo blijft de
+		// reden nog logRetention lang opvraagbaar zonder dat een restart-lus een
+		// broadcaster per poging laat staan. Zonder dit zou élke mislukte start
+		// een levende entry achterlaten die niemand meer sluit.
+		r.logs.retire(task.ID)
+	}
+	return err
+}
+
+func (r *HopRunner) run(job *types.Job, task *types.Task) error {
 	if job.Image != "" {
 		return errors.New("hop driver: containers are not supported on HopOS")
 	}
@@ -170,9 +199,9 @@ func (r *HopRunner) Run(job *types.Job, task *types.Task) error {
 		return nil
 	}
 
-	stdout := NewLogBroadcaster()
-	stderr := NewLogBroadcaster() // hop apps have a single log ring; stderr stays empty
-	r.logs.put(task.ID, stdout, stderr)
+	// De log van deze task staat er al (Run zette hem klaar voordat er iets kon
+	// falen); hier komt alleen de slot-pomp erbij.
+	stdout := r.logs.stdout(task.ID)
 
 	// What kind of cage did this task land in? The node knows, and on a headless
 	// board its serial console is the only other place it would say so — a line

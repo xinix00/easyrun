@@ -170,15 +170,30 @@ func (s *Loop) Tick() {
 		// gewenste staat heeft één auteur (leader → S3, leader/persist.go).
 		leaderAddr = fmt.Sprintf("%s:%d", s.Cfg.Node.IP, s.Cfg.Node.Port+1000)
 		if err := s.DoHeartbeat(leaderAddr, s.Ag.ID(), s.Ag.Endpoint(), s.Cfg.APIKey); err != nil {
-			// Deze fout werd weggegooid met `_ =`, en dat kostte een middag
-			// zoeken (11-08 op een LicheeRV): de leader meldt "Agent is dead",
-			// de agent zwijgt, /v1/agents blijft leeg en de node herstelt nooit
-			// — terwijl de niet-leader-tak hieronder élke fout logt en opnieuw
-			// registreert. Een falende self-heartbeat betekent dat onze EIGEN
-			// leader-API geen nieuwe verbinding meer accepteert. Dat is geen
+			// Eén antwoord ís herstelbaar: "not registered". Dan is de eigen
+			// leader-API gewoon bereikbaar maar is hij deze agent VERGETEN —
+			// een agent-timeout tijdens een netwerkstoring haalt het record
+			// weg. De niet-leader-tak hieronder herregistreert dan; deze tak
+			// deed dat niet, en GEMETEN 13-08 op een LicheeRV bleef een node
+			// daardoor 70+ heartbeats lang "not registered" roepen zonder ooit
+			// te herstellen, met een lege /v1/agents en jobs die nergens
+			// geplaatst konden worden.
+			if errors.Is(err, ErrNotRegistered) {
+				log.Printf("Own leader API forgot this agent (agent timeout during an outage?) — re-registering")
+				if rerr := s.DoRegister(leaderAddr, s.Ag.ID(), s.Ag.Endpoint(), s.Ag.GetPlacedTaskCounts(), s.Cfg.APIKey); rerr == nil {
+					log.Printf("Re-registered with own leader API %s", leaderAddr)
+					s.selfBeatFails = 0
+					return
+				}
+			}
+			// Al het andere: zichtbaar maken, niet op reageren. Deze fout werd
+			// ooit weggegooid met `_ =`, en dat kostte een middag zoeken (11-08
+			// op een LicheeRV): de leader meldt "Agent is dead", de agent
+			// zwijgt, /v1/agents blijft leeg en de node herstelt nooit. Een
+			// self-heartbeat die op TRANSPORT-niveau faalt betekent dat onze
+			// eigen API geen verbinding meer accepteert; dat is geen
 			// leiderschapsprobleem (de lease is hierboven net vernieuwd), dus
-			// blijft de leader-state met opzet ongemoeid: we maken het
-			// zichtbaar in plaats van erop te reageren. Eigen teller, want
+			// blijft de leader-state met opzet ongemoeid. Eigen teller, want
 			// failCount wordt hierboven elke tick door de lease op 0 gezet.
 			s.selfBeatFails++
 			log.Printf("Self-heartbeat to own leader API %s failed (%d): %v",

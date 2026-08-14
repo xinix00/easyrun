@@ -89,7 +89,7 @@ func (cl *Client) poolFor(url string) *leanhttp.Client {
 		return &cl.plain
 	}
 	cl.once.Do(func() {
-		cl.tls.Dial = leanhttps.Dialer(&leantls.Config{
+		cl.tls.DialContext = leanhttps.DialerContext(&leantls.Config{
 			VerifyPeer:          x509verify.Chain(nil),
 			SignatureAlgorithms: x509verify.SignatureAlgorithms,
 		})

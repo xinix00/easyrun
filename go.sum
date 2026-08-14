@@ -1,6 +1,6 @@
-github.com/xinix00/hoplock v0.4.0 h1:/XIiy8W5ZYP1FAyT99urG89JMkxuSwcRcsJrGPOse5s=
-github.com/xinix00/hoplock v0.4.0/go.mod h1:3tmstOm6OzxlwlsQtZ+43GiGFnYFV3qwGNLS1dBN9us=
-github.com/xinix00/hoplockserver v0.2.0 h1:VMvSoHkNbSmN7HmfN2TP8LX2j7ets8Z+LakSCEg5DbQ=
-github.com/xinix00/hoplockserver v0.2.0/go.mod h1:OwvvFb7ezPb5iNdsojr+cBvx9YzuPIHko8AUIP+OQpM=
-github.com/xinix00/lean v0.5.1 h1:YhPYVPlma47X60hb4Wcw5B/aBaj++mow+WsV+xpU7uE=
-github.com/xinix00/lean v0.5.1/go.mod h1:gRIa2nL/SIEsi1L/eq9EUqrKQ+jnjxUGb3IAsuVQX7U=
+github.com/xinix00/hoplock v0.4.1 h1:y33/9g8f26S85OuwRudjgNgstuy+N+7ocL1FqtdKJI4=
+github.com/xinix00/hoplock v0.4.1/go.mod h1:0duoz1FtShLgwVffM11uWKUF4D3r7R7FdAWkMzjwSiw=
+github.com/xinix00/hoplockserver v0.2.1 h1:vLgv+iuuExaKgb90uwxMLavRMrlXRqLerihgFCv9pzY=
+github.com/xinix00/hoplockserver v0.2.1/go.mod h1:HPVrFPGljcbxqIV8sIsa1W67hLI5vC7yG+z8W1k0nLg=
+github.com/xinix00/lean v0.7.0 h1:E8V/MFpPy521/1L9iGjyBoYLuvhXGzwADOL4A/IgZcM=
+github.com/xinix00/lean v0.7.0/go.mod h1:gRIa2nL/SIEsi1L/eq9EUqrKQ+jnjxUGb3IAsuVQX7U=

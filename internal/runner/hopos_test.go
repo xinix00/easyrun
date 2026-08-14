@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -306,9 +307,15 @@ func TestHopRunnerDeletedDuringStaging(t *testing.T) {
 	busy := len(r.inUse)
 	stopping := len(r.stopping)
 	r.mu.RUnlock()
-	hasLog := r.logs.stdout(task.ID) != nil
-	if hasSlot || hasLog || busy != 0 || stopping != 0 {
-		t.Fatalf("runner-state niet schoon: slot=%v log=%v inUse=%d stopping=%d", hasSlot, hasLog, busy, stopping)
+	if hasSlot || busy != 0 || stopping != 0 {
+		t.Fatalf("runner-state niet schoon: slot=%v inUse=%d stopping=%d", hasSlot, busy, stopping)
+	}
+	// De log van deze task mág bestaan (Run zet hem klaar vóór de eerste
+	// faalbare stap, anders is er geen plek voor de faalreden) — maar hij is
+	// met pensioen en leeg: er is niets gebeurd om te melden, en er hangt geen
+	// pomp aan een slot dat alweer van iemand anders kan zijn.
+	if lg := r.logs.stdout(task.ID); lg != nil && len(lg.Tail()) != 0 {
+		t.Fatalf("log van een tijdens staging gestopte task draagt regels: %q", lg.Tail())
 	}
 }
 
@@ -499,5 +506,33 @@ func TestHopRunnerLogsVerlopenNaDeTermijn(t *testing.T) {
 
 	if r.GetStdout(task.ID) != nil {
 		t.Fatal("logs zijn na de retentietermijn nog opvraagbaar")
+	}
+}
+
+// TestHopRunnerFailureLandsInTaskLog — de reden waarom een task NIET startte
+// hoort in de log van díe task te staan. Op een node is er geen console om op
+// terug te vallen, en er is nog geen app die het zelf kan zeggen: zonder deze
+// regel is een mislukte plaatsing van buiten alleen het woord "failed".
+func TestHopRunnerFailureLandsInTaskLog(t *testing.T) {
+	srv := imageServer(t, []byte("img"))
+	r := NewHopRunner(newFakeSlotManager(3), nil)
+	job := hopJob(srv.URL)
+	job.Tags = map[string]string{"core-class": "big"} // deze node heeft alleen small
+	task := &types.Task{ID: "kanniet", JobName: job.Name, Driver: types.DriverHop}
+
+	err := r.Run(job, task)
+	if err == nil {
+		t.Fatal("Run hoort te falen: geen kooi van klasse big op deze node")
+	}
+	lg := r.logs.stdout(task.ID)
+	if lg == nil {
+		t.Fatal("de task heeft geen log, dus staat de faalreden nergens")
+	}
+	var got string
+	for _, line := range lg.Tail() {
+		got += line
+	}
+	if !strings.Contains(got, err.Error()) {
+		t.Fatalf("log draagt de reden niet: %q (fout was %q)", got, err)
 	}
 }

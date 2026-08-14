@@ -365,3 +365,61 @@ func TestTick_UsesCachedLeaderAddr(t *testing.T) {
 		t.Errorf("heartbeat sent to %q, want cached %q", calledAddr, "cached:9080")
 	}
 }
+
+// De LEIDER-variant van het herstel: de eigen leader-API is bereikbaar maar is
+// deze agent vergeten (agent-timeout tijdens een netwerkstoring). De
+// self-heartbeat-tak liet dat vóór de fix eeuwig doorlopen — GEMETEN 13-08 op
+// een LicheeRV: 70+ "not registered"-heartbeats, lege /v1/agents, geen herstel.
+func TestTick_SelfHeartbeatNotRegistered_Reregisters(t *testing.T) {
+	disc := &mockDiscoverer{leader: "127.0.0.1:9080", renewLeaseOK: true}
+	registers := 0
+	loop := newTestLoop(disc, &mockAgent{id: "a1", placed: map[string]int{"stulp": 1}})
+	loop.stopLeader = func() {} // we ZIJN de leader
+	loop.l = &mockLeader{}
+	loop.DoHeartbeat = errHeartbeat(ErrNotRegistered)
+	loop.DoRegister = func(_, _, _ string, placed map[string]int, _ string) error {
+		registers++
+		if placed["stulp"] != 1 {
+			t.Errorf("herregistratie zonder placed counts: %v", placed)
+		}
+		return nil
+	}
+
+	loop.Tick()
+
+	if registers != 1 {
+		t.Fatalf("DoRegister %d keer geroepen, wil 1 — de leider herstelt zijn eigen registratie niet", registers)
+	}
+	if loop.selfBeatFails != 0 {
+		t.Errorf("selfBeatFails = %d, wil 0 na herstel", loop.selfBeatFails)
+	}
+	if loop.stopLeader == nil {
+		t.Error("het leiderschap zelf hoort onaangeroerd te blijven")
+	}
+}
+
+// Een transportfout op de self-heartbeat blijft wat hij was: zichtbaar maken,
+// niet op reageren (de API accepteert dan geen verbindingen — herregistreren
+// zou daar niets aan doen).
+func TestTick_SelfHeartbeatTransportFout_AlleenTellen(t *testing.T) {
+	disc := &mockDiscoverer{leader: "127.0.0.1:9080", renewLeaseOK: true}
+	registers := 0
+	loop := newTestLoop(disc, &mockAgent{id: "a1"})
+	loop.stopLeader = func() {}
+	loop.l = &mockLeader{}
+	loop.DoHeartbeat = errHeartbeat(errors.New("dial tcp: connection refused"))
+	loop.DoRegister = func(_, _, _ string, _ map[string]int, _ string) error {
+		registers++
+		return nil
+	}
+
+	loop.Tick()
+	loop.Tick()
+
+	if registers != 0 {
+		t.Fatalf("DoRegister %d keer geroepen op een transportfout, wil 0", registers)
+	}
+	if loop.selfBeatFails != 2 {
+		t.Errorf("selfBeatFails = %d, wil 2", loop.selfBeatFails)
+	}
+}
