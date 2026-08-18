@@ -280,6 +280,20 @@ func (a *Agent) handleRun(w hophttp.ResponseWriter, r *hophttp.Request) {
 			cores = 1
 		}
 		job.CPUShares = cores * 1024
+		// Zelfde principe voor geheugen: HopOS deelt partities uit in blokken
+		// van 2MB (de kooi-map werkt per blok), dus de POOL-kosten van een
+		// task zijn zijn memory_limit naar boven afgerond — een limit van 21MB
+		// kost een partitie van 22. Zonder deze afronding zei de admissie ja
+		// (som van limits ≤ pool) waar de runner nee moest zeggen (som van
+		// partities > pool), en pingpongde een onplaatsbare job in een
+		// hand-back-lus die de agent-poort verstikte en via de gemiste
+		// watchdog-pets de node velde (gemeten 17/18-08, LicheeRV). De
+		// afronding hier maakt de weigering wat hij hoort te zijn:
+		// beschikbaar < kosten → 503, vóór er ook maar iets geplaatst is.
+		const hopBlockBytes = 2 << 20
+		if job.MemoryLimit > 0 {
+			job.MemoryLimit = (job.MemoryLimit + hopBlockBytes - 1) / hopBlockBytes * hopBlockBytes
+		}
 	}
 	task := newTask(&job)
 
