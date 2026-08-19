@@ -320,6 +320,30 @@ func (a *Agent) handleRun(w hophttp.ResponseWriter, r *hophttp.Request) {
 		if job.MemoryLimit > 0 && usedMem+job.MemoryLimit > a.effectiveMemoryBytes() {
 			return false
 		}
+		// A sum is not a hole, and this is the other half of the 2 MB rounding
+		// above. That rounding made the sum agree with what a partition costs;
+		// it cannot see FRAGMENTATION. On a node whose pool is several regions
+		// the bytes can be free while no single piece is large enough, so the
+		// sum still says yes and the same hand-back loop returns — the loop that
+		// chokes the agent port and fells the node through missed watchdog pets.
+		//
+		// MEASURED 19-08 on a LicheeRV: pool 222 MB with 126 and 36 placed, so
+		// 60 MB free in holes of 28 and 32. A 36 MB job was admitted on the sum
+		// and refused by the placer every five seconds; the reported capacity
+		// flapped between 162 and 198 MB, and inside that window the node
+		// refused a different 28 MB job that did fit. The node fell over three
+		// times during that session.
+		//
+		// Not for a replace: there the predecessor still holds its partition at
+		// this point (it is stopped after admission, on purpose), so the largest
+		// hole is legitimately too small and the rolling update must proceed.
+		if job.MemoryLimit > 0 && !replace && job.Driver == types.DriverHop {
+			if pr, ok := a.hopRunner.(interface{ PoolLargest() uint64 }); ok {
+				if largest := pr.PoolLargest(); largest > 0 && job.MemoryLimit > largest {
+					return false
+				}
+			}
+		}
 		if replace {
 			// De voorgangers: markeren en verzamelen — het stoppen zelf komt
 			// ná de toelating (in de startvolgorde hieronder), zodat hun

@@ -121,3 +121,21 @@ type SlotManager interface {
 	// closed when the slot stops.
 	Logs(slot int) <-chan string
 }
+
+// PoolReporter is an optional extra on a SlotManager: the largest partition the
+// node can still place, right now.
+//
+// It exists because a sum is the wrong question. A node whose pool is several
+// regions can have 60 MB free with no 36 MB anywhere in one piece, and an
+// admission that adds up bytes then says yes to a job that can never be placed.
+// The task is admitted, the placement fails, the leader takes it back, and five
+// seconds later it happens again — MEASURED 19-08 on a LicheeRV: the node's
+// reported capacity flapped between 162 and 198 MB of 222, and inside that
+// window it refused a different 28 MB job that did fit.
+//
+// A driver that cannot answer simply does not implement it, and admission falls
+// back to the sum.
+type PoolReporter interface {
+	// PoolLargest is the largest single partition that would fit now, in bytes.
+	PoolLargest() uint64
+}

@@ -69,6 +69,17 @@ type HopRunner struct {
 	downloads chan struct{}
 }
 
+// PoolLargest reports the largest partition the node can still place, or 0 when
+// the node cannot answer. It forwards hopos.PoolReporter, which is optional on
+// purpose: a driver that does not know its own fragmentation says nothing and
+// admission keeps using the sum.
+func (r *HopRunner) PoolLargest() uint64 {
+	if pr, ok := r.sm.(hopos.PoolReporter); ok {
+		return pr.PoolLargest()
+	}
+	return 0
+}
+
 // NewHopRunner creates a runner on top of a SlotManager. nodeAttrs are
 // injected as ER_ATTR_* env vars, matching the other runners.
 func NewHopRunner(sm hopos.SlotManager, nodeAttrs map[string]string) *HopRunner {
