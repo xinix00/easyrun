@@ -61,7 +61,7 @@ Multi-node locally? Run hoplockserver and point every agent at it with `--lock`:
         process.go         # Process runner (start, stop, status, limits, volumes)
         process_linux.go   # Linux: cgroups, chroot
         process_darwin.go  # macOS: ulimit, sandbox
-        docker.go          # Docker runner (via docker CLI, no SDK)
+        docker.go          # Docker runner (Docker API over the socket, no CLI/SDK)
         hopos.go           # HopRunner: jobs onto HopOS slots (driver=hop)
         hopos_stream.go    # The one-phase start: stream the image into the
                            # slot, queued → downloading → running
@@ -87,14 +87,11 @@ Multi-node locally? Run hoplockserver and point every agent at it with `--lock`:
                            # interface HopOS implements, HopRunner consumes
     /config/
         config.go          # Loading the config file
-    /hophttp/              # The HTTP layer: one handler and client shape, with
-                           # net/http underneath on a host and leanhttp on a
-                           # HopOS node (see architecture.md). Own router, so
-                           # both platforms route identically.
-    /httputil/
+    /httputil/             # hop's HTTP glue on top of leanhttp (the one
+                           # transport on host AND node, see architecture.md)
         auth.go            # HMAC request auth (X-Hop-Auth): RequireHMAC + SignCall
-                           # (SignRequest stays in sign_host.go for the CLI, which
-                           # is host-only and holds a *http.Request)
+        client.go          # The outbound client: plain + TLS keep-alive pools
+        server.go          # The stop-lifecycle around leanhttp.Serve
         response.go        # JSON + SSE response helpers
 /docs                      # Documentation
 ```
@@ -143,8 +140,10 @@ go test -bench=. -benchmem ./internal/...
 
 - `github.com/xinix00/hoplock` — lease-based leader election (CAS over blob store)
 - `github.com/xinix00/hoplockserver` — client for the hoplockserver backend
-- `github.com/xinix00/lean` — our own building blocks: `leanhttp` (the node-side
-  HTTP client in `pkg/hophttp`) and `leanrand` (node and task IDs, backoff jitter)
+- `github.com/xinix00/lean` — our own building blocks: `leanhttp` (THE HTTP
+  layer, server and client, on host and node alike), `leanhttps`/`leantls`
+  (the https dialer in `pkg/httputil`) and `leanrand` (node and task IDs,
+  backoff jitter)
 
 Everything else is Go stdlib (the CLI uses stdlib `flag`, the config is
 `encoding/json`). That is on purpose and not a coincidence: HopOS' kernel

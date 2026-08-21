@@ -8,7 +8,7 @@ import (
 
 	"time"
 
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/hop/internal/types"
 )
@@ -27,32 +27,32 @@ func TestHandleRunReplaceVervangEigenTaakBinnenVolleNode(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// De node vol: welcome (600MB) + buurman (400MB) = precies de 1GB.
-	run := func(job types.Job, replace bool) *hophttp.Recorder {
+	run := func(job types.Job, replace bool) *leanhttp.Recorder {
 		body, _ := json.Marshal(job)
 		url := "/run"
 		if replace {
 			url += "?replace=1"
 		}
-		req := hophttp.NewRequest(hophttp.MethodPost, url, bytes.NewReader(body))
-		w := hophttp.NewRecorder()
+		req := leanhttp.NewRequest(leanhttp.MethodPost, url, bytes.NewReader(body))
+		w := leanhttp.NewRecorder()
 		agent.handleRun(w, req)
 		return w
 	}
-	if w := run(types.Job{Name: "welcome", Command: "v1", MemoryLimit: 600 << 20}, false); w.Code != hophttp.StatusAccepted {
+	if w := run(types.Job{Name: "welcome", Command: "v1", MemoryLimit: 600 << 20}, false); w.Code != leanhttp.StatusAccepted {
 		t.Fatalf("welcome v1: status %d", w.Code)
 	}
-	if w := run(types.Job{Name: "buurman", Command: "b", MemoryLimit: 400 << 20}, false); w.Code != hophttp.StatusAccepted {
+	if w := run(types.Job{Name: "buurman", Command: "b", MemoryLimit: 400 << 20}, false); w.Code != leanhttp.StatusAccepted {
 		t.Fatalf("buurman: status %d", w.Code)
 	}
 
 	// Zonder replace is er geen plek voor een tweede welcome — het oude
 	// gedrag, en precies wat de leader dan als errNoCapacity terugkrijgt.
-	if w := run(types.Job{Name: "welcome", Command: "v2", MemoryLimit: 600 << 20}, false); w.Code != hophttp.StatusServiceUnavailable {
+	if w := run(types.Job{Name: "welcome", Command: "v2", MemoryLimit: 600 << 20}, false); w.Code != leanhttp.StatusServiceUnavailable {
 		t.Fatalf("welcome v2 zonder replace: status %d, wil 503", w.Code)
 	}
 
 	// Mét replace past hij: de voorganger telt niet mee en wordt verruild.
-	if w := run(types.Job{Name: "welcome", Command: "v2", MemoryLimit: 600 << 20}, true); w.Code != hophttp.StatusAccepted {
+	if w := run(types.Job{Name: "welcome", Command: "v2", MemoryLimit: 600 << 20}, true); w.Code != leanhttp.StatusAccepted {
 		t.Fatalf("welcome v2 met replace: status %d, wil 202", w.Code)
 	}
 	time.Sleep(50 * time.Millisecond) // de achtergrond-swap (stop voorganger, start opvolger)
@@ -73,7 +73,7 @@ func TestHandleRunReplaceVervangEigenTaakBinnenVolleNode(t *testing.T) {
 
 	// En een opvolger die écht niet past (groter dan de node minus de buurman)
 	// wordt geweigerd MET de voorganger nog intact — de KeepsOld-invariant.
-	if w := run(types.Job{Name: "welcome", Command: "v3", MemoryLimit: 700 << 20}, true); w.Code != hophttp.StatusServiceUnavailable {
+	if w := run(types.Job{Name: "welcome", Command: "v3", MemoryLimit: 700 << 20}, true); w.Code != leanhttp.StatusServiceUnavailable {
 		t.Fatalf("welcome v3 (te groot) met replace: status %d, wil 503", w.Code)
 	}
 	nog := query(agent, func(s *agentState) int {

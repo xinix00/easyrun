@@ -76,6 +76,28 @@ Returns cluster overview (from placed data, no HTTP calls to agents):
 
 For per-job task details (state, pid, restarts), use `GET /v1/jobs/{name}/status`.
 
+### Cluster Tasks
+
+```
+GET /v1/tasks
+```
+
+Returns every task in the cluster, keyed by agent ID — one parallel,
+time-bounded fan-out over the agents:
+
+```json
+{
+  "tasks_by_agent": {
+    "node-a": [ { "id": "…", "job_name": "my-api", "state": "running", … } ],
+    "node-b": [ … ]
+  }
+}
+```
+
+For callers that need the whole picture (CLI status, finding which agent runs
+a task). Asking `GET /v1/jobs/{name}/status` per job would multiply the agent
+fan-out by the number of jobs.
+
 ### Agents
 
 ```

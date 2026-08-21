@@ -112,7 +112,7 @@ type PathsConfig struct {
 // RunnerConfig holds runner configuration
 type RunnerConfig struct {
 	Isolate      bool   `json:"isolate"`       // Enable process isolation (chroot on Linux, sandbox on macOS). Default: true
-	DockerSocket string `json:"docker_socket"` // Docker daemon socket path. Default: /tmp/hop/docker.sock
+	DockerSocket string `json:"docker_socket"` // Docker daemon socket path. Default: /var/run/docker.sock
 }
 
 // TimeoutsConfig holds timeout configuration. Durations are written the way Go

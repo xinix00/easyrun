@@ -200,8 +200,8 @@ func TestHopRunnerLifecycle(t *testing.T) {
 	if err := r.Stop(task); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
-	if st, _ := r.Status(task); st != types.TaskStopped {
-		t.Fatalf("Status after stop = %v, want stopped", st)
+	if st, _ := r.Status(task); st != types.TaskFailed {
+		t.Fatalf("Status after stop = %v, want failed/non-running", st)
 	}
 }
 

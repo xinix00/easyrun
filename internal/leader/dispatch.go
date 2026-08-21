@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // Sentinel errors returned by sendJobToAgent — lets callers distinguish why an agent rejected.
@@ -382,7 +382,11 @@ func (l *Leader) DeleteJobByName(name string) {
 		for _, agent := range l.GetAgents() {
 			l.deleteTaskOnAgent(agent, name)
 		}
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-time.After(200 * time.Millisecond):
+		case <-l.context().Done():
+			return
+		}
 	}
 
 	// Clear any stuck dispatching flag (defense against future leaks).
@@ -442,22 +446,22 @@ func (l *Leader) sendRunToAgent(agent *types.Agent, job *types.Job, replace bool
 		return err
 	}
 
-	call := hophttp.Call{Method: hophttp.MethodPost, URL: url, Body: body}
+	call := leanhttp.Call{Method: leanhttp.MethodPost, URL: url, Body: body}
 	call.SetHeader("Content-Type", "application/json")
 	httputil.SignCall(&call, l.apiKey) // signs method+path+body, so it goes last
 
-	resp, err := l.httpClient.Do(call)
+	resp, err := l.httpClient.DoContext(l.context(), call)
 	if err != nil {
 		return fmt.Errorf("failed to contact agent %s: %w", agent.ID, err)
 	}
 	defer resp.Body.Close()
 
 	switch resp.StatusCode {
-	case hophttp.StatusOK, hophttp.StatusCreated, hophttp.StatusAccepted:
+	case leanhttp.StatusOK, leanhttp.StatusCreated, leanhttp.StatusAccepted:
 		// success
-	case hophttp.StatusNotAcceptable: // 406: affinity mismatch — agent can never run this job
+	case leanhttp.StatusNotAcceptable: // 406: affinity mismatch — agent can never run this job
 		return errAffinityMismatch
-	case hophttp.StatusServiceUnavailable: // 503: capacity full — agent could run it later
+	case leanhttp.StatusServiceUnavailable: // 503: capacity full — agent could run it later
 		return errNoCapacity
 	default:
 		return fmt.Errorf("agent %s returned status %d", agent.ID, resp.StatusCode)
@@ -470,23 +474,23 @@ func (l *Leader) sendRunToAgent(agent *types.Agent, job *types.Job, replace bool
 // stopTasksOnAgent stops tasks for a job on a specific agent WITHOUT removing the job definition.
 // Used for preemption and rolling updates. Returns true if the stop was confirmed successful.
 func (l *Leader) stopTasksOnAgent(agent *types.Agent, jobName string) bool {
-	call := hophttp.Call{Method: hophttp.MethodPost, URL: fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobName)}
+	call := leanhttp.Call{Method: leanhttp.MethodPost, URL: fmt.Sprintf("%s/stop/%s", agent.Endpoint, jobName)}
 	httputil.SignCall(&call, l.apiKey)
-	resp, err := l.deleteClient.Do(call)
+	resp, err := l.deleteClient.DoContext(l.context(), call)
 	if err != nil {
 		log.Printf("Failed to stop %s on %s: %v", jobName, agent.ID, err)
 		return false
 	}
 	resp.Body.Close()
-	return resp.StatusCode == hophttp.StatusOK
+	return resp.StatusCode == leanhttp.StatusOK
 }
 
 // stopTaskByID stops a single specific task on an agent by task ID.
 // Used for rolling and blue-green updates to stop precise old instances.
 func (l *Leader) stopTaskByID(agent *types.Agent, taskID string) {
-	call := hophttp.Call{Method: hophttp.MethodPost, URL: fmt.Sprintf("%s/stop-task/%s", agent.Endpoint, taskID)}
+	call := leanhttp.Call{Method: leanhttp.MethodPost, URL: fmt.Sprintf("%s/stop-task/%s", agent.Endpoint, taskID)}
 	httputil.SignCall(&call, l.apiKey)
-	resp, err := l.deleteClient.Do(call)
+	resp, err := l.deleteClient.DoContext(l.context(), call)
 	if err != nil {
 		log.Printf("Failed to stop task %s on %s: %v", taskID, agent.ID, err)
 		return
@@ -496,9 +500,9 @@ func (l *Leader) stopTaskByID(agent *types.Agent, taskID string) {
 
 // deleteTaskOnAgent deletes a job on specific agent (by job name).
 func (l *Leader) deleteTaskOnAgent(agent *types.Agent, jobName string) {
-	call := hophttp.Call{Method: hophttp.MethodDelete, URL: fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobName)}
+	call := leanhttp.Call{Method: leanhttp.MethodDelete, URL: fmt.Sprintf("%s/delete/%s", agent.Endpoint, jobName)}
 	httputil.SignCall(&call, l.apiKey)
-	resp, err := l.deleteClient.Do(call)
+	resp, err := l.deleteClient.DoContext(l.context(), call)
 	if err != nil {
 		log.Printf("Failed to delete %s on %s: %v", jobName, agent.ID, err)
 		return

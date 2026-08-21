@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"testing"
 	"time"
 
@@ -91,6 +94,68 @@ func TestServerPortReleasedWithExplicitStop(t *testing.T) {
 		t.Fatalf("New server failed to bind to %s after explicit Stop: %v", addr, err)
 	}
 	conn.Close()
+}
+
+// TestServerStopClosesActiveEventStream guards the leadership-churn leak: an
+// idle SSE request has no natural return point, so Stop must cancel its handler
+// before waiting for graceful HTTP shutdown.
+func TestServerStopClosesActiveEventStream(t *testing.T) {
+	port := freePort(t)
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	store := newMockJobStore()
+	l := leader.New("local-agent", store, nil)
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	defer cancelLeader()
+	go l.Run(leaderCtx)
+	time.Sleep(10 * time.Millisecond)
+
+	srv := NewServer(l, addr, "", "test")
+	runErr := make(chan error, 1)
+	go func() { runErr <- srv.Run(context.Background()) }()
+	waitForPort(t, addr)
+
+	resp, err := http.Get("http://" + addr + "/v1/events")
+	if err != nil {
+		t.Fatalf("open event stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// The initial event proves the handler is subscribed and actively streaming.
+	if _, err := bufio.NewReader(resp.Body).ReadString('\n'); err != nil {
+		t.Fatalf("read initial event: %v", err)
+	}
+
+	stopped := make(chan struct{})
+	go func() {
+		srv.Stop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Stop waited on an idle event stream")
+	}
+
+	bodyDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, resp.Body)
+		bodyDone <- err
+	}()
+	select {
+	case <-bodyDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("event response body stayed open after Stop")
+	}
+
+	select {
+	case err := <-runErr:
+		if err != nil {
+			t.Fatalf("Run returned %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run stayed alive after Stop")
+	}
 }
 
 func freePort(t *testing.T) int {

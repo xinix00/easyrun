@@ -225,8 +225,8 @@ func TestChaos_TaskZombie(t *testing.T) {
 	task := newTask(job)
 	_ = agent.startJob(job, task)
 
-	// Runner reports task as stopped (process died) but task state says running
-	zombieRunner.tasks[task.ID].actualState = types.TaskStopped
+	// Runner reports task as failed (process died) but task state says running.
+	zombieRunner.tasks[task.ID].actualState = types.TaskFailed
 
 	// Monitor should detect mismatch and restart
 	agent.checkTasks()
@@ -274,7 +274,7 @@ func (r *zombieRunner) Status(task *types.Task) (types.TaskState, error) {
 	if t, ok := r.tasks[task.ID]; ok {
 		return t.actualState, nil // Return actual state (may differ from task.State)
 	}
-	return types.TaskStopped, nil
+	return types.TaskFailed, nil
 }
 
 func (r *zombieRunner) GetStdout(taskID string) *runner.LogBroadcaster { return nil }
@@ -402,7 +402,7 @@ func (r *crashingRunner) Status(task *types.Task) (types.TaskState, error) {
 	if t, ok := r.tasks[task.ID]; ok {
 		return t.state, nil
 	}
-	return types.TaskStopped, nil
+	return types.TaskFailed, nil
 }
 
 func (r *crashingRunner) GetStdout(taskID string) *runner.LogBroadcaster { return nil }

@@ -216,9 +216,19 @@ func (s *logStore) lookup(taskID string) (logPair, bool) {
 
 // PipeReader reads from reader and broadcasts to broadcaster until EOF
 func PipeReader(broadcaster *LogBroadcaster, reader io.Reader) {
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		_, _ = broadcaster.Write(append(scanner.Bytes(), '\n'))
+	buffered := bufio.NewReaderSize(reader, 64<<10)
+	for {
+		fragment, err := buffered.ReadSlice('\n')
+		if len(fragment) > 0 {
+			// ReadSlice geeft ErrBufferFull voor een lange regel. Schrijf het
+			// fragment meteen weg en blijf lezen: zo blijft de OS-pipe altijd
+			// draineren zonder de volledige regel in geheugen te hoeven houden.
+			_, _ = broadcaster.Write(fragment)
+		}
+		if err == nil || err == bufio.ErrBufferFull {
+			continue
+		}
+		break
 	}
 	// Reader closed (process exited), close broadcaster
 	broadcaster.Close()

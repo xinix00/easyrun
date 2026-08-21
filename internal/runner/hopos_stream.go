@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/hopos"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // Dit bestand is het one-phase startpad: de node streamt het image van de
@@ -62,26 +62,16 @@ func (r *HopRunner) SetProgressSink(s ProgressSink) {
 // terugkomt is de task tijdens de start gestopt en heeft Stop de opruiming;
 // bij een fout is alles al vrijgegeven behalve de runner-boekhouding (de
 // aanroeper released). Bij (true, nil) draait de app.
-func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores int, sharegroup string, poolCores int, env map[string]string) (started bool, err error) {
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	r.mu.Lock()
-	if r.stopping[task.ID] {
-		r.mu.Unlock()
-		cancel()
-		return false, nil
-	}
-	r.cancels[task.ID] = cancel
-	r.dones[task.ID] = done
-	r.mu.Unlock()
+func (r *HopRunner) runViaStream(ctx context.Context, cancel context.CancelFunc, done chan struct{}, job *types.Job, task *types.Task, slot, cores int, sharegroup string, poolCores int, env map[string]string) (started bool, err error) {
 	defer func() {
 		cancel()
-		r.mu.Lock()
-		delete(r.cancels, task.ID)
-		delete(r.dones, task.ID)
-		r.mu.Unlock()
 		close(done) // Stop wacht hierop: node-kant is nu opgeruimd of gearmd
 	}()
+	select {
+	case <-ctx.Done():
+		return false, nil
+	default:
+	}
 
 	// De downloadbeurt. Wachten is zichtbaar (de task staat "queued") en
 	// afbreekbaar (delete/stop tijdens de rij).
@@ -98,8 +88,8 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 	// die de verbinding aanneemt en dan zwijgt heeft nog geen byte gestuurd, dus
 	// de stilte-bewaking is er nog niet en zou de download eeuwig laten hangen.
 	// (Dit was net/http's ResponseHeaderTimeout op de gekloonde transport.)
-	call := hophttp.Call{
-		Method:        hophttp.MethodGet,
+	call := leanhttp.Call{
+		Method:        leanhttp.MethodGet,
 		URL:           art.URL,
 		HeaderTimeout: downloadHeaderTimeout,
 	}
@@ -120,7 +110,7 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 		return false, fmt.Errorf("hop driver: GET %s: %w", art.URL, err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != hophttp.StatusOK {
+	if resp.StatusCode != leanhttp.StatusOK {
 		r.release(task.ID)
 		return false, fmt.Errorf("hop driver: GET %s: HTTP %s", art.URL, resp.Status)
 	}
@@ -181,7 +171,11 @@ func (r *HopRunner) runViaStream(job *types.Job, task *types.Task, slot, cores i
 	// download-abort meer.
 	r.mu.Lock()
 	r.armed[task.ID] = true
+	stopping := r.stopping[task.ID]
 	r.mu.Unlock()
+	if stopping {
+		return false, nil
+	}
 	log.Printf("hop driver: slot %d: streamed %d MB and started (job %s)", slot, size>>20, job.Name)
 	return true, nil
 }

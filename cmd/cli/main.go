@@ -2,12 +2,10 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"sort"
 	"strconv"
@@ -16,6 +14,7 @@ import (
 
 	"github.com/xinix00/hop/internal/types"
 	"github.com/xinix00/hop/pkg/httputil"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 var (
@@ -69,6 +68,12 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// stringList collects a repeatable flag (flag.Value).
+type stringList []string
+
+func (s *stringList) String() string     { return strings.Join(*s, ",") }
+func (s *stringList) Set(v string) error { *s = append(*s, v); return nil }
+
 func runApply(args []string) error {
 	fs := flag.NewFlagSet("apply", flag.ExitOnError)
 	name := fs.String("name", "", "Job name (required)")
@@ -85,35 +90,13 @@ func runApply(args []string) error {
 	checkPort := fs.String("check-port", "", "Health check port name")
 	checkFailures := fs.Int("check-failures", 0, "Consecutive failures before unhealthy")
 
-	var envFlags, artifactFlags, affinityFlags, tagFlags []string
-	for i := 0; i < len(args); i++ {
-		switch {
-		case args[i] == "--env" || args[i] == "-env":
-			if i+1 < len(args) {
-				envFlags = append(envFlags, args[i+1])
-				args = append(args[:i], args[i+2:]...)
-				i--
-			}
-		case args[i] == "--artifact" || args[i] == "-artifact":
-			if i+1 < len(args) {
-				artifactFlags = append(artifactFlags, args[i+1])
-				args = append(args[:i], args[i+2:]...)
-				i--
-			}
-		case args[i] == "--affinity" || args[i] == "-affinity":
-			if i+1 < len(args) {
-				affinityFlags = append(affinityFlags, args[i+1])
-				args = append(args[:i], args[i+2:]...)
-				i--
-			}
-		case args[i] == "--tag" || args[i] == "-tag":
-			if i+1 < len(args) {
-				tagFlags = append(tagFlags, args[i+1])
-				args = append(args[:i], args[i+2:]...)
-				i--
-			}
-		}
-	}
+	// Repeatable flags via flag.Value — the flag package parses them in place,
+	// so no hand-rolled argument surgery is needed.
+	var envFlags, artifactFlags, affinityFlags, tagFlags stringList
+	fs.Var(&envFlags, "env", "Environment variable KEY=VALUE (repeatable; value may contain commas)")
+	fs.Var(&artifactFlags, "artifact", "Artifact URL, optionally prefixed with match constraints: k=v[,k=v]::URL (repeatable)")
+	fs.Var(&affinityFlags, "affinity", "Node affinity k=v[,k=v] (repeatable)")
+	fs.Var(&tagFlags, "tag", "Job tag k=v[,k=v] (repeatable)")
 
 	_ = fs.Parse(args)
 
@@ -145,8 +128,8 @@ func runApply(args []string) error {
 	}
 
 	switch result["status"] {
-	case "updating":
-		fmt.Printf("Job '%s' updating (policy=%s)\n", job.Name, result["policy"])
+	case "updated":
+		fmt.Printf("Job '%s' updated (policy=%s)\n", job.Name, result["policy"])
 	case "pending":
 		fmt.Printf("Job '%s' stored — pending dispatch: %s\n", job.Name, result["error"])
 	default:
@@ -199,7 +182,9 @@ func buildJob(name, command, image, driver string, count, cpu int, memory string
 	}
 
 	if len(envFlags) > 0 {
-		job.Env = parseKV(strings.Join(envFlags, ","))
+		// One pair per --env flag: values keep their commas and equals signs
+		// (the old comma-join silently split FOO=a,b into two half-pairs).
+		job.Env = parsePairs(envFlags)
 	}
 
 	if len(affinityFlags) > 0 {
@@ -265,6 +250,11 @@ func runStatus() error {
 	fmt.Println()
 
 	if len(jobs) > 0 {
+		// Eén cluster-brede /v1/tasks in plaats van één status-call per job:
+		// de oude vorm liet de leader per regel alle agents afvragen, dus J
+		// jobs kostten J fan-outs voor één statustabel.
+		phases := startPhases()
+
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
 		fmt.Fprintln(w, "NAME\tPLACED\tEXPECTED\tSTATUS")
 		for _, job := range jobs {
@@ -282,7 +272,7 @@ func runStatus() error {
 			}
 			// De startfase zichtbaar: een geplaatste task die nog downloadt is
 			// geen "OK, draait" — laat zien wat er gebeurt en hoe ver het is.
-			if s := startPhaseOf(job.Name); s != "" {
+			if s := phases[job.Name]; s != "" {
 				statusStr = s
 			}
 			expectedStr := fmt.Sprintf("%d", expected)
@@ -418,7 +408,7 @@ func runLogs(args []string) error {
 		return fmt.Errorf("failed to connect to leader: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != leanhttp.StatusOK {
 		return fmt.Errorf("leader returned status %d", resp.StatusCode)
 	}
 
@@ -432,86 +422,85 @@ func runLogs(args []string) error {
 	return scanner.Err()
 }
 
-// startPhaseOf geeft de startfase van een job als leesbare status ("queued",
-// "downloading 42% (12.6/30.4 MB)"), of "" als alle tasks voorbij de start
-// zijn. Best-effort: een onbereikbare status-endpoint maakt de regel niet stuk.
-func startPhaseOf(jobName string) string {
-	st, err := doRequest("GET", "/v1/jobs/"+jobName+"/status", nil)
+// clusterTasks haalt alle tasks van het cluster op in één call
+// (GET /v1/tasks: één parallelle fan-out op de leader).
+func clusterTasks() (map[string][]*types.Task, error) {
+	st, err := doRequest("GET", "/v1/tasks", nil)
 	if err != nil {
-		return ""
+		return nil, err
 	}
 	var status struct {
 		TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
 	}
 	if err := json.Unmarshal(st, &status); err != nil {
-		return ""
+		return nil, err
 	}
-	for _, tasks := range status.TasksByAgent {
+	return status.TasksByAgent, nil
+}
+
+// startPhases geeft per job de startfase als leesbare status ("QUEUED",
+// "DOWNLOADING 42% (12.6/30.4 MB)"); jobs waarvan alle tasks voorbij de start
+// zijn ontbreken. Best-effort: onbereikbaar = lege map, de tabel blijft heel.
+func startPhases() map[string]string {
+	tasksByAgent, err := clusterTasks()
+	if err != nil {
+		return nil
+	}
+	phases := make(map[string]string)
+	for _, tasks := range tasksByAgent {
 		for _, t := range tasks {
 			switch t.State {
 			case types.TaskQueued:
-				return "QUEUED"
+				if phases[t.JobName] == "" {
+					phases[t.JobName] = "QUEUED"
+				}
 			case types.TaskDownloading:
 				if t.ImageSize > 0 {
-					return fmt.Sprintf("DOWNLOADING %d%% (%.1f/%.1f MB)",
+					phases[t.JobName] = fmt.Sprintf("DOWNLOADING %d%% (%.1f/%.1f MB)",
 						t.Downloaded*100/t.ImageSize,
 						float64(t.Downloaded)/(1<<20), float64(t.ImageSize)/(1<<20))
+				} else {
+					phases[t.JobName] = "DOWNLOADING"
 				}
-				return "DOWNLOADING"
 			}
 		}
 	}
-	return ""
+	return phases
 }
 
-// findTaskAgent returns the ID of the agent running taskID, by scanning each
-// job's status (which reports tasks_by_agent, keyed by agent ID).
+// findTaskAgent returns the ID of the agent running taskID — one /v1/tasks
+// call instead of a per-job status scan.
 func findTaskAgent(taskID string) (string, error) {
-	jobsResp, err := doRequest("GET", "/v1/jobs", nil)
+	tasksByAgent, err := clusterTasks()
 	if err != nil {
 		return "", err
 	}
-	var jobs []struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(jobsResp, &jobs); err != nil {
-		return "", err
-	}
-	for _, j := range jobs {
-		st, err := doRequest("GET", "/v1/jobs/"+j.Name+"/status", nil)
-		if err != nil {
-			continue
-		}
-		var status struct {
-			TasksByAgent map[string][]*types.Task `json:"tasks_by_agent"`
-		}
-		if err := json.Unmarshal(st, &status); err != nil {
-			continue
-		}
-		for agentID, tasks := range status.TasksByAgent {
-			for _, t := range tasks {
-				if t.ID == taskID {
-					return agentID, nil
-				}
+	for agentID, tasks := range tasksByAgent {
+		for _, t := range tasks {
+			if t.ID == taskID {
+				return agentID, nil
 			}
 		}
 	}
 	return "", fmt.Errorf("task %s not found", taskID)
 }
 
+// client pools keep-alive connections over the handful of calls one CLI run
+// makes. leanhttp everywhere: the CLI talks the same transport as the cluster.
+var client = &httputil.Client{}
+
 // signedGet issues a signed GET to the leader and returns the live response
 // (the caller streams and closes the body). Used for log streaming, which
 // doRequest cannot do because it buffers the whole body.
-func signedGet(path string) (*http.Response, error) {
-	req, err := http.NewRequest("GET", fmt.Sprintf("http://%s%s", leaderAddr, path), nil)
-	if err != nil {
-		return nil, err
-	}
-	httputil.SignRequest(req, apiKey, nil)
-	return http.DefaultClient.Do(req)
+func signedGet(path string) (*leanhttp.Response, error) {
+	call := leanhttp.Call{URL: fmt.Sprintf("http://%s%s", leaderAddr, path)}
+	httputil.SignCall(&call, apiKey)
+	return client.Do(call)
 }
 
-// parseKV parses "k=v,k2=v2" into a map
+// parseKV parses "k=v,k2=v2" into a map. Only for values that are plain
+// tokens (tags, affinity); env values may contain commas and take one pair
+// per --env flag (see parsePairs).
 func parseKV(s string) map[string]string {
 	m := make(map[string]string)
 	for _, pair := range strings.Split(s, ",") {
@@ -522,28 +511,31 @@ func parseKV(s string) map[string]string {
 	return m
 }
 
-func doRequest(method, path string, body any) ([]byte, error) {
-	url := fmt.Sprintf("http://%s%s", leaderAddr, path)
+// parsePairs parses each element as ONE k=v pair, splitting on the first "="
+// only — so values keep their commas and equals signs intact.
+func parsePairs(pairs []string) map[string]string {
+	m := make(map[string]string)
+	for _, pair := range pairs {
+		if k, v, ok := strings.Cut(pair, "="); ok {
+			m[k] = v
+		}
+	}
+	return m
+}
 
-	var reqBody io.Reader
-	var bodyBytes []byte
+func doRequest(method, path string, body any) ([]byte, error) {
+	call := leanhttp.Call{Method: method, URL: fmt.Sprintf("http://%s%s", leaderAddr, path)}
 	if body != nil {
 		data, err := json.Marshal(body)
 		if err != nil {
 			return nil, err
 		}
-		bodyBytes = data
-		reqBody = bytes.NewReader(data)
+		call.Body = data
+		call.SetHeader("Content-Type", "application/json")
 	}
+	httputil.SignCall(&call, apiKey)
 
-	req, err := http.NewRequest(method, url, reqBody)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	httputil.SignRequest(req, apiKey, bodyBytes)
-
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(call)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to leader: %w", err)
 	}

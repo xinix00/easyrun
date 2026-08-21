@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/hop/pkg/httputil"
 )
 
 // ============== MOCK AGENT FOR INTEGRATION TESTS ==============
@@ -1039,7 +1039,7 @@ func TestFailoverAgentDiesTasksRescheduled(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &httputil.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1105,7 +1105,7 @@ func TestFailoverHeartbeatLearnsWrongPlacementCount(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &httputil.Client{Timeout: 100 * time.Millisecond})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -1154,7 +1154,7 @@ func TestRedispatchDoesNotCorruptJobCount(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &httputil.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1231,7 +1231,7 @@ func TestCountMinusOneNotRedispatchedOnAgentDeath(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &httputil.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1285,7 +1285,7 @@ func TestRedispatchCorrectInstanceCount(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &httputil.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1352,7 +1352,7 @@ func TestRedispatchWithStalePlacement(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &httputil.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 100 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1419,7 +1419,7 @@ func TestFailoverAgentDiesRealisticHeartbeat(t *testing.T) {
 	defer agentB.Close()
 
 	store := NewMockJobStore()
-	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &httputil.Client{Timeout: 100 * time.Millisecond})
 	leader.agentTimeout = 200 * time.Millisecond
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1512,7 +1512,7 @@ func TestFailoverFailedTasksNotRedispatched(t *testing.T) {
 	}
 	store.StoreJob(job)
 
-	leader := New("leader", store, &hophttp.Client{Timeout: 100 * time.Millisecond})
+	leader := New("leader", store, &httputil.Client{Timeout: 100 * time.Millisecond})
 	leader.SetSettleDelay(100 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1560,7 +1560,7 @@ func TestFailoverPreemptionStopFailureNoGhosts(t *testing.T) {
 	agentB.AddTasks("low", 3)
 
 	store := NewMockJobStore()
-	l := New("leader", store, &hophttp.Client{Timeout: 200 * time.Millisecond})
+	l := New("leader", store, &httputil.Client{Timeout: 200 * time.Millisecond})
 	l.SetSettleDelay(50 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1627,7 +1627,7 @@ func TestFailoverPreemptionStopSuccessReplacesGhosts(t *testing.T) {
 	agentB.AddTasks("low", 3)
 
 	store := NewMockJobStore()
-	l := New("leader", store, &hophttp.Client{Timeout: 200 * time.Millisecond})
+	l := New("leader", store, &httputil.Client{Timeout: 200 * time.Millisecond})
 	l.SetSettleDelay(50 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())

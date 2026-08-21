@@ -72,7 +72,7 @@ Pin to a specific node:
 All constraints must match (AND logic). The agent checks affinity and rejects with 406 if no match — the leader stays unaware of attributes.
 
 **Auto-detected attributes:** `node.id`, `node.arch` (arm64/amd64), `node.os` (linux/darwin/windows), `node.docker` (true/false).
-**Custom attributes:** configurable via `node.attributes` in config YAML.
+**Custom attributes:** configurable via `node.attributes` in the config file.
 
 ### UpdatePolicy
 
@@ -245,7 +245,7 @@ type Task struct {
     Image        string         // Docker image (only for driver=docker)
     Ports        map[string]int // Named port -> host port number
     Pid          int            // Process ID (Docker: 0; HopOS: primary slot index)
-    State        TaskState      // queued, downloading, running, stopping, stopped, failed
+    State        TaskState      // queued, downloading, running, stopping, failed
     StartedAt    time.Time
     RestartCount int            // Number of times restarted
     LastFailedAt time.Time      // Last crash time (drives the restart window)
@@ -274,8 +274,7 @@ type Task struct {
 | `queued` | Accepted, capacity already reserved, waiting for its turn to download |
 | `downloading` | The image is streaming in — progress in `Downloaded` / `ImageSize` |
 | `running` | Process is running |
-| `stopping` | Being stopped (shutdown, restart swap, preemption) |
-| `stopped` | Intentionally stopped |
+| `stopping` | Being stopped (shutdown, restart swap, preemption); then removed |
 | `failed` | Crashed, OOM killed, exceeded max restarts, etc |
 
 `queued` and `downloading` exist because a task used to be called `running`
@@ -284,8 +283,9 @@ minutes of "running, 0% cpu" while nothing runs at all. Only runners that
 stream fill the progress fields.
 
 **Every state counts against capacity.** Presence is the measure, never the
-state: a `queued`, `failed` or `stopped` task still occupies its share, and
-capacity is freed by *deleting the record* — never by filtering on state.
+state: a `queued` or `failed` task still occupies its share, and capacity is
+freed by *deleting the record* — never by filtering on state. There is no
+`stopped` state: an intentionally stopped task is absent.
 
 ## Agent
 

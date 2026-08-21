@@ -199,6 +199,15 @@ loop:
 	}
 }
 
+func TestPipeReaderDrainsLineLargerThanScannerLimit(t *testing.T) {
+	b := NewLogBroadcaster()
+	line := strings.Repeat("x", 256<<10) + "\n"
+	PipeReader(b, strings.NewReader(line))
+	if got := strings.Join(b.Tail(), ""); got != line {
+		t.Fatalf("lange regel niet volledig gedraind: got %d bytes, want %d", len(got), len(line))
+	}
+}
+
 func TestPipeReaderClosesOnEOF(t *testing.T) {
 	b := NewLogBroadcaster()
 	ch := b.Subscribe()

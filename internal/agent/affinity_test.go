@@ -9,7 +9,7 @@ import (
 
 	"time"
 
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/hop/internal/types"
 	"github.com/xinix00/hop/pkg/config"
@@ -165,13 +165,13 @@ func TestHandleRunAffinityMismatch(t *testing.T) {
 	}
 	body, _ := json.Marshal(job)
 
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusNotAcceptable {
-		t.Errorf("Status = %d, want %d (406 Not Acceptable)", w.Code, hophttp.StatusNotAcceptable)
+	if w.Code != leanhttp.StatusNotAcceptable {
+		t.Errorf("Status = %d, want %d (406 Not Acceptable)", w.Code, leanhttp.StatusNotAcceptable)
 	}
 
 	var resp map[string]string
@@ -198,13 +198,13 @@ func TestHandleRunAffinityMatch(t *testing.T) {
 	}
 	body, _ := json.Marshal(job)
 
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, leanhttp.StatusAccepted)
 	}
 }
 
@@ -224,13 +224,13 @@ func TestHandleRunNoAffinity(t *testing.T) {
 	}
 	body, _ := json.Marshal(job)
 
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status = %d, want %d (202 Accepted)", w.Code, leanhttp.StatusAccepted)
 	}
 }
 
@@ -256,14 +256,14 @@ func TestHandleRunAffinityBeforeCapacity(t *testing.T) {
 	}
 	body, _ := json.Marshal(job)
 
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
 	// Should be 406 (affinity), not 503 (capacity)
-	if w.Code != hophttp.StatusNotAcceptable {
-		t.Errorf("Status = %d, want %d (affinity should be checked before capacity)", w.Code, hophttp.StatusNotAcceptable)
+	if w.Code != leanhttp.StatusNotAcceptable {
+		t.Errorf("Status = %d, want %d (affinity should be checked before capacity)", w.Code, leanhttp.StatusNotAcceptable)
 	}
 }
 
@@ -384,8 +384,8 @@ func TestCapacityIncludesAttributes(t *testing.T) {
 	go agent.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/capacity", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/capacity", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleCapacity(w, req)
 

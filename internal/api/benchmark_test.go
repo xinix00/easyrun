@@ -13,7 +13,8 @@ import (
 
 	"github.com/xinix00/hop/internal/leader"
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/hop/pkg/httputil"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // mockAgentServer returns a test server that responds instantly to agent API calls.
@@ -54,13 +55,13 @@ func BenchmarkGetAgentsEndpoint(b *testing.B) {
 		l.Heartbeat(agentID, "", 0)
 	}
 
-	req := hophttp.NewRequest("GET", "/v1/agents", nil)
+	req := leanhttp.NewRequest("GET", "/v1/agents", nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		w := hophttp.NewRecorder()
+		w := leanhttp.NewRecorder()
 		server.mux.ServeHTTP(w, req)
 		if w.Code != 200 {
 			b.Fatalf("Expected 200, got %d", w.Code)
@@ -87,13 +88,13 @@ func BenchmarkGetJobsEndpoint(b *testing.B) {
 		store.jobs[job.Name] = job
 	}
 
-	req := hophttp.NewRequest("GET", "/v1/jobs", nil)
+	req := leanhttp.NewRequest("GET", "/v1/jobs", nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		w := hophttp.NewRecorder()
+		w := leanhttp.NewRecorder()
 		server.mux.ServeHTTP(w, req)
 		if w.Code != 200 {
 			b.Fatalf("Expected 200, got %d", w.Code)
@@ -107,7 +108,7 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 	defer ts.Close()
 
 	store := newMockJobStore()
-	l := leader.New("local-agent", store, &hophttp.Client{})
+	l := leader.New("local-agent", store, &httputil.Client{})
 	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -131,10 +132,10 @@ func BenchmarkPostJobEndpoint(b *testing.B) {
 			Count:   1,
 		}
 		body, _ := json.Marshal(job)
-		req := hophttp.NewRequest("POST", "/v1/jobs", bytes.NewReader(body))
+		req := leanhttp.NewRequest("POST", "/v1/jobs", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 
-		w := hophttp.NewRecorder()
+		w := leanhttp.NewRecorder()
 		server.mux.ServeHTTP(w, req)
 		if w.Code != 201 && w.Code != 200 {
 			b.Fatalf("Expected 201 or 200, got %d", w.Code)
@@ -168,10 +169,10 @@ func BenchmarkHeartbeatEndpoint(b *testing.B) {
 			"endpoint": fmt.Sprintf("http://10.0.0.%d:8080", i%100),
 		}
 		body, _ := json.Marshal(hb)
-		req := hophttp.NewRequest("POST", "/v1/heartbeat", bytes.NewReader(body))
+		req := leanhttp.NewRequest("POST", "/v1/heartbeat", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 
-		w := hophttp.NewRecorder()
+		w := leanhttp.NewRecorder()
 		server.mux.ServeHTTP(w, req)
 		if w.Code != 200 {
 			b.Fatalf("Expected 200, got %d", w.Code)
@@ -185,7 +186,7 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 	defer ts.Close()
 
 	store := newMockJobStore()
-	l := leader.New("local-agent", store, &hophttp.Client{})
+	l := leader.New("local-agent", store, &httputil.Client{})
 	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -199,13 +200,13 @@ func BenchmarkStatusEndpoint(b *testing.B) {
 		l.Heartbeat(agentID, "", 0)
 	}
 
-	req := hophttp.NewRequest("GET", "/v1/status", nil)
+	req := leanhttp.NewRequest("GET", "/v1/status", nil)
 
 	b.ResetTimer()
 	b.ReportAllocs()
 
 	for i := 0; i < b.N; i++ {
-		w := hophttp.NewRecorder()
+		w := leanhttp.NewRecorder()
 		server.mux.ServeHTTP(w, req)
 		if w.Code != 200 {
 			b.Fatalf("Expected 200, got %d", w.Code)
@@ -219,7 +220,7 @@ func BenchmarkConcurrentRequests(b *testing.B) {
 	defer ts.Close()
 
 	store := newMockJobStore()
-	l := leader.New("local-agent", store, &hophttp.Client{})
+	l := leader.New("local-agent", store, &httputil.Client{})
 	l.SetSettleDelay(time.Hour)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -239,17 +240,17 @@ func BenchmarkConcurrentRequests(b *testing.B) {
 	b.RunParallel(func(pb *testing.PB) {
 		i := 0
 		for pb.Next() {
-			var req *hophttp.Request
+			var req *leanhttp.Request
 			switch i % 3 {
 			case 0:
-				req = hophttp.NewRequest("GET", "/v1/agents", nil)
+				req = leanhttp.NewRequest("GET", "/v1/agents", nil)
 			case 1:
-				req = hophttp.NewRequest("GET", "/v1/jobs", nil)
+				req = leanhttp.NewRequest("GET", "/v1/jobs", nil)
 			case 2:
-				req = hophttp.NewRequest("GET", "/v1/status", nil)
+				req = leanhttp.NewRequest("GET", "/v1/status", nil)
 			}
 
-			w := hophttp.NewRecorder()
+			w := leanhttp.NewRecorder()
 			server.mux.ServeHTTP(w, req)
 			i++
 		}

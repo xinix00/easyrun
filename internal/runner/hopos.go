@@ -1,9 +1,11 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,10 +58,10 @@ type HopRunner struct {
 	// release, samen met de andere task-maps.
 	stopping map[string]bool
 
-	// Het one-phase startpad (hopos_stream.go): per lopende download een
-	// abort (cancels) en een klaar-signaal (dones) zodat Stop een download
-	// netjes afbreekt en wácht tot de node-kant opgeruimd is; armed zegt of
-	// de app het ooit tot draaien bracht (dan is Stop een echte sm.Stop).
+	// Het one-phase startpad (hopos_stream.go): voor iedere toegewezen slot
+	// bestaan cancel/done/armed al VOORDAT de slot zichtbaar wordt. Daardoor
+	// kan Stop nooit een half-gepubliceerde start voor een draaiende app aanzien
+	// en de slot vrijgeven terwijl StartStream er nog in schrijft.
 	// progress is de agent-sink voor queued→downloading; downloads is de
 	// beurt-semafoor (maxConcurrentDownloads).
 	progress  ProgressSink
@@ -145,12 +147,12 @@ func (r *HopRunner) run(job *types.Job, task *types.Task) error {
 		env[k] = v
 	}
 	for _, kv := range AttrEnvVars(r.nodeAttrs) {
-		if i := indexByte(kv, '='); i > 0 {
+		if i := strings.IndexByte(kv, '='); i > 0 {
 			env[kv[:i]] = kv[i+1:]
 		}
 	}
 	for _, kv := range PortEnvVars(task.Ports) {
-		if i := indexByte(kv, '='); i > 0 {
+		if i := strings.IndexByte(kv, '='); i > 0 {
 			env[kv[:i]] = kv[i+1:]
 		}
 	}
@@ -180,10 +182,13 @@ func (r *HopRunner) run(job *types.Job, task *types.Task) error {
 	// van jobs nooit meer images tegelijk laten downloaden dan er kooien zijn
 	// — en met StartStream landt elke download rechtstreeks in de eigen
 	// partitie i.p.v. de HOP-kern (geen core-0-OOM meer, gemeten 14-07).
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
 	r.mu.Lock()
 	slot, err := r.allocateSlotLocked(job.Tags["core-class"], allocCages)
 	if err != nil {
 		r.mu.Unlock()
+		cancel()
 		return err
 	}
 	// De kooi(en) van deze app als bezet vastleggen (SMP: primair + secundairen;
@@ -192,12 +197,15 @@ func (r *HopRunner) run(job *types.Job, task *types.Task) error {
 		r.inUse[c] = task.ID
 	}
 	r.slots[task.ID] = slot
+	r.cancels[task.ID] = cancel
+	r.dones[task.ID] = done
+	r.armed[task.ID] = false
 	r.mu.Unlock()
 
 	// One-phase start: de node streamt het image zélf de partitie in — de
 	// partitie draagt dan alleen de app, en de startfase is zichtbaar als
 	// queued→downloading. runViaStream geeft de slot bij een fout al vrij.
-	started, err := r.runViaStream(job, task, slot, appCores, sharegroup, poolCores, env)
+	started, err := r.runViaStream(ctx, cancel, done, job, task, slot, appCores, sharegroup, poolCores, env)
 	if err != nil {
 		return err
 	}
@@ -209,6 +217,18 @@ func (r *HopRunner) run(job *types.Job, task *types.Task) error {
 		// task.Pid-fallback de task van een ANDER die de slot al had.
 		return nil
 	}
+
+	// Publiceer de draaiende task atomair t.o.v. Stop. Als Stop na het armen maar
+	// vóór deze stap begon, laat die de app stoppen en registreren wij geen ghost
+	// die naar een inmiddels vrijgegeven slot wijst.
+	r.mu.Lock()
+	if r.stopping[task.ID] || r.slots[task.ID] != slot {
+		r.mu.Unlock()
+		return nil
+	}
+	task.Pid = slot
+	logLines := r.sm.Logs(slot)
+	r.mu.Unlock()
 
 	// De log van deze task staat er al (Run zette hem klaar voordat er iets kon
 	// falen); hier komt alleen de slot-pomp erbij.
@@ -225,12 +245,10 @@ func (r *HopRunner) run(job *types.Job, task *types.Task) error {
 	}
 
 	go func() {
-		for line := range r.sm.Logs(slot) {
+		for line := range logLines {
 			_, _ = stdout.Write([]byte(line))
 		}
 	}()
-
-	task.Pid = slot
 	return nil
 }
 
@@ -249,23 +267,19 @@ func placementErr(err error) error {
 func (r *HopRunner) Stop(task *types.Task) error {
 	r.mu.Lock()
 	slot, ok := r.slots[task.ID]
-	var cancel func()
-	var done chan struct{}
-	if ok {
-		// Vlag vóór de (blokkerende) sm.Stop: een runViaStream die nog moet
-		// beginnen ziet 'm en stapt er graceful uit — Stop ruimt op.
-		r.stopping[task.ID] = true
-		cancel, done = r.cancels[task.ID], r.dones[task.ID]
-	}
-	r.mu.Unlock()
 	if !ok {
-		if task.Pid > 0 {
-			slot = task.Pid
-		} else {
-			return nil
-		}
+		r.mu.Unlock()
+		return nil
 	}
+	// Vlag vóór de (blokkerende) sm.Stop: een runViaStream die nog moet
+	// beginnen ziet 'm en stapt er graceful uit — Stop ruimt op.
+	r.stopping[task.ID] = true
+	cancel, done := r.cancels[task.ID], r.dones[task.ID]
+	r.mu.Unlock()
+	return r.stopOwned(task.ID, slot, cancel, done)
+}
 
+func (r *HopRunner) stopOwned(taskID string, slot int, cancel func(), done chan struct{}) error {
 	// Loopt er nog een stream-download, breek hem dan af en wacht tot de
 	// node-kant klaar is: StartStream ruimt zijn eigen allocaties op zijn
 	// foutpad op, en pas als dat gebeurd is weten we of er iets gearmd is.
@@ -276,21 +290,29 @@ func (r *HopRunner) Stop(task *types.Task) error {
 		select {
 		case <-done:
 		case <-time.After(2 * downloadStallTimeout):
-			log.Printf("hop driver: task %.8s: stream did not wind down after cancel — stopping the slot anyway", task.ID)
+			// StartStream kan nog in de partitie schrijven. Vrijgeven maakt de
+			// slot dan direct herbruikbaar en corrumpeert de volgende task. Houd
+			// ownership daarom in de runner vast als quarantaine.
+			return fmt.Errorf("hop driver: task %.8s: stream did not wind down after cancel; slot %d quarantined", taskID, slot)
 		}
 	}
 	armed := true
 	if cancel != nil {
 		r.mu.RLock()
-		armed = r.armed[task.ID]
+		armed = r.armed[taskID]
 		r.mu.RUnlock()
 	}
 	var err error
 	if armed {
 		err = r.sm.Stop(slot, hopStopTimeout)
 	}
-	r.release(task.ID)
-	return err
+	if err != nil {
+		// De driver kon release niet bevestigen. Laat de slot geclaimd zodat
+		// niemand hem kan hergebruiken op basis van een onbevestigde release.
+		return err
+	}
+	r.release(taskID)
+	return nil
 }
 
 // Status maps slot state onto task state.
@@ -314,7 +336,7 @@ func (r *HopRunner) Status(task *types.Task) (types.TaskState, error) {
 	case s.CoreOn:
 		return types.TaskRunning, nil
 	case s.App == hopos.SlotExited && s.ExitCode == 0:
-		return types.TaskStopped, nil
+		return types.TaskFailed, nil
 	default:
 		// The WHY, once: a stage-2 fault (cage violation / hard-kill, with
 		// ESR/FAR from the EL2 vectors) or a nonzero exit. Without this the
@@ -412,6 +434,9 @@ func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error)
 func (r *HopRunner) release(taskID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if cancel := r.cancels[taskID]; cancel != nil {
+		cancel()
+	}
 	// Free every core held by this task (an SMP app holds several).
 	for slot, id := range r.inUse {
 		if id == taskID {
@@ -421,16 +446,9 @@ func (r *HopRunner) release(taskID string) {
 	delete(r.slots, taskID)
 	delete(r.faultLogged, taskID)
 	delete(r.stopping, taskID)
+	delete(r.cancels, taskID)
+	delete(r.dones, taskID)
 	delete(r.armed, taskID)
 	// De logs gaan niet weg maar met pensioen: nog logRetention opvraagbaar.
 	r.logs.retire(taskID)
-}
-
-func indexByte(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
 }

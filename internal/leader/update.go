@@ -21,13 +21,17 @@ var (
 // lockJob atomically sets the dispatching flag for a job.
 // Returns false if the job is already being dispatched or updated.
 func (l *Leader) lockJob(name string) bool {
-	return !query(l, func(s *leaderState) bool {
+	if l.stopped() {
+		return false
+	}
+	alreadyLocked := query(l, func(s *leaderState) bool {
 		if s.dispatching[name] {
 			return true
 		}
 		s.dispatching[name] = true
 		return false
 	})
+	return !alreadyLocked && !l.stopped()
 }
 
 // unlockJob clears the dispatching flag for a job.
@@ -53,6 +57,14 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 	if policy == "" {
 		policy = types.UpdateRolling
 	}
+	// Validate before acquiring dispatching[name]. Returning from the switch's
+	// default after lockJob used to strand the lock forever, causing every later
+	// update to return 409 and every reconcile to skip this job.
+	switch policy {
+	case types.UpdateRolling, types.UpdateRecreate, types.UpdateBlueGreen:
+	default:
+		return fmt.Errorf("unknown update policy: %s", policy)
+	}
 
 	if !l.lockJob(newJob.Name) {
 		return fmt.Errorf("%w: %s", ErrJobLocked, newJob.Name)
@@ -74,8 +86,6 @@ func (l *Leader) UpdateJob(newJob *types.Job) error {
 		err = l.updateRecreate(newJob)
 	case types.UpdateBlueGreen:
 		err = l.updateBlueGreen(newJob)
-	default:
-		return fmt.Errorf("unknown update policy: %s", policy)
 	}
 
 	if err == nil {
@@ -142,7 +152,14 @@ func (l *Leader) updateRolling(job *types.Job) error {
 		l.eventBus.Notify("job:" + job.Name)
 
 		if i < count-1 {
-			time.Sleep(RollingUpdateDelay)
+			timer := time.NewTimer(RollingUpdateDelay)
+			select {
+			case <-timer.C:
+			case <-l.context().Done():
+				timer.Stop()
+				l.unlockJob(job.Name)
+				return l.context().Err()
+			}
 		}
 	}
 
@@ -242,23 +259,13 @@ type taskRef struct {
 	taskID  string
 }
 
-// snapshotJobTasks fetches all currently running task IDs for a job from all agents.
-// Used by rolling and blue-green updates to know which tasks to stop.
+// snapshotJobTasks fetches all currently running task IDs for a job from all
+// agents. Used by rolling and blue-green updates to know which tasks to stop.
+// GetJobStatus already resolves the placed agents, so its second return value
+// IS the agent list — querying placed again here would just do the same work
+// twice.
 func (l *Leader) snapshotJobTasks(jobName string) []taskRef {
-	// Only query agents that have this job placed.
-	agents := query(l, func(s *leaderState) []*types.Agent {
-		var result []*types.Agent
-		for agentID, jobs := range s.placed {
-			if jobs[jobName] > 0 {
-				if a := s.agents[agentID]; a != nil {
-					result = append(result, a)
-				}
-			}
-		}
-		return result
-	})
-
-	tasksByAgent, _ := l.GetJobStatus(jobName)
+	tasksByAgent, agents := l.GetJobStatus(jobName)
 
 	var refs []taskRef
 	for _, agent := range agents {

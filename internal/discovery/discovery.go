@@ -186,11 +186,13 @@ func (s *FileStateStore) Save(_ context.Context, snapshot []byte) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("state file: mkdir %s: %w", dir, err)
 	}
-	tmp, err := os.CreateTemp(dir, ".state-*.tmp")
+	// A fixed sibling cannot accumulate across crashes: the next save simply
+	// truncates the one interrupted predecessor.
+	tmpName := s.path + ".tmp"
+	tmp, err := os.OpenFile(tmpName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("state file: temp: %w", err)
 	}
-	tmpName := tmp.Name()
 	defer os.Remove(tmpName) // no-op once the rename succeeds
 	if _, err := tmp.Write(snapshot); err != nil {
 		tmp.Close()

@@ -6,40 +6,40 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // signed builds a request carrying the signature a client would have put on it.
 // It signs through SignCall, so the test proves client and server agree rather
 // than that the server agrees with itself.
-func signed(t *testing.T, key, method, path string, body []byte) *hophttp.Request {
+func signed(t *testing.T, key, method, path string, body []byte) *leanhttp.Request {
 	t.Helper()
-	call := hophttp.Call{Method: method, URL: "http://node" + path, Body: body}
+	call := leanhttp.Call{Method: method, URL: "http://node" + path, Body: body}
 	SignCall(&call, key)
 
-	req := hophttp.NewRequest(method, path, bytes.NewReader(body))
+	req := leanhttp.NewRequest(method, path, bytes.NewReader(body))
 	if sig := call.Header.Get(AuthHeader); sig != "" {
 		req.Header.Set(AuthHeader, sig)
 	}
 	return req
 }
 
-func okHandler(ran *bool) hophttp.Handler {
-	return func(w hophttp.ResponseWriter, r *hophttp.Request) {
+func okHandler(ran *bool) leanhttp.Handler {
+	return func(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 		if ran != nil {
 			*ran = true
 		}
-		w.WriteHeader(hophttp.StatusOK)
+		w.WriteHeader(leanhttp.StatusOK)
 	}
 }
 
 func TestRequireHMAC_EmptyKeyPassesThrough(t *testing.T) {
 	handler := RequireHMAC("", okHandler(nil))
 
-	rec := hophttp.NewRecorder()
-	handler(rec, hophttp.NewRequest("GET", "/", nil))
+	rec := leanhttp.NewRecorder()
+	handler(rec, leanhttp.NewRequest("GET", "/", nil))
 
-	if rec.Code != hophttp.StatusOK {
+	if rec.Code != leanhttp.StatusOK {
 		t.Errorf("expected 200, got %d", rec.Code)
 	}
 }
@@ -47,10 +47,10 @@ func TestRequireHMAC_EmptyKeyPassesThrough(t *testing.T) {
 func TestRequireHMAC_ValidSignature(t *testing.T) {
 	handler := RequireHMAC("secret123", okHandler(nil))
 
-	rec := hophttp.NewRecorder()
+	rec := leanhttp.NewRecorder()
 	handler(rec, signed(t, "secret123", "GET", "/v1/jobs", nil))
 
-	if rec.Code != hophttp.StatusOK {
+	if rec.Code != leanhttp.StatusOK {
 		t.Errorf("expected 200, got %d", rec.Code)
 	}
 }
@@ -58,15 +58,15 @@ func TestRequireHMAC_ValidSignature(t *testing.T) {
 func TestRequireHMAC_ValidSignatureWithBody(t *testing.T) {
 	body := []byte(`{"name":"api","count":3}`)
 	var got []byte
-	handler := RequireHMAC("secret123", func(w hophttp.ResponseWriter, r *hophttp.Request) {
+	handler := RequireHMAC("secret123", func(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 		got, _ = io.ReadAll(r.Body) // body must survive the middleware
-		w.WriteHeader(hophttp.StatusOK)
+		w.WriteHeader(leanhttp.StatusOK)
 	})
 
-	rec := hophttp.NewRecorder()
+	rec := leanhttp.NewRecorder()
 	handler(rec, signed(t, "secret123", "POST", "/v1/jobs", body))
 
-	if rec.Code != hophttp.StatusOK {
+	if rec.Code != leanhttp.StatusOK {
 		t.Fatalf("expected 200, got %d", rec.Code)
 	}
 	if !bytes.Equal(got, body) {
@@ -80,10 +80,10 @@ func TestRequireHMAC_BodyTooLarge(t *testing.T) {
 
 	// Oversized body with no valid signature: the cap must trip during the
 	// read, before auth is even checked — that is the pre-auth DoS guard.
-	rec := hophttp.NewRecorder()
-	handler(rec, hophttp.NewRequest("POST", "/v1/jobs", strings.NewReader(strings.Repeat("a", maxBodyBytes+1))))
+	rec := leanhttp.NewRecorder()
+	handler(rec, leanhttp.NewRequest("POST", "/v1/jobs", strings.NewReader(strings.Repeat("a", maxBodyBytes+1))))
 
-	if rec.Code != hophttp.StatusRequestEntityTooLarge {
+	if rec.Code != leanhttp.StatusRequestEntityTooLarge {
 		t.Fatalf("expected 413, got %d", rec.Code)
 	}
 	if called {
@@ -98,10 +98,10 @@ func TestRequireHMAC_BodyAtTheCap(t *testing.T) {
 	body := bytes.Repeat([]byte("a"), maxBodyBytes)
 	handler := RequireHMAC("secret123", okHandler(nil))
 
-	rec := hophttp.NewRecorder()
+	rec := leanhttp.NewRecorder()
 	handler(rec, signed(t, "secret123", "POST", "/v1/jobs", body))
 
-	if rec.Code != hophttp.StatusOK {
+	if rec.Code != leanhttp.StatusOK {
 		t.Errorf("a body of exactly maxBodyBytes got %d", rec.Code)
 	}
 }
@@ -109,10 +109,10 @@ func TestRequireHMAC_BodyAtTheCap(t *testing.T) {
 func TestRequireHMAC_MissingSignature(t *testing.T) {
 	handler := RequireHMAC("secret123", okHandler(nil))
 
-	rec := hophttp.NewRecorder()
-	handler(rec, hophttp.NewRequest("GET", "/v1/jobs", nil))
+	rec := leanhttp.NewRecorder()
+	handler(rec, leanhttp.NewRequest("GET", "/v1/jobs", nil))
 
-	if rec.Code != hophttp.StatusUnauthorized {
+	if rec.Code != leanhttp.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rec.Code)
 	}
 }
@@ -120,10 +120,10 @@ func TestRequireHMAC_MissingSignature(t *testing.T) {
 func TestRequireHMAC_WrongKey(t *testing.T) {
 	handler := RequireHMAC("secret123", okHandler(nil))
 
-	rec := hophttp.NewRecorder()
+	rec := leanhttp.NewRecorder()
 	handler(rec, signed(t, "wrongkey", "GET", "/v1/jobs", nil))
 
-	if rec.Code != hophttp.StatusUnauthorized {
+	if rec.Code != leanhttp.StatusUnauthorized {
 		t.Errorf("expected 401, got %d", rec.Code)
 	}
 }
@@ -136,10 +136,10 @@ func TestRequireHMAC_TamperedPath(t *testing.T) {
 	req.Path = "/v1/agents/node-1"
 	req.Method = "DELETE"
 
-	rec := hophttp.NewRecorder()
+	rec := leanhttp.NewRecorder()
 	handler(rec, req)
 
-	if rec.Code != hophttp.StatusUnauthorized {
+	if rec.Code != leanhttp.StatusUnauthorized {
 		t.Errorf("expected 401 for path/method tamper, got %d", rec.Code)
 	}
 }
@@ -150,10 +150,10 @@ func TestRequireHMAC_TamperedBody(t *testing.T) {
 	req := signed(t, "secret123", "POST", "/v1/jobs", []byte(`{"count":1}`))
 	req.Body = strings.NewReader(`{"count":9999}`) // swap body after signing
 
-	rec := hophttp.NewRecorder()
+	rec := leanhttp.NewRecorder()
 	handler(rec, req)
 
-	if rec.Code != hophttp.StatusUnauthorized {
+	if rec.Code != leanhttp.StatusUnauthorized {
 		t.Errorf("expected 401 for body tamper, got %d", rec.Code)
 	}
 }
@@ -163,7 +163,7 @@ func TestRequireHMAC_TamperedBody(t *testing.T) {
 // differed from the ones on the wire was a caller's mistake waiting to happen.
 // SignCall reads Call.Body, so the two cannot disagree.
 func TestSignCallSignsWhatItSends(t *testing.T) {
-	call := hophttp.Call{Method: "POST", URL: "http://node:7878/v1/jobs?dry=1", Body: []byte("spec")}
+	call := leanhttp.Call{Method: "POST", URL: "http://node:7878/v1/jobs?dry=1", Body: []byte("spec")}
 	SignCall(&call, "k")
 
 	// The query string is deliberately NOT part of the signature (the canonical
@@ -174,7 +174,7 @@ func TestSignCallSignsWhatItSends(t *testing.T) {
 	}
 
 	// An empty key means unauthenticated mode: no header at all.
-	plain := hophttp.Call{Method: "POST", URL: "http://node/v1/jobs"}
+	plain := leanhttp.Call{Method: "POST", URL: "http://node/v1/jobs"}
 	SignCall(&plain, "")
 	if plain.Header.Get(AuthHeader) != "" {
 		t.Error("an empty key must not sign")

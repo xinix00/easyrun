@@ -8,7 +8,7 @@ import (
 	"io"
 	"net/url"
 
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // maxBodyBytes caps the request body RequireHMAC buffers to verify the
@@ -16,7 +16,15 @@ import (
 // covers sha256(body) — there is no key on the wire to check first), so this
 // is the guard against a pre-auth memory DoS. Set far above any real payload
 // (a job spec is kilobytes); it only trips on an absurd body, returning 413.
-const maxBodyBytes = 8 << 20 // 8 MiB
+//
+// It MUST stay strictly below leanhttp's own 1 MiB server cap. That cap rejects
+// an oversized body before this handler ever runs, so a value at or above it
+// makes this guard unreachable in production and impossible to test at all:
+// leanhttp.NewRequest refuses to build a body over the server limit (and
+// refuses an unsized reader too), so there is no input that reaches here.
+// Measured 21-08: at 8 MiB TestRequireHMAC_BodyTooLarge panicked in the
+// recorder instead of asserting a 413.
+const maxBodyBytes = 512 << 10 // 512 KiB — under leanhttp's 1 MiB, see above
 
 // AuthHeader carries the request signature. The shared key never travels on
 // the wire; only this HMAC does.
@@ -47,13 +55,13 @@ func Sign(key, method, path string, body []byte) string {
 // It signs call.Body rather than taking the bytes as a separate argument (which
 // is what the net/http version did): the signature covers what is actually
 // sent, so the two can no longer disagree.
-func SignCall(call *hophttp.Call, key string) {
+func SignCall(call *leanhttp.Call, key string) {
 	if key == "" {
 		return
 	}
 	method := call.Method
 	if method == "" {
-		method = hophttp.MethodGet
+		method = leanhttp.MethodGet
 	}
 	path := call.URL
 	if u, err := url.Parse(call.URL); err == nil {
@@ -71,11 +79,11 @@ func SignCall(call *hophttp.Call, key string) {
 // and the key itself never appears on the wire, so it cannot be lifted and
 // reused to forge new requests. (A verbatim replay of a captured request is
 // still possible; see SECURITY.md for the threat model.)
-func RequireHMAC(key string, next hophttp.Handler) hophttp.Handler {
+func RequireHMAC(key string, next leanhttp.Handler) leanhttp.Handler {
 	if key == "" {
 		return next
 	}
-	return func(w hophttp.ResponseWriter, r *hophttp.Request) {
+	return func(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 		var body []byte
 		if r.Body != nil {
 			// One byte past the cap, so a body that is exactly too large is
@@ -85,10 +93,10 @@ func RequireHMAC(key string, next hophttp.Handler) hophttp.Handler {
 			b, err := io.ReadAll(io.LimitReader(r.Body, maxBodyBytes+1))
 			switch {
 			case err != nil:
-				WriteError(w, hophttp.StatusBadRequest, "failed to read body")
+				WriteError(w, leanhttp.StatusBadRequest, "failed to read body")
 				return
 			case len(b) > maxBodyBytes:
-				WriteError(w, hophttp.StatusRequestEntityTooLarge, "request body too large")
+				WriteError(w, leanhttp.StatusRequestEntityTooLarge, "request body too large")
 				return
 			}
 			body = b
@@ -98,7 +106,7 @@ func RequireHMAC(key string, next hophttp.Handler) hophttp.Handler {
 		got := r.Header.Get(AuthHeader)
 		// Constant-time compare — avoids a timing side channel on the signature.
 		if !hmac.Equal([]byte(expected), []byte(got)) {
-			WriteError(w, hophttp.StatusUnauthorized, "unauthorized")
+			WriteError(w, leanhttp.StatusUnauthorized, "unauthorized")
 			return
 		}
 		next(w, r)

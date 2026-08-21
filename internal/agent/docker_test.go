@@ -10,7 +10,7 @@ import (
 
 	"time"
 
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/hop/internal/types"
 )
@@ -221,13 +221,13 @@ func TestHandleRunDockerJob(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusAccepted)
 	}
 
 	// Wait for async job start
@@ -384,9 +384,9 @@ func TestHandleLogsDockerTask(t *testing.T) {
 
 	// Create request for log streaming
 	reqCtx, reqCancel := context.WithCancel(context.Background())
-	req := hophttp.NewRequest(hophttp.MethodGet, "/logs/"+task.ID+"/stdout", nil)
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/logs/"+task.ID+"/stdout", nil)
 	req = req.WithContext(reqCtx)
-	w := hophttp.NewRecorder()
+	w := leanhttp.NewRecorder()
 
 	done := make(chan struct{})
 	go func() {

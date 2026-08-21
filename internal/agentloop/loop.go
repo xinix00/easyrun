@@ -13,8 +13,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/hop/internal/types"
 	"github.com/xinix00/hop/pkg/config"
@@ -84,19 +84,44 @@ func (s *Loop) BecomeLeaderNow() bool {
 // terug. Bedoeld als goroutine; vervangt de identieke tickers die cmd/agent
 // en agentboot elk zelf hadden.
 func (s *Loop) Run(done <-chan struct{}, interval time.Duration) {
+	// Do not acquire a lease or start a local leader after the owner has already
+	// cancelled this loop.
+	select {
+	case <-done:
+		s.stepDown(true)
+		return
+	default:
+	}
 	s.Tick()
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
 		select {
 		case <-done:
-			if s.stopLeader != nil {
-				s.Disc.ReleaseLeadership()
-			}
+			s.stepDown(true)
 			return
 		case <-t.C:
 			s.Tick()
 		}
+	}
+}
+
+// stepDown stops the in-process leader before releasing its external lease.
+// Releasing first leaves a window in which a successor can acquire the lease
+// while this process is still serving as leader. Clearing all cached state also
+// makes repeated cancellation/step-down calls harmless.
+func (s *Loop) stepDown(release bool) {
+	stop := s.stopLeader
+	s.stopLeader = nil
+	s.l = nil
+	s.registered = false
+	s.lastLeaderAddr = ""
+	if stop == nil {
+		return
+	}
+	stop()
+	if release {
+		s.Disc.ReleaseLeadership()
 	}
 }
 
@@ -142,11 +167,7 @@ func (s *Loop) Tick() {
 			// replaced, not just cut off. Step down NOW, regardless of connected
 			// agents, or we would be a second leader writing to the same cluster.
 			log.Println("Lost leadership: lock store reports another leader (stepping down)")
-			s.registered = false
-			s.lastLeaderAddr = ""
-			s.stopLeader()
-			s.stopLeader = nil
-			s.l = nil
+			s.stepDown(false)
 			return
 		default:
 			// Store unreachable (connectivity blip): keep leading while we still
@@ -158,11 +179,7 @@ func (s *Loop) Tick() {
 				log.Printf("Lock store unreachable but %d agents still connected, staying leader", len(agents))
 			} else {
 				log.Println("Lost leadership (lock store unreachable + no agents)")
-				s.registered = false
-				s.lastLeaderAddr = ""
-				s.stopLeader()
-				s.stopLeader = nil
-				s.l = nil
+				s.stepDown(false)
 				return
 			}
 		}
@@ -240,15 +257,15 @@ func (s *Loop) Tick() {
 // One client for the whole loop, not one per call: an agent knocks on its
 // leader's door every second, so the pooled connection is the difference
 // between one handshake and one per heartbeat.
-var httpClient = &hophttp.Client{Timeout: 5 * time.Second}
+var httpClient = &httputil.Client{Timeout: 5 * time.Second}
 
 // ErrNotRegistered: de leader kent deze agent niet (herstart) — herregistreren.
 var ErrNotRegistered = errors.New("not registered with leader")
 
 // postJSON sends a POST request with JSON body and API key to the leader.
-func postJSON(path string, payload any, apiKey string) (*hophttp.Response, error) {
+func postJSON(path string, payload any, apiKey string) (*leanhttp.Response, error) {
 	body, _ := json.Marshal(payload)
-	call := hophttp.Call{Method: hophttp.MethodPost, URL: path, Body: body}
+	call := leanhttp.Call{Method: leanhttp.MethodPost, URL: path, Body: body}
 	call.SetHeader("Content-Type", "application/json")
 	httputil.SignCall(&call, apiKey) // signs method+path+body, so it goes last
 	return httpClient.Do(call)
@@ -263,7 +280,7 @@ func Register(leaderAddr, agentID, agentEndpoint, version string, placed map[str
 		return err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != hophttp.StatusOK {
+	if resp.StatusCode != leanhttp.StatusOK {
 		return fmt.Errorf("leader returned %d", resp.StatusCode)
 	}
 	return nil
@@ -285,10 +302,10 @@ func Heartbeat(leaderAddr, agentID, agentEndpoint, version, apiKey string, tempM
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode == hophttp.StatusNotFound {
+	if resp.StatusCode == leanhttp.StatusNotFound {
 		return ErrNotRegistered
 	}
-	if resp.StatusCode != hophttp.StatusOK {
+	if resp.StatusCode != leanhttp.StatusOK {
 		return fmt.Errorf("leader returned %d", resp.StatusCode)
 	}
 	return nil

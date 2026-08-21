@@ -21,7 +21,6 @@ const (
 	TaskRunning     TaskState = "running"
 	TaskStopping    TaskState = "stopping"
 	TaskFailed      TaskState = "failed"
-	TaskStopped     TaskState = "stopped"
 )
 
 // Artifact describes where to download the application binary/assets

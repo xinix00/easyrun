@@ -10,7 +10,7 @@ import (
 
 	"time"
 
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/hop/internal/types"
 )
@@ -111,7 +111,7 @@ func TestAgentCapacityWithRunningTasks(t *testing.T) {
 	}
 }
 
-func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
+func TestAgentCapacityCountsFailedTasks(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
@@ -121,7 +121,7 @@ func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 	defer cancel()
 	go agent.stateLoop(ctx)
 
-	// Store a job and create a FAILED task (should not count against capacity)
+	// A failed task is still a placed task until explicitly removed.
 	job := &types.Job{
 		Name:      "failed-job",
 		CPUShares: 800,
@@ -130,26 +130,26 @@ func TestAgentCapacityIgnoresFailedTasks(t *testing.T) {
 
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
-			ID:      "task-1",
-			JobName: "failed-job",
-			State:   types.TaskFailed, // Failed, not running
+			ID:        "task-1",
+			JobName:   "failed-job",
+			State:     types.TaskFailed,
+			CPUShares: 800,
 		}
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
-	// New job should fit because failed tasks don't count
 	newJob := &types.Job{
 		Name:      "new-job",
 		CPUShares: 500,
 	}
 
-	if !checkCapacity(agent, newJob) {
-		t.Error("hasCapacity should ignore failed tasks")
+	if checkCapacity(agent, newJob) {
+		t.Error("hasCapacity should count a failed task that is still present")
 	}
 }
 
-func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
+func TestAgentCapacityFreedWhenTaskIsGone(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
@@ -160,16 +160,17 @@ func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
 	go agent.stateLoop(ctx)
 
 	job := &types.Job{
-		Name:      "stopped-job",
+		Name:      "old-job",
 		CPUShares: 800,
 	}
 	agent.StoreJob(job)
 
 	agent.do(func(s *agentState) {
 		s.tasks["task-1"] = &types.Task{
-			ID:      "task-1",
-			JobName: "stopped-job",
-			State:   types.TaskStopped,
+			ID:        "task-1",
+			JobName:   "old-job",
+			State:     types.TaskRunning,
+			CPUShares: 800,
 		}
 	})
 
@@ -180,8 +181,12 @@ func TestAgentCapacityIgnoresStoppedTasks(t *testing.T) {
 		CPUShares: 500,
 	}
 
+	if checkCapacity(agent, newJob) {
+		t.Fatal("hasCapacity ignored a task that was still present")
+	}
+	agent.do(func(s *agentState) { delete(s.tasks, "task-1") })
 	if !checkCapacity(agent, newJob) {
-		t.Error("hasCapacity should ignore stopped tasks")
+		t.Error("hasCapacity was not restored after the stopped task was removed")
 	}
 }
 
@@ -443,8 +448,8 @@ func TestConcurrentDispatchRespectsCapacity(t *testing.T) {
 				CPUShares: 1024,
 			}
 			body, _ := json.Marshal(job)
-			req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-			w := hophttp.NewRecorder()
+			req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+			w := leanhttp.NewRecorder()
 			agent.handleRun(w, req)
 			codes[n] = w.Code
 		}(i)
@@ -513,8 +518,8 @@ func TestTaskInStateImmediatelyAfterAccept(t *testing.T) {
 		CPUShares: 1024,
 	}
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 	agent.handleRun(w, req)
 
 	if w.Code != 202 {

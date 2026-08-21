@@ -32,7 +32,7 @@ manage it all from the hosted dashboard at
 | [architecture.md](architecture.md) | How it fits together: leader election (hoplock), committed state in S3, registration & settle period, reconciliation, the three runners |
 | [api.md](api.md) | HTTP API reference — HMAC auth (`X-Hop-Auth`), leader endpoints (`/v1/*`), agent endpoints, SSE events |
 | [cli.md](cli.md) | The `run` CLI: `apply`, `delete`, `status`, `agents`, `logs` |
-| [configuration.md](configuration.md) | Config YAML & flags: node, cluster.lock backends, capacity, paths, isolation, timeouts |
+| [configuration.md](configuration.md) | Config (JSON) & flags: node, cluster.lock backends, capacity, paths, isolation, timeouts |
 | [data-structures.md](data-structures.md) | Core types: Job, Task, Agent — fields, states and semantics |
 | [lifecycles.md](lifecycles.md) | Step-by-step lifecycles with invariants: task birth/restart/death, leader settle, chroot & cgroup details |
 | [development.md](development.md) | Building, testing locally, project structure, dependencies |

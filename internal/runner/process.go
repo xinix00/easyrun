@@ -16,6 +16,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,7 +36,7 @@ const (
 // ExecRunner runs processes with optional isolation
 type ExecRunner struct {
 	config    *Config
-	processes map[string]*exec.Cmd
+	processes map[string]*execProcess
 	taskDirs  map[string]string   // taskID -> work directory
 	mounts    map[string][]string // taskID -> bind mount targets we created, in setup order
 	// logs zijn de broadcasters van de lopende tasks plus die van net-afgelopen
@@ -45,11 +46,46 @@ type ExecRunner struct {
 	mu   sync.RWMutex
 }
 
+// execProcess is the generation token for one started child. Unlike a numeric
+// PID, the sticky groupGone observation cannot start referring to an unrelated,
+// later process after the kernel reuses that number.
+type execProcess struct {
+	cmd *exec.Cmd
+
+	mu        sync.Mutex
+	groupGone bool // sticky ESRCH observation for this process-group generation
+}
+
+func (p *execProcess) signal(sig syscall.Signal) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.groupGone {
+		return syscall.ESRCH
+	}
+	err := syscall.Kill(-p.cmd.Process.Pid, sig)
+	if err == syscall.ESRCH {
+		p.groupGone = true
+	}
+	return err
+}
+
+func (p *execProcess) isGroupGone() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.groupGone {
+		return true
+	}
+	if err := syscall.Kill(-p.cmd.Process.Pid, 0); err == syscall.ESRCH {
+		p.groupGone = true
+	}
+	return p.groupGone
+}
+
 // NewExecRunner creates a new process runner
 func NewExecRunner(config *Config) *ExecRunner {
 	return &ExecRunner{
 		config:    config,
-		processes: make(map[string]*exec.Cmd),
+		processes: make(map[string]*execProcess),
 		taskDirs:  make(map[string]string),
 		mounts:    make(map[string][]string),
 		logs:      newLogStore(),
@@ -77,8 +113,7 @@ func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 		// Download directly to taskDir so commands like "./binary" work
 		if err := downloadArtifact(&job.Artifacts[0], taskDir); err != nil {
 			log.Printf("Artifact download failed for task %s: %v", taskID, err)
-			r.cleanupTaskDir(taskID)
-			return fmt.Errorf("failed to download artifact: %w", err)
+			return errors.Join(fmt.Errorf("failed to download artifact: %w", err), r.cleanupTaskDir(taskID))
 		}
 	}
 
@@ -110,20 +145,16 @@ func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 	if err != nil {
 		if cgroupFD >= 0 {
 			_ = syscall.Close(cgroupFD)
-			r.removeCgroup(taskID)
 		}
-		r.cleanupTaskDir(taskID)
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
+		return errors.Join(fmt.Errorf("failed to create stdout pipe: %w", err), r.removeCgroup(taskID), r.cleanupTaskDir(taskID))
 	}
 
 	stderrPipe, err := cmd.StderrPipe()
 	if err != nil {
 		if cgroupFD >= 0 {
 			_ = syscall.Close(cgroupFD)
-			r.removeCgroup(taskID)
 		}
-		r.cleanupTaskDir(taskID)
-		return fmt.Errorf("failed to create stderr pipe: %w", err)
+		return errors.Join(fmt.Errorf("failed to create stderr pipe: %w", err), r.removeCgroup(taskID), r.cleanupTaskDir(taskID))
 	}
 
 	// Start the process
@@ -132,11 +163,7 @@ func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 		_ = syscall.Close(cgroupFD)
 	}
 	if startErr != nil {
-		if cgroupFD >= 0 {
-			r.removeCgroup(taskID)
-		}
-		r.cleanupTaskDir(taskID)
-		return fmt.Errorf("failed to start process: %w", startErr)
+		return errors.Join(fmt.Errorf("failed to start process: %w", startErr), r.removeCgroup(taskID), r.cleanupTaskDir(taskID))
 	}
 
 	// Start log broadcasting
@@ -145,71 +172,77 @@ func (r *ExecRunner) Run(job *types.Job, task *types.Task) error {
 
 	r.logs.put(taskID, stdoutBroadcaster, stderrBroadcaster)
 
+	process := &execProcess{cmd: cmd}
 	r.mu.Lock()
-	r.processes[taskID] = cmd
-	r.taskDirs[taskID] = taskDir
+	r.processes[taskID] = process
 	r.mu.Unlock()
 
-	// Apply resource limits
+	// Apply PID-based limits before Wait can reap a short-lived child and make
+	// its numeric PID reusable. Stop itself is generation-safe via process.
 	r.applyLimits(cmd.Process.Pid, job)
+	task.Pid = cmd.Process.Pid
 
-	// Wait for process in background
 	go func() {
 		_ = cmd.Wait()
+		// Publish an observed ESRCH as a sticky generation barrier. Status and
+		// Stop use the same flag, so a PGID proven gone can never be signalled
+		// later merely because the kernel reused its number.
+		process.isGroupGone()
 	}()
-
-	task.Pid = cmd.Process.Pid
 	return nil
 }
 
 // Stop stops a running task
 func (r *ExecRunner) Stop(task *types.Task) error {
+	// The map is the ownership record; task.Pid is only historical/status data.
+	// Falling back to that stale PID after a successful Stop can signal an
+	// unrelated process group once the kernel reuses the number. Keep ownership
+	// registered until the group is confirmed gone, so a failed Stop quarantines
+	// the exact process generation instead of forgetting or mis-signalling it.
+	r.mu.RLock()
+	process := r.processes[task.ID]
+	r.mu.RUnlock()
+	if process == nil || process.cmd == nil || process.cmd.Process == nil || process.cmd.Process.Pid <= 0 {
+		return errors.Join(r.cleanupTaskDir(task.ID), r.removeCgroup(task.ID))
+	}
+	pid := process.cmd.Process.Pid
+
+	// SIGTERM the exact owned process-group generation, wait up to the graceful
+	// budget, then SIGKILL. Status and the Wait goroutine make ESRCH sticky on
+	// the record, preventing a later Stop from signalling a recycled PGID.
+	if err := process.signal(syscall.SIGTERM); err != nil && err != syscall.ESRCH {
+		log.Printf("Warning: failed to send SIGTERM to process group %d: %v", pid, err)
+	}
+	if !waitForPgroupExit(process, gracefulShutdownTimeout) {
+		log.Printf("Process group %d did not exit within %s, sending SIGKILL", pid, gracefulShutdownTimeout)
+		if err := process.signal(syscall.SIGKILL); err != nil && err != syscall.ESRCH {
+			log.Printf("Warning: failed to send SIGKILL to process group %d: %v", pid, err)
+		}
+		if !waitForPgroupExit(process, killTimeout) {
+			// Ownership is not released: deleting its taskdir/cgroup now would
+			// forget a process that is demonstrably still alive. Keep it quarantined
+			// inside the runner even though the agent removes the logical task.
+			return fmt.Errorf("process group %d still alive after SIGKILL", pid)
+		}
+	}
 	r.mu.Lock()
-	cmd, ok := r.processes[task.ID]
-	if ok {
+	if r.processes[task.ID] == process {
 		delete(r.processes, task.ID)
 	}
 	r.mu.Unlock()
 
-	pid := task.Pid
-	if cmd != nil && cmd.Process != nil {
-		pid = cmd.Process.Pid
-	}
-
-	if pid <= 0 {
-		r.cleanupTaskDir(task.ID)
-		return nil
-	}
-
-	// SIGTERM the whole process group, wait up to gracefulShutdownTimeout
-	// for it to die, then SIGKILL if it didn't. Polling Kill(-pid, 0) is
-	// safe; cmd.Wait() runs in Run's background goroutine and calling it
-	// twice would be a data race.
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err != nil && err != syscall.ESRCH {
-		log.Printf("Warning: failed to send SIGTERM to process group %d: %v", pid, err)
-	}
-	if !waitForPgroupExit(pid, gracefulShutdownTimeout) {
-		log.Printf("Process group %d did not exit within %s, sending SIGKILL", pid, gracefulShutdownTimeout)
-		if err := syscall.Kill(-pid, syscall.SIGKILL); err != nil && err != syscall.ESRCH {
-			log.Printf("Warning: failed to send SIGKILL to process group %d: %v", pid, err)
-		}
-		if !waitForPgroupExit(pid, killTimeout) {
-			log.Printf("Process group %d still alive after SIGKILL, giving up", pid)
-		}
-	}
-
-	r.cleanupTaskDir(task.ID)
-	r.removeCgroup(task.ID)
-	return nil
+	cleanupErr := r.cleanupTaskDir(task.ID)
+	cgroupErr := r.removeCgroup(task.ID)
+	return errors.Join(cleanupErr, cgroupErr)
 }
 
-// waitForPgroupExit polls Kill(-pid, 0) until the process group is gone or
-// budget elapses. Returns true if the group exited in time.
-func waitForPgroupExit(pid int, budget time.Duration) bool {
+// waitForPgroupExit polls the generation record until ESRCH proves the process
+// group is gone or budget elapses. EPERM and all other errors retain ownership.
+func waitForPgroupExit(process *execProcess, budget time.Duration) bool {
 	deadline := time.Now().Add(budget)
 	for time.Now().Before(deadline) {
-		if err := syscall.Kill(-pid, 0); err != nil {
-			return true // ESRCH = pgroup gone
+		if process.isGroupGone() {
+			return true
 		}
 		time.Sleep(processExitPollInterval)
 	}
@@ -223,19 +256,18 @@ func (r *ExecRunner) Status(task *types.Task) (types.TaskState, error) {
 		return types.TaskRunning, nil
 	}
 
-	// Check process group (covers parent + forked children)
-	if err := syscall.Kill(-task.Pid, 0); err == nil {
+	r.mu.RLock()
+	process := r.processes[task.ID]
+	r.mu.RUnlock()
+	if process == nil {
+		return types.TaskFailed, nil
+	}
+	if !process.isGroupGone() {
 		return types.TaskRunning, nil
 	}
-
-	// Dead — determine stopped vs failed
-	r.mu.RLock()
-	cmd, ok := r.processes[task.ID]
-	r.mu.RUnlock()
-
-	if ok && cmd.ProcessState != nil && cmd.ProcessState.Success() {
-		return types.TaskStopped, nil
-	}
+	// A task record describes a service that should be running. Once its process
+	// generation is gone it is failed, irrespective of exit code; an explicit
+	// Stop removes the record and never asks Status again.
 	return types.TaskFailed, nil
 }
 
@@ -279,14 +311,35 @@ func (r *ExecRunner) applyNice(pid int, cpuShares int) {
 }
 
 // setupTaskDir creates an isolated directory for the task
-func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error) {
+func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (result string, retErr error) {
 	// Base directory for all tasks
 	base := r.config.RootfsBase
 	if base == "" {
 		base = "/tmp/hop"
 	}
 
+	// Keep taskDir local: explicit error returns assign the named result before
+	// defers run, while rollback must retain the directory it actually created.
 	taskDir := filepath.Join(base, taskID)
+	var mounts []string
+	committed := false
+	defer func() {
+		if committed {
+			return
+		}
+		// setupTaskDir is a transaction: none of its resources are visible in
+		// the runner maps until all setup succeeded, so a local rollback owns
+		// every partial bind and directory on every error return.
+		if err := r.cleanupTaskResources(taskDir, mounts); err != nil {
+			// De bind is mogelijk nog actief: bewaar ownership zodat een latere
+			// Runner.Stop dezelfde quarantaine veilig opnieuw kan opruimen.
+			r.mu.Lock()
+			r.taskDirs[taskID] = taskDir
+			r.mounts[taskID] = mounts
+			r.mu.Unlock()
+			retErr = errors.Join(retErr, fmt.Errorf("rollback task directory: %w", err))
+		}
+	}()
 
 	// Resolve user for ownership
 	uid, gid := -1, -1
@@ -314,9 +367,13 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 	// what was mounted — no /proc parsing needed. Job-script mounts live in
 	// the child's mount namespace (CLONE_NEWNS) and die with the process, so
 	// they're not our problem.
-	var mounts []string
-
-	for hostPath, taskPath := range job.Volumes {
+	volumePaths := make([]string, 0, len(job.Volumes))
+	for hostPath := range job.Volumes {
+		volumePaths = append(volumePaths, hostPath)
+	}
+	sort.Strings(volumePaths)
+	for _, hostPath := range volumePaths {
+		taskPath := job.Volumes[hostPath]
 		if err := os.MkdirAll(hostPath, 0755); err != nil {
 			return "", fmt.Errorf("failed to create volume host path %s: %w", hostPath, err)
 		}
@@ -344,8 +401,10 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 	}
 
 	r.mu.Lock()
+	r.taskDirs[taskID] = taskDir
 	r.mounts[taskID] = mounts
 	r.mu.Unlock()
+	committed = true
 
 	return taskDir, nil
 }
@@ -354,25 +413,48 @@ func (r *ExecRunner) setupTaskDir(taskID string, job *types.Job) (string, error)
 // tracked in setupTaskDir — reverse order so nested binds drop before
 // their parents. With every bind explicitly detached, RemoveAll can no
 // longer descend into a bound /dev and unlink host /dev/null.
-func (r *ExecRunner) cleanupTaskDir(taskID string) {
-	r.mu.Lock()
+func (r *ExecRunner) cleanupTaskDir(taskID string) error {
+	r.mu.RLock()
 	taskDir := r.taskDirs[taskID]
 	mounts := r.mounts[taskID]
-	delete(r.taskDirs, taskID)
-	delete(r.mounts, taskID)
-	r.mu.Unlock()
+	r.mu.RUnlock()
 
 	// De taskdir gaat weg, de logs met pensioen: nog logRetention opvraagbaar, want
 	// juist ná een crash wil je weten wat het proces zei — en zijn schijfsporen zijn
 	// dan al opgeruimd.
 	r.logs.retire(taskID)
 
+	if err := r.cleanupTaskResources(taskDir, mounts); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	if r.taskDirs[taskID] == taskDir {
+		delete(r.taskDirs, taskID)
+		delete(r.mounts, taskID)
+	}
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *ExecRunner) cleanupTaskResources(taskDir string, mounts []string) error {
+	var cleanupErr error
+	unsafeToRemove := false
 	for i := len(mounts) - 1; i >= 0; i-- {
-		_ = r.unmountVolume(mounts[i])
+		if err := r.unmountVolume(mounts[i]); err != nil &&
+			!errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.EINVAL) {
+			unsafeToRemove = true
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("unmount %s: %w", mounts[i], err))
+		}
+	}
+	if unsafeToRemove {
+		return cleanupErr
 	}
 	if taskDir != "" {
-		_ = os.RemoveAll(taskDir)
+		if err := os.RemoveAll(taskDir); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("remove task directory %s: %w", taskDir, err))
+		}
 	}
+	return cleanupErr
 }
 
 // GetStdout returns the stdout broadcaster for a task, or the retired one of a

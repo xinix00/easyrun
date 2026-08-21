@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/hop/pkg/httputil"
 )
 
 const (
@@ -84,8 +85,8 @@ type Leader struct {
 
 	ops chan func(*leaderState) // all state access goes through here
 
-	httpClient   *hophttp.Client
-	deleteClient *hophttp.Client
+	httpClient   *httputil.Client
+	deleteClient *httputil.Client
 	agentTimeout time.Duration
 	settleDelay  time.Duration // wait before first reconciliation (0 = settled immediately)
 	eventBus     *EventBus
@@ -96,12 +97,21 @@ type Leader struct {
 	// (huidige gedrag).
 	persister  StatePersister
 	stateDirty chan struct{}
+
+	// stateDone closes exactly once when the state owner exits. State
+	// operations select on it so callers cannot remain parked on ops/result
+	// after leadership has been cancelled.
+	stateOnce sync.Once
+	stateDone chan struct{}
+
+	lifecycleMu sync.RWMutex
+	runCtx      context.Context
 }
 
 // New creates a new leader with optional HTTP client (nil uses default)
-func New(localAgentID string, jobStore JobStore, client *hophttp.Client) *Leader {
+func New(localAgentID string, jobStore JobStore, client *httputil.Client) *Leader {
 	if client == nil {
-		client = &hophttp.Client{Timeout: HTTPClientTimeout}
+		client = &httputil.Client{Timeout: HTTPClientTimeout}
 	}
 	return &Leader{
 		localAgentID: localAgentID,
@@ -109,8 +119,9 @@ func New(localAgentID string, jobStore JobStore, client *hophttp.Client) *Leader
 		ops:          make(chan func(*leaderState), stateChannelBufferSize),
 		agentTimeout: defaultAgentTimeout,
 		httpClient:   client,
-		deleteClient: &hophttp.Client{Timeout: DeleteClientTimeout},
+		deleteClient: &httputil.Client{Timeout: DeleteClientTimeout},
 		eventBus:     NewEventBus(),
+		stateDone:    make(chan struct{}),
 	}
 }
 
@@ -134,8 +145,18 @@ func (l *Leader) SetSettleDelay(d time.Duration) {
 	l.settleDelay = d
 }
 
-// stateLoop is the single goroutine that owns all mutable state
+// stateLoop is the single goroutine that owns all mutable state. Some older
+// tests start it directly while production starts it through Run, so the once
+// guard is here rather than in Run.
 func (l *Leader) stateLoop(ctx context.Context) {
+	l.stateOnce.Do(func() { l.runStateLoop(ctx) })
+}
+
+func (l *Leader) runStateLoop(ctx context.Context) {
+	l.lifecycleMu.Lock()
+	l.runCtx = ctx
+	l.lifecycleMu.Unlock()
+
 	state := &leaderState{
 		agents:      make(map[string]*types.Agent),
 		placed:      make(map[string]map[string]int),
@@ -148,6 +169,7 @@ func (l *Leader) stateLoop(ctx context.Context) {
 	if l.settleDelay > 0 {
 		settleTimer = time.After(l.settleDelay)
 	}
+	defer close(l.stateDone)
 
 	for {
 		select {
@@ -167,16 +189,58 @@ func (l *Leader) stateLoop(ctx context.Context) {
 
 // do executes an operation on state (fire-and-forget)
 func (l *Leader) do(op func(*leaderState)) {
-	l.ops <- op
+	select {
+	case <-l.stateDone:
+		return
+	default:
+	}
+	select {
+	case l.ops <- op:
+	case <-l.stateDone:
+	}
 }
 
 // query executes an operation and waits for result
 func query[T any](l *Leader, fn func(*leaderState) T) T {
+	var zero T
 	result := make(chan T, 1)
-	l.ops <- func(s *leaderState) {
-		result <- fn(s)
+	select {
+	case <-l.stateDone:
+		return zero
+	default:
 	}
-	return <-result
+	select {
+	case l.ops <- func(s *leaderState) {
+		result <- fn(s)
+	}:
+	case <-l.stateDone:
+		return zero
+	}
+	select {
+	case value := <-result:
+		return value
+	case <-l.stateDone:
+		return zero
+	}
+}
+
+func (l *Leader) context() context.Context {
+	l.lifecycleMu.RLock()
+	ctx := l.runCtx
+	l.lifecycleMu.RUnlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func (l *Leader) stopped() bool {
+	select {
+	case <-l.stateDone:
+		return true
+	default:
+		return false
+	}
 }
 
 // Heartbeat registreert een levensteken van een agent; false = onbekende
@@ -275,12 +339,8 @@ func (l *Leader) GetAgents() []*types.Agent {
 func (l *Leader) GetAgent(id string) *types.Agent {
 	return query(l, func(s *leaderState) *types.Agent {
 		if a, ok := s.agents[id]; ok {
-			return &types.Agent{
-				ID:       a.ID,
-				Endpoint: a.Endpoint,
-				Version:  a.Version,
-				LastSeen: a.LastSeen,
-			}
+			cp := *a // full copy, like GetAgents: a hand-picked field list loses every field added later (it already dropped TempMilliC)
+			return &cp
 		}
 		return nil
 	})

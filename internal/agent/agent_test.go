@@ -64,7 +64,6 @@ func TestEveryTaskInStateHoldsItsReservation(t *testing.T) {
 		types.TaskRunning,
 		types.TaskStopping, // crashed, restart in flight
 		types.TaskFailed,   // out of restarts, waiting for an operator
-		types.TaskStopped,  // never set on a live record, but presence is the rule
 	}
 	agent.do(func(s *agentState) {
 		for i, st := range states {
@@ -133,6 +132,9 @@ func TestAgentInit(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	// Keep this unit test independent of whether the host running it happens to
+	// have a Docker CLI/daemon; DockerRunner cleanup has its own focused tests.
+	agent.dockerRunner = NewMockRunner()
 
 	// Init should call Cleanup on runner
 	err := agent.Init()

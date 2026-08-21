@@ -12,7 +12,7 @@ import (
 
 	"time"
 
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/hop/internal/types"
 )
@@ -401,7 +401,7 @@ func TestCheckHealthFailureThresholdResets(t *testing.T) {
 		if healthy.Load() {
 			w.WriteHeader(http.StatusOK)
 		} else {
-			w.WriteHeader(hophttp.StatusInternalServerError)
+			w.WriteHeader(leanhttp.StatusInternalServerError)
 		}
 	}))
 	defer srv.Close()
@@ -701,6 +701,7 @@ func TestRestartTaskUnlimitedRestarts(t *testing.T) {
 	cfg := testConfig()
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
+	agent.restartWait = func(time.Duration) bool { return true }
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

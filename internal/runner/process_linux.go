@@ -3,6 +3,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -16,7 +17,7 @@ import (
 const cgroupBase = "/sys/fs/cgroup/hop"
 
 // wrapCommand on Linux returns the command as-is
-// Memory limiting is done via cgroups after process start
+// Memory limiting is wired pre-exec through the cgroup FD in prepareCgroup.
 func (r *ExecRunner) wrapCommand(command string, memoryLimit uint64) string {
 	return command
 }
@@ -52,15 +53,22 @@ func (r *ExecRunner) prepareCgroup(taskID string, memoryLimit uint64) (int, erro
 	}
 	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
 	if err != nil {
-		return -1, fmt.Errorf("open cgroup dir: %w", err)
+		return -1, errors.Join(fmt.Errorf("open cgroup dir: %w", err), r.removeCgroup(taskID))
 	}
 	return fd, nil
 }
 
 // removeCgroup unlinks the per-task cgroup dir. Safe to call when the task
 // never had one (no-op on ENOENT).
-func (r *ExecRunner) removeCgroup(taskID string) {
-	_ = os.Remove(taskCgroupPath(taskID))
+func (r *ExecRunner) removeCgroup(taskID string) error {
+	err := os.Remove(taskCgroupPath(taskID))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("remove cgroup %s: %w", taskID, err)
+	}
+	return nil
 }
 
 // attachCgroup wires a pre-opened cgroup directory FD into the command's

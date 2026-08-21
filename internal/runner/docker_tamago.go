@@ -25,7 +25,11 @@ type DockerRunner struct{}
 
 // NewDockerRunner returns the refusing stub. The arguments are the host
 // runner's, kept so the caller reads the same on both platforms.
-func NewDockerRunner(_ map[string]string, _ string) *DockerRunner { return &DockerRunner{} }
+func NewDockerRunner(_ map[string]string, _ string, _ int) *DockerRunner { return &DockerRunner{} }
+
+// DockerPresent is op bare metal altijd false: het node-attribuut node.docker
+// hoort daar nooit true te zijn.
+func DockerPresent(string) bool { return false }
 
 var errNoDocker = errors.New("this node runs HopOS: there is no container runtime, so a docker job cannot run here")
 

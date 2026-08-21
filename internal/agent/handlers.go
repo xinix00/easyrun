@@ -12,8 +12,8 @@ import (
 
 	"github.com/xinix00/hop/internal/runner"
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/lean/leanrand"
 )
@@ -23,7 +23,7 @@ import (
 // against the leader (the whole cluster shares one key). Nothing is forwarded
 // when the caller didn't sign — the proxy endpoints sit behind RequireHMAC, so
 // a missing signature only happens in empty-key (auth-off) mode.
-func (a *Agent) setAuth(call *hophttp.Call, incoming *hophttp.Request) {
+func (a *Agent) setAuth(call *leanhttp.Call, incoming *leanhttp.Request) {
 	if incoming == nil {
 		return
 	}
@@ -35,10 +35,10 @@ func (a *Agent) setAuth(call *hophttp.Call, incoming *hophttp.Request) {
 // proxyToLeader forwards requests to the current leader.
 // For long-lived endpoints (SSE events, log tailing) use proxyStreamToLeader
 // instead — io.Copy's buffering would delay chunk delivery here.
-func (a *Agent) proxyToLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
+func (a *Agent) proxyToLeader(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 	leaderAddr := a.getLeader()
 	if leaderAddr == "" {
-		httputil.WriteError(w, hophttp.StatusServiceUnavailable, "no leader available")
+		httputil.WriteError(w, leanhttp.StatusServiceUnavailable, "no leader available")
 		return
 	}
 
@@ -46,7 +46,7 @@ func (a *Agent) proxyToLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
 	if !ok {
 		return
 	}
-	call := hophttp.Call{
+	call := leanhttp.Call{
 		Method: r.Method,
 		URL:    fmt.Sprintf("http://%s%s", leaderAddr, r.Path),
 		Body:   body,
@@ -54,13 +54,18 @@ func (a *Agent) proxyToLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
 	call.SetHeader("Content-Type", r.Header.Get("Content-Type"))
 	a.setAuth(&call, r)
 
-	resp, err := a.httpClient.DoContext(r.Context(), call)
+	// Geen r.Context() hier: de request-lifetime claimen kost op leanhttp de
+	// herbruikbaarheid van de verbinding (Done bezet de leeskant), en dit is
+	// het pad dat elke satellite elke vijf seconden loopt. De call is al
+	// begrensd door httpClient's proxyTimeout; een weggelopen caller kost dus
+	// hooguit die tien seconden, geen handshake per poll.
+	resp, err := a.httpClient.Do(call)
 	if err != nil {
 		// De transportfout gaat MEE. Zonder hem is een 502 niet te
 		// diagnosticeren: hij zegt alleen dat de leader niet antwoordde, niet
 		// of dat een timeout, een geweigerde verbinding of een kapotte
 		// verbinding uit de pool was — drie storingen met drie andere oorzaken.
-		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact leader: "+err.Error())
+		httputil.WriteError(w, leanhttp.StatusBadGateway, "failed to contact leader: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -73,10 +78,10 @@ func (a *Agent) proxyToLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
 // proxyStreamToLeader forwards a request to the leader and streams the
 // response back chunk-by-chunk, flushing as data arrives. Used for SSE
 // (/v1/events) and live log tailing where buffering would delay output.
-func (a *Agent) proxyStreamToLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
+func (a *Agent) proxyStreamToLeader(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 	leaderAddr := a.getLeader()
 	if leaderAddr == "" {
-		httputil.WriteError(w, hophttp.StatusServiceUnavailable, "no leader available")
+		httputil.WriteError(w, leanhttp.StatusServiceUnavailable, "no leader available")
 		return
 	}
 
@@ -84,7 +89,7 @@ func (a *Agent) proxyStreamToLeader(w hophttp.ResponseWriter, r *hophttp.Request
 	if !ok {
 		return
 	}
-	call := hophttp.Call{
+	call := leanhttp.Call{
 		Method: r.Method,
 		URL:    fmt.Sprintf("http://%s%s", leaderAddr, r.Path),
 		Body:   body,
@@ -99,7 +104,7 @@ func (a *Agent) proxyStreamToLeader(w hophttp.ResponseWriter, r *hophttp.Request
 		// diagnosticeren: hij zegt alleen dat de leader niet antwoordde, niet
 		// of dat een timeout, een geweigerde verbinding of een kapotte
 		// verbinding uit de pool was — drie storingen met drie andere oorzaken.
-		httputil.WriteError(w, hophttp.StatusBadGateway, "failed to contact leader: "+err.Error())
+		httputil.WriteError(w, leanhttp.StatusBadGateway, "failed to contact leader: "+err.Error())
 		return
 	}
 	defer resp.Body.Close()
@@ -127,22 +132,22 @@ func (a *Agent) proxyStreamToLeader(w hophttp.ResponseWriter, r *hophttp.Request
 	}
 }
 
-// proxyBody reads the request body the proxy is about to forward. hophttp sends
+// proxyBody reads the request body the proxy is about to forward. leanhttp sends
 // a body as bytes, so it has to be read here — and therefore bounded, because
 // this runs before the leader ever sees the request. On the authenticated routes
 // RequireHMAC has already read and capped it; this bound is for the ones that
 // are not (and for the day one is added).
-func proxyBody(w hophttp.ResponseWriter, r *hophttp.Request) ([]byte, bool) {
+func proxyBody(w leanhttp.ResponseWriter, r *leanhttp.Request) ([]byte, bool) {
 	if r.Body == nil {
 		return nil, true
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, proxyMaxBody+1))
 	switch {
 	case err != nil:
-		httputil.WriteError(w, hophttp.StatusBadRequest, "failed to read body")
+		httputil.WriteError(w, leanhttp.StatusBadRequest, "failed to read body")
 		return nil, false
 	case len(body) > proxyMaxBody:
-		httputil.WriteError(w, hophttp.StatusRequestEntityTooLarge, "request body too large")
+		httputil.WriteError(w, leanhttp.StatusRequestEntityTooLarge, "request body too large")
 		return nil, false
 	}
 	return body, true
@@ -160,8 +165,8 @@ func (a *Agent) notifyLeader(jobName, event string) {
 	// en denkt reconcile voorgoed "1/1" (gemeten 01-08: cloudflared voor eeuwig
 	// pending terwijl de node ruimte had).
 	payload := fmt.Sprintf(`{"job":%q,"event":%q,"agent":%q}`, jobName, event, a.id)
-	call := hophttp.Call{
-		Method: hophttp.MethodPost,
+	call := leanhttp.Call{
+		Method: leanhttp.MethodPost,
 		URL:    fmt.Sprintf("http://%s/v1/notify", addr),
 		Body:   []byte(payload),
 	}
@@ -175,13 +180,13 @@ func (a *Agent) notifyLeader(jobName, event string) {
 }
 
 // handleLeader returns the current leader address
-func (a *Agent) handleLeader(w hophttp.ResponseWriter, r *hophttp.Request) {
-	httputil.WriteJSON(w, hophttp.StatusOK, map[string]string{"leader": a.getLeader()})
+func (a *Agent) handleLeader(w leanhttp.ResponseWriter, r *leanhttp.Request) {
+	httputil.WriteJSON(w, leanhttp.StatusOK, map[string]string{"leader": a.getLeader()})
 }
 
 // handleHealth returns basic health status
-func (a *Agent) handleHealth(w hophttp.ResponseWriter, r *hophttp.Request) {
-	httputil.WriteJSON(w, hophttp.StatusOK, map[string]string{"status": "ok"})
+func (a *Agent) handleHealth(w leanhttp.ResponseWriter, r *leanhttp.Request) {
+	httputil.WriteJSON(w, leanhttp.StatusOK, map[string]string{"status": "ok"})
 }
 
 // CapacityResponse shows system resources and actual usage
@@ -195,7 +200,7 @@ type CapacityResponse struct {
 }
 
 // handleCapacity returns detected system capacity with actual usage from running tasks
-func (a *Agent) handleCapacity(w hophttp.ResponseWriter, r *hophttp.Request) {
+func (a *Agent) handleCapacity(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 	usage := query(a, func(s *agentState) CapacityResponse {
 		cpuUsed, memUsed := s.resourceUsage()
 		var running int
@@ -219,11 +224,11 @@ func (a *Agent) handleCapacity(w hophttp.ResponseWriter, r *hophttp.Request) {
 			Attributes:      a.attributes,
 		}
 	})
-	httputil.WriteJSON(w, hophttp.StatusOK, usage)
+	httputil.WriteJSON(w, leanhttp.StatusOK, usage)
 }
 
 // handleTasks returns all running tasks
-func (a *Agent) handleTasks(w hophttp.ResponseWriter, r *hophttp.Request) {
+func (a *Agent) handleTasks(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 	tasks := query(a, func(s *agentState) []*types.Task {
 		result := make([]*types.Task, 0, len(s.tasks))
 		for _, t := range s.tasks {
@@ -232,7 +237,7 @@ func (a *Agent) handleTasks(w hophttp.ResponseWriter, r *hophttp.Request) {
 		}
 		return result
 	})
-	httputil.WriteJSON(w, hophttp.StatusOK, tasks)
+	httputil.WriteJSON(w, leanhttp.StatusOK, tasks)
 }
 
 // handleRun starts a new job. Met ?replace=1 vervangt hij de lopende taken van
@@ -242,22 +247,22 @@ func (a *Agent) handleTasks(w hophttp.ResponseWriter, r *hophttp.Request) {
 // draaien. Dat is het update-pad van de leader op een node zonder headroom:
 // vóór deze vorm werd zo'n update via de preemptie-pas over een búúrman
 // uitgevochten (gemeten 01-08, welcome-update offerde cloudflared).
-func (a *Agent) handleRun(w hophttp.ResponseWriter, r *hophttp.Request) {
-	if r.Method != hophttp.MethodPost {
-		hophttp.Error(w, "method not allowed", hophttp.StatusMethodNotAllowed)
+func (a *Agent) handleRun(w leanhttp.ResponseWriter, r *leanhttp.Request) {
+	if r.Method != leanhttp.MethodPost {
+		leanhttp.Error(w, "method not allowed", leanhttp.StatusMethodNotAllowed)
 		return
 	}
 	replace := r.Query().Get("replace") == "1"
 
 	var job types.Job
 	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		httputil.WriteJSON(w, hophttp.StatusBadRequest, map[string]string{"error": "invalid json"})
+		httputil.WriteJSON(w, leanhttp.StatusBadRequest, map[string]string{"error": "invalid json"})
 		return
 	}
 
 	// Check affinity before capacity (agent-side: leader stays dumb)
 	if !a.matchesAffinity(job.Affinity) {
-		httputil.WriteJSON(w, hophttp.StatusNotAcceptable, map[string]string{
+		httputil.WriteJSON(w, leanhttp.StatusNotAcceptable, map[string]string{
 			"error": "affinity mismatch",
 		})
 		return
@@ -345,11 +350,9 @@ func (a *Agent) handleRun(w hophttp.ResponseWriter, r *hophttp.Request) {
 			}
 		}
 		if replace {
-			// De voorgangers: markeren en verzamelen — het stoppen zelf komt
-			// ná de toelating (in de startvolgorde hieronder), zodat hun
-			// core/partitie vrij is vóór de opvolger plaatst. Tot die tijd
-			// staan oud én nieuw in de map: elke ándere toelating telt beide
-			// (conservatief, kortstondig) — de veilige richting.
+			// De voorgangers gaan via Stopping naar GONE. De runner-release gebeurt
+			// hieronder vóór de opvolger start; runner-quarantaine voorkomt hergebruik
+			// wanneer die release niet bevestigd kan worden.
 			for _, t := range s.tasks {
 				if t.JobName == job.Name && t.ID != task.ID {
 					t.State = types.TaskStopping
@@ -363,30 +366,29 @@ func (a *Agent) handleRun(w hophttp.ResponseWriter, r *hophttp.Request) {
 	})
 
 	if !added {
-		httputil.WriteJSON(w, hophttp.StatusServiceUnavailable, map[string]string{
+		httputil.WriteJSON(w, leanhttp.StatusServiceUnavailable, map[string]string{
 			"error": "insufficient capacity",
 		})
 		return
 	}
 
 	// Accept job immediately (fire-and-forget)
-	httputil.WriteJSON(w, hophttp.StatusAccepted, map[string]string{
+	httputil.WriteJSON(w, leanhttp.StatusAccepted, map[string]string{
 		"status":  "accepted",
 		"job":     job.Name,
 		"message": "job accepted, starting in background",
 	})
 
 	// Start process in background (task already in state for capacity reservation)
-	go func() {
+	start := func() {
 		// Replace: eerst de voorgangers écht weg — hun core en partitie moeten
 		// vrij zijn vóór de opvolger plaatst (op HopOS is dat letterlijk
 		// dezelfde partitie-pool; dit is ook wat fragmentatie voorkomt: de
 		// opvolger krijgt de vrijgekomen regio terug).
 		for _, old := range oldTasks {
-			if err := a.runnerFor(old.Driver).Stop(old); err != nil {
+			if err := a.stopAndRemove(old); err != nil {
 				log.Printf("Replace of job %s: failed to stop predecessor %.8s: %v", job.Name, old.ID, err)
 			}
-			a.do(func(s *agentState) { delete(s.tasks, old.ID) })
 		}
 		if err := a.startJob(&job, task); err != nil {
 			if errors.Is(err, runner.ErrNoCapacity) {
@@ -402,55 +404,56 @@ func (a *Agent) handleRun(w hophttp.ResponseWriter, r *hophttp.Request) {
 			a.notifyLeader(job.Name, "crash")
 			a.restartTask(task, false)
 		}
-	}()
+	}
+	go start()
 }
 
 // handleDelete deletes a job and cleans up all its tasks (by job name)
-func (a *Agent) handleDelete(w hophttp.ResponseWriter, r *hophttp.Request) {
-	if r.Method != hophttp.MethodDelete {
-		hophttp.Error(w, "method not allowed", hophttp.StatusMethodNotAllowed)
+func (a *Agent) handleDelete(w leanhttp.ResponseWriter, r *leanhttp.Request) {
+	if r.Method != leanhttp.MethodDelete {
+		leanhttp.Error(w, "method not allowed", leanhttp.StatusMethodNotAllowed)
 		return
 	}
 
 	jobName := strings.TrimPrefix(r.Path, "/delete/")
 	if jobName == "" {
-		httputil.WriteJSON(w, hophttp.StatusBadRequest, map[string]string{"error": "job name required"})
+		httputil.WriteJSON(w, leanhttp.StatusBadRequest, map[string]string{"error": "job name required"})
 		return
 	}
 
 	deleted := a.deleteJob(jobName)
-	httputil.WriteJSON(w, hophttp.StatusOK, map[string]int{"deleted": deleted})
+	httputil.WriteJSON(w, leanhttp.StatusOK, map[string]int{"deleted": deleted})
 }
 
 // handleStop stops all tasks for a job WITHOUT removing the job definition (by job name).
 // Used by the leader for preemption — the job definition must remain for rescheduling.
-func (a *Agent) handleStop(w hophttp.ResponseWriter, r *hophttp.Request) {
-	if r.Method != hophttp.MethodPost {
-		hophttp.Error(w, "method not allowed", hophttp.StatusMethodNotAllowed)
+func (a *Agent) handleStop(w leanhttp.ResponseWriter, r *leanhttp.Request) {
+	if r.Method != leanhttp.MethodPost {
+		leanhttp.Error(w, "method not allowed", leanhttp.StatusMethodNotAllowed)
 		return
 	}
 
 	jobName := strings.TrimPrefix(r.Path, "/stop/")
 	if jobName == "" {
-		httputil.WriteJSON(w, hophttp.StatusBadRequest, map[string]string{"error": "job name required"})
+		httputil.WriteJSON(w, leanhttp.StatusBadRequest, map[string]string{"error": "job name required"})
 		return
 	}
 
 	stopped := a.stopJobTasks(jobName)
-	httputil.WriteJSON(w, hophttp.StatusOK, map[string]int{"stopped": stopped})
+	httputil.WriteJSON(w, leanhttp.StatusOK, map[string]int{"stopped": stopped})
 }
 
 // handleStopTask stops a single specific task by task ID.
 // Used by rolling and blue-green updates to stop precise old instances.
-func (a *Agent) handleStopTask(w hophttp.ResponseWriter, r *hophttp.Request) {
-	if r.Method != hophttp.MethodPost {
-		hophttp.Error(w, "method not allowed", hophttp.StatusMethodNotAllowed)
+func (a *Agent) handleStopTask(w leanhttp.ResponseWriter, r *leanhttp.Request) {
+	if r.Method != leanhttp.MethodPost {
+		leanhttp.Error(w, "method not allowed", leanhttp.StatusMethodNotAllowed)
 		return
 	}
 
 	taskID := strings.TrimPrefix(r.Path, "/stop-task/")
 	if taskID == "" {
-		httputil.WriteJSON(w, hophttp.StatusBadRequest, map[string]string{"error": "task id required"})
+		httputil.WriteJSON(w, leanhttp.StatusBadRequest, map[string]string{"error": "task id required"})
 		return
 	}
 
@@ -463,20 +466,19 @@ func (a *Agent) handleStopTask(w hophttp.ResponseWriter, r *hophttp.Request) {
 	})
 
 	if task == nil {
-		httputil.WriteJSON(w, hophttp.StatusNotFound, map[string]string{"error": "task not found"})
+		httputil.WriteJSON(w, leanhttp.StatusNotFound, map[string]string{"error": "task not found"})
 		return
 	}
 
-	go func() {
-		if err := a.runnerFor(task.Driver).Stop(task); err != nil {
+	stop := func() {
+		err := a.stopAndRemove(task)
+		if err != nil {
 			log.Printf("Failed to stop task %s: %v", taskID, err)
 		}
-		a.do(func(s *agentState) {
-			delete(s.tasks, taskID)
-		})
-	}()
+	}
+	go stop()
 
-	httputil.WriteJSON(w, hophttp.StatusOK, map[string]string{"stopped": taskID})
+	httputil.WriteJSON(w, leanhttp.StatusOK, map[string]string{"stopped": taskID})
 }
 
 // stopJobTasks stops all tasks for a job WITHOUT removing the job definition.
@@ -590,7 +592,9 @@ func (a *Agent) startJob(job *types.Job, task *types.Task) error {
 	})
 	if !alive {
 		log.Printf("ghost task %.8s (job %s): deleted mid-start — stopping again", task.ID, job.Name) // freeze-forensiek
-		_ = a.runnerFor(job.Driver).Stop(task)
+		if err := a.stopAndRemove(task); err != nil {
+			log.Printf("ghost task %.8s cleanup failed: %v", task.ID, err)
+		}
 		return nil
 	}
 
@@ -657,172 +661,222 @@ func (a *Agent) releaseUnplaceable(jobName string, task *types.Task, err error) 
 // écht aan de praat had (een crash of een gezakte health-check) of dat het
 // starten zélf mislukte — alleen het eerste kan een schone lei verdienen.
 func (a *Agent) restartTask(task *types.Task, ran bool) {
-	job := a.GetJob(task.JobName)
-	if job == nil {
-		log.Printf("Cannot restart task %s: job %s not found", task.ID, task.JobName)
-		return
-	}
-
-	maxRestarts := defaultMaxRestarts
-	if job.MaxRestarts != nil {
-		maxRestarts = *job.MaxRestarts
-	}
-	restartWindow := job.RestartWindow
-	if restartWindow == 0 {
-		restartWindow = defaultRestartWindow
-	}
-
-	restartCount := query(a, func(s *agentState) int {
-		if t := s.tasks[task.ID]; t != nil {
-			// Genadeperiode: een app die het venster lang overeind stond, mag met
-			// een schone lei verder. Dat is UPTIME — de tijd sinds de runner hem
-			// aan de praat kreeg (StartedAt wordt daar gestempeld) — en het geldt
-			// alleen als hij ook echt gedraaid heeft.
-			//
-			// Hier stond "tijd sinds de vorige fout", en dan telt de tijd die het
-			// STARTEN kostte mee als gezonde uptime. Gemeten LicheeRV 07-08: de
-			// apploader valt na vijf minuten op zijn HTTP-timeout — precies
-			// defaultRestartWindow — dus elke mislukte start was uit zichzelf al
-			// "lang genoeg geleden", de teller ging elke ronde terug naar nul,
-			// maxRestarts werd nooit bereikt en de node bleef eeuwig herstarten
-			// met "restart #1" op het scherm. Een loop of death die zichzelf als
-			// gezond boekte.
-			if ran && !t.StartedAt.IsZero() && time.Since(t.StartedAt) > restartWindow {
-				t.RestartCount = 0
+	needsCleanup := true
+	for {
+		// Release the previous attempt before deciding whether it may be retried.
+		// In particular, the terminal max-restarts path must not strand runner
+		// bookkeeping, cgroups, containers or HopOS slots.
+		if needsCleanup {
+			if err := a.runnerFor(task.Driver).Stop(task); err != nil {
+				log.Printf("Task %s cleanup failed: %v", task.ID, err)
 			}
-			t.LastFailedAt = time.Now()
-			return t.RestartCount
+			needsCleanup = false
 		}
-		return 0
-	})
 
-	// -1 = unlimited restarts; 0 = no restarts at all (first crash is final)
-	if maxRestarts >= 0 && restartCount >= maxRestarts {
-		log.Printf("Task %s exceeded max restarts (%d within %s), giving up", task.ID, maxRestarts, restartWindow)
-		a.do(func(s *agentState) {
+		job := a.GetJob(task.JobName)
+		if job == nil {
+			log.Printf("Cannot restart task %s: job %s not found", task.ID, task.JobName)
+			query(a, func(s *agentState) struct{} {
+				delete(s.tasks, task.ID)
+				return struct{}{}
+			})
+			return
+		}
+
+		maxRestarts := defaultMaxRestarts
+		if job.MaxRestarts != nil {
+			maxRestarts = *job.MaxRestarts
+		}
+		restartWindow := job.RestartWindow
+		if restartWindow == 0 {
+			restartWindow = defaultRestartWindow
+		}
+
+		restartCount := query(a, func(s *agentState) int {
 			if t := s.tasks[task.ID]; t != nil {
-				t.State = types.TaskFailed
+				// Only genuine uptime earns a clean restart budget. A slow failed
+				// start must never reset its own counter.
+				if ran && !t.StartedAt.IsZero() && time.Since(t.StartedAt) > restartWindow {
+					t.RestartCount = 0
+				}
+				t.LastFailedAt = time.Now()
+				return t.RestartCount
 			}
+			return 0
 		})
-		delete(a.checkStates, task.ID)
-		return
-	}
 
-	// Exponential backoff: 1s, 2s, 4s, 8s, 16s, ... capped at 30s, met ±50%
-	// jitter. Zonder die jitter wachten alle nodes van een cluster exact
-	// hetzelfde: valt een gedeelde afhankelijkheid weg (een origin, een
-	// registry, een lock-backend), dan komen ze er ook precies gelijk weer
-	// bovenop. Cancellable so agent shutdown isn't stalled by a goroutine
-	// napping for half a minute. On cancel we just exit — the task entry is
-	// dropped by shutdown's stopTasks pass.
-	if restartCount > 0 {
-		backoff := time.Second << uint(restartCount-1)
-		if backoff > 30*time.Second {
-			backoff = 30 * time.Second
+		// -1 = unlimited restarts; 0 = no restarts at all. Cleanup above has
+		// already attempted to return the runner resource before TaskFailed
+		// becomes final.
+		if maxRestarts >= 0 && restartCount >= maxRestarts {
+			log.Printf("Task %s exceeded max restarts (%d within %s), giving up", task.ID, maxRestarts, restartWindow)
+			query(a, func(s *agentState) struct{} {
+				if t := s.tasks[task.ID]; t != nil {
+					t.State = types.TaskFailed
+				}
+				return struct{}{}
+			})
+			return
 		}
-		backoff = leanrand.Jitter(backoff)
-		log.Printf("Task %s restart #%d, waiting %s before retry", task.ID, restartCount, backoff)
+
+		if restartCount > 0 {
+			delay := restartDelay(restartCount)
+			log.Printf("Task %s restart #%d, waiting %s before retry", task.ID, restartCount, delay)
+			if !a.waitRestart(delay) {
+				return
+			}
+		}
+
+		// Resolve platform-specific artifact (same invariant as startJob).
+		runJob, err := a.resolveJobForRun(job)
+		if err != nil {
+			log.Printf("Cannot restart task %s: %v", task.ID, err)
+			query(a, func(s *agentState) struct{} {
+				if t := s.tasks[task.ID]; t != nil {
+					t.State = types.TaskFailed
+				}
+				return struct{}{}
+			})
+			return
+		}
+
+		ports, err := a.allocatePortsForJob(runJob)
+		if err != nil {
+			log.Printf("Failed to allocate ports for restart: %v", err)
+			query(a, func(s *agentState) struct{} {
+				if t := s.tasks[task.ID]; t != nil {
+					t.RestartCount++
+				}
+				return struct{}{}
+			})
+			ran = false
+			continue
+		}
+
+		// Don't sneak a replacement past shutdown's snapshot.
 		select {
 		case <-a.shutdownCh:
 			return
-		case <-time.After(backoff):
+		default:
 		}
-	}
 
-	// Clean up old runner entries (process already dead)
-	_ = a.runnerFor(task.Driver).Stop(task)
-
-	// Resolve platform-specific artifact (same invariant as startJob)
-	runJob, err := a.resolveJobForRun(job)
-	if err != nil {
-		log.Printf("Cannot restart task %s: %v", task.ID, err)
-		a.do(func(s *agentState) {
-			if t := s.tasks[task.ID]; t != nil {
-				t.State = types.TaskFailed
+		// Atomic swap: preserve the reservation without a scheduling gap.
+		replacement := newTask(job)
+		replacement.Ports = ports
+		swapped := query(a, func(s *agentState) bool {
+			old := s.tasks[task.ID]
+			if old == nil {
+				return false
 			}
+			replacement.RestartCount = old.RestartCount + 1
+			replacement.LastFailedAt = old.LastFailedAt
+			delete(s.tasks, task.ID)
+			s.tasks[replacement.ID] = replacement
+			return true
 		})
-		return
-	}
-
-	ports, err := a.allocatePortsForJob(runJob)
-	if err != nil {
-		log.Printf("Failed to allocate ports for restart: %v", err)
-		// Bump RestartCount manually — the swap below normally does this, but
-		// we never reach it on port-alloc failure. Without the bump, restartCount
-		// never grows, maxRestarts never trips, and the recursive call stack-
-		// overflows the agent (894k frames in v0.19.10).
-		a.do(func(s *agentState) {
-			if t := s.tasks[task.ID]; t != nil {
-				t.RestartCount++
-			}
-		})
-		a.restartTask(task, false)
-		return
-	}
-
-	// Don't sneak a replacement past shutdown's snapshot — if shutdownCh is
-	// closed, stopTasks has already decided what to clean up. A late add
-	// would orphan the new process.
-	select {
-	case <-a.shutdownCh:
-		return
-	default:
-	}
-
-	// Atomic swap: new task via newTask(), preserve RestartCount, no capacity gap
-	replacement := newTask(job)
-	replacement.Ports = ports
-	swapped := query(a, func(s *agentState) bool {
-		old := s.tasks[task.ID]
-		if old == nil {
-			return false
-		}
-		replacement.RestartCount = old.RestartCount + 1
-		replacement.LastFailedAt = old.LastFailedAt
-		delete(s.tasks, task.ID)
-		s.tasks[replacement.ID] = replacement
-		return true
-	})
-	if !swapped {
-		log.Printf("Task %s disappeared from state during restart", task.ID)
-		return
-	}
-
-	if err := a.runnerFor(runJob.Driver).Run(runJob, replacement); err != nil {
-		if errors.Is(err, runner.ErrNoCapacity) {
-			// The node filled up while this task was down: retrying here would
-			// spin (see releaseUnplaceable). Hand it back to the leader instead.
-			a.releaseUnplaceable(job.Name, replacement, err)
+		if !swapped {
+			log.Printf("Task %s disappeared from state during restart", task.ID)
 			return
 		}
-		log.Printf("Failed to restart task %s: %v", task.ID, err)
-		// Retry via restartTask (maxRestarts check prevents infinite recursion)
-		a.do(func(s *agentState) {
-			if t := s.tasks[replacement.ID]; t != nil {
-				t.State = types.TaskFailed
+		// Close the gap between the pre-swap check and shutdown's snapshot. If
+		// shutdown won before the publication, no runner resource exists yet and
+		// this fresh reservation can be dropped directly. If it wins after this
+		// check, the replacement is visible to its snapshot and the post-Run ghost
+		// guard below handles a Stop that races the driver's start.
+		select {
+		case <-a.shutdownCh:
+			query(a, func(s *agentState) struct{} {
+				delete(s.tasks, replacement.ID)
+				return struct{}{}
+			})
+			return
+		default:
+		}
+
+		if err := a.runnerFor(runJob.Driver).Run(runJob, replacement); err != nil {
+			if errors.Is(err, runner.ErrNoCapacity) {
+				a.releaseUnplaceable(job.Name, replacement, err)
+				return
 			}
+			log.Printf("Failed to restart task %s: %v", task.ID, err)
+			query(a, func(s *agentState) struct{} {
+				if t := s.tasks[replacement.ID]; t != nil {
+					// Keep failed starts observable while the next retry backs off.
+					// The next loop iteration makes one cleanup attempt for any
+					// partially acquired runner resource before it retries.
+					t.State = types.TaskFailed
+				}
+				return struct{}{}
+			})
+			task, ran, needsCleanup = replacement, false, true
+			continue
+		}
+
+		alive := query(a, func(s *agentState) bool {
+			t := s.tasks[replacement.ID]
+			if t == nil || t.State == types.TaskStopping {
+				return false
+			}
+			t.State = types.TaskRunning
+			t.StartedAt = time.Now()
+			return true
 		})
-		a.restartTask(replacement, false)
+		if !alive {
+			// Shutdown/delete may have removed the reservation just before Run
+			// published driver ownership. Make one cleanup attempt now that ownership
+			// exists; the logical task remains gone even if the runner quarantines it.
+			log.Printf("ghost restart task %.8s (job %s): removed during start — stopping again", replacement.ID, job.Name)
+			if err := a.stopAndRemove(replacement); err != nil {
+				log.Printf("ghost restart task %.8s cleanup failed: %v", replacement.ID, err)
+			}
+			return
+		}
+
+		log.Printf("Restarted task %s -> %s (job %s), restart #%d", task.ID, replacement.ID, job.Name, replacement.RestartCount)
+		go a.notifyLeader(job.Name, "started")
 		return
 	}
+}
 
-	// Pas hier draait de app. StartedAt op de aanmaaktijd laten staan telt de
-	// starttijd — bij de hop-driver de hele download van het image — als uptime,
-	// en dat vergiftigt zowel de genadeperiode hierboven als de
-	// health-check-grace en de uptime die de operator ziet. Zelfde moment:
-	// de startfase (Queued/Downloading) wordt Running — tenzij een /stop de
-	// herstart kruiste, dan blijft Stopping staan en ruimt Stop op.
-	a.do(func(s *agentState) {
-		if t := s.tasks[replacement.ID]; t != nil {
-			if t.State != types.TaskStopping {
-				t.State = types.TaskRunning
-			}
-			t.StartedAt = time.Now()
-		}
-	})
+const maxRestartDelay = 30 * time.Second
 
-	log.Printf("Restarted task %s -> %s (job %s), restart #%d", task.ID, replacement.ID, job.Name, replacement.RestartCount)
-	go a.notifyLeader(job.Name, "started")
+// restartDelay saturates before shifting, so large/unlimited restart counts can
+// never overflow a duration into zero or negative tight-loop delays.
+func restartDelay(restartCount int) time.Duration {
+	if restartCount <= 0 {
+		return 0
+	}
+	base := maxRestartDelay
+	if restartCount <= 5 {
+		base = time.Second << uint(restartCount-1)
+	}
+	delay := leanrand.Jitter(base)
+	if delay < 0 {
+		return 0
+	}
+	if delay > maxRestartDelay {
+		return maxRestartDelay
+	}
+	return delay
+}
+
+func (a *Agent) waitRestart(delay time.Duration) bool {
+	select {
+	case <-a.shutdownCh:
+		return false
+	default:
+	}
+	if a.restartWait != nil {
+		return a.restartWait(delay)
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-a.shutdownCh:
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // deleteJob removes job definition AND cleans up all tasks by job name
@@ -843,10 +897,7 @@ func (a *Agent) deleteJob(jobName string) int {
 	})
 
 	a.stopTasks(tasks)
-	for _, task := range tasks {
-		delete(a.checkStates, task.ID)
-	}
-	log.Printf("Deleted job %s: %d tasks stopped", jobName, len(tasks))
+	log.Printf("Deleted job %s: cleanup requested for %d tasks", jobName, len(tasks))
 
 	go a.notifyLeader(jobName, "stop")
 
@@ -854,10 +905,10 @@ func (a *Agent) deleteJob(jobName string) int {
 }
 
 // handleLogs streams task logs (stdout or stderr)
-func (a *Agent) handleLogs(w hophttp.ResponseWriter, r *hophttp.Request) {
+func (a *Agent) handleLogs(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 	parts := strings.Split(strings.TrimPrefix(r.Path, "/logs/"), "/")
 	if len(parts) != 2 {
-		hophttp.Error(w, "usage: /logs/{taskID}/stdout or /logs/{taskID}/stderr", hophttp.StatusBadRequest)
+		leanhttp.Error(w, "usage: /logs/{taskID}/stdout or /logs/{taskID}/stderr", leanhttp.StatusBadRequest)
 		return
 	}
 
@@ -871,7 +922,7 @@ func (a *Agent) handleLogs(w hophttp.ResponseWriter, r *hophttp.Request) {
 	case "stderr":
 		get = func(r runner.Runner) *runner.LogBroadcaster { return r.GetStderr(taskID) }
 	default:
-		hophttp.Error(w, "stream must be stdout or stderr", hophttp.StatusBadRequest)
+		leanhttp.Error(w, "stream must be stdout or stderr", leanhttp.StatusBadRequest)
 		return
 	}
 	broadcaster := get(a.execRunner)
@@ -883,15 +934,15 @@ func (a *Agent) handleLogs(w hophttp.ResponseWriter, r *hophttp.Request) {
 	}
 
 	if broadcaster == nil {
-		hophttp.Error(w, "task not found or not running", hophttp.StatusNotFound)
+		leanhttp.Error(w, "task not found or not running", leanhttp.StatusNotFound)
 		return
 	}
 
+	// De lifetime VÓÓR de eerste write claimen (zelfde regel als /v1/events):
+	// leanhttp's Request.Done is na de eerste Flush terecht te laat.
+	done := r.Context().Done()
+
 	sse := httputil.SSEWriter(w)
-	if sse == nil {
-		hophttp.Error(w, "streaming not supported", hophttp.StatusInternalServerError)
-		return
-	}
 
 	logCh := broadcaster.Subscribe()
 	defer broadcaster.Unsubscribe(logCh)
@@ -903,7 +954,7 @@ func (a *Agent) handleLogs(w hophttp.ResponseWriter, r *hophttp.Request) {
 				return
 			}
 			sse.WriteData(line)
-		case <-r.Context().Done():
+		case <-done:
 			return
 		}
 	}

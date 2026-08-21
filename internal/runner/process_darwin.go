@@ -25,7 +25,7 @@ func (r *ExecRunner) prepareCgroup(taskID string, memoryLimit uint64) (int, erro
 }
 
 // removeCgroup on macOS is a no-op.
-func (r *ExecRunner) removeCgroup(taskID string) {}
+func (r *ExecRunner) removeCgroup(taskID string) error { return nil }
 
 // attachCgroup on macOS is a no-op (no clone3 / CgroupFD support).
 func (r *ExecRunner) attachCgroup(cmd *exec.Cmd, fd int) {}

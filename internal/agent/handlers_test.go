@@ -16,7 +16,7 @@ import (
 
 	"time"
 
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 
 	"github.com/xinix00/hop/internal/runner"
 	"github.com/xinix00/hop/internal/types"
@@ -29,13 +29,13 @@ func TestHandleHealth(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/health", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/health", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleHealth(w, req)
 
-	if w.Code != hophttp.StatusOK {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusOK)
+	if w.Code != leanhttp.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusOK)
 	}
 
 	var resp map[string]string
@@ -68,20 +68,20 @@ func TestHandleTasks(t *testing.T) {
 		s.tasks["task-2"] = &types.Task{
 			ID:      "task-2",
 			JobName: "job-2",
-			State:   types.TaskStopped,
+			State:   types.TaskFailed,
 			Pid:     5678,
 		}
 	})
 
 	time.Sleep(10 * time.Millisecond)
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/tasks", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/tasks", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleTasks(w, req)
 
-	if w.Code != hophttp.StatusOK {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusOK)
+	if w.Code != leanhttp.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusOK)
 	}
 
 	var tasks []*types.Task
@@ -111,14 +111,14 @@ func TestHandleRunSuccess(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
 	// Job is accepted asynchronously
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusAccepted)
 	}
 
 	var resp map[string]string
@@ -158,13 +158,13 @@ func TestHandleRunMethodNotAllowed(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/run", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/run", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusMethodNotAllowed {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusMethodNotAllowed)
+	if w.Code != leanhttp.StatusMethodNotAllowed {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusMethodNotAllowed)
 	}
 }
 
@@ -177,13 +177,13 @@ func TestHandleRunInvalidJSON(t *testing.T) {
 	defer cancel()
 	go agent.stateLoop(ctx)
 
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader([]byte("not json")))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader([]byte("not json")))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusBadRequest {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusBadRequest)
+	if w.Code != leanhttp.StatusBadRequest {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusBadRequest)
 	}
 }
 
@@ -206,13 +206,13 @@ func TestHandleRunInsufficientCapacity(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusServiceUnavailable {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusServiceUnavailable)
+	if w.Code != leanhttp.StatusServiceUnavailable {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusServiceUnavailable)
 	}
 }
 
@@ -234,14 +234,14 @@ func TestHandleRunRunnerError(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
 	// Job is accepted (fire-and-forget), error happens async
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusAccepted)
 	}
 
 	// Wait for async job attempt
@@ -286,13 +286,13 @@ func TestHandleDeleteSuccess(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	req := hophttp.NewRequest(hophttp.MethodDelete, "/delete/test", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodDelete, "/delete/test", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleDelete(w, req)
 
-	if w.Code != hophttp.StatusOK {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusOK)
+	if w.Code != leanhttp.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusOK)
 	}
 
 	var resp map[string]int
@@ -310,13 +310,13 @@ func TestHandleDeleteMethodNotAllowed(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := hophttp.NewRequest(hophttp.MethodPost, "/delete/job-1", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/delete/job-1", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleDelete(w, req)
 
-	if w.Code != hophttp.StatusMethodNotAllowed {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusMethodNotAllowed)
+	if w.Code != leanhttp.StatusMethodNotAllowed {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusMethodNotAllowed)
 	}
 }
 
@@ -325,13 +325,13 @@ func TestHandleDeleteMissingJobID(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := hophttp.NewRequest(hophttp.MethodDelete, "/delete/", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodDelete, "/delete/", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleDelete(w, req)
 
-	if w.Code != hophttp.StatusBadRequest {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusBadRequest)
+	if w.Code != leanhttp.StatusBadRequest {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusBadRequest)
 	}
 }
 
@@ -346,14 +346,14 @@ func TestHandleDeleteNonExistentJob(t *testing.T) {
 
 	time.Sleep(10 * time.Millisecond)
 
-	req := hophttp.NewRequest(hophttp.MethodDelete, "/delete/nonexistent", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodDelete, "/delete/nonexistent", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleDelete(w, req)
 
 	// Should succeed with 0 deleted
-	if w.Code != hophttp.StatusOK {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusOK)
+	if w.Code != leanhttp.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusOK)
 	}
 
 	var resp map[string]int
@@ -369,13 +369,13 @@ func TestHandleLogsInvalidPath(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/logs/invalid", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/logs/invalid", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleLogs(w, req)
 
-	if w.Code != hophttp.StatusBadRequest {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusBadRequest)
+	if w.Code != leanhttp.StatusBadRequest {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusBadRequest)
 	}
 }
 
@@ -384,13 +384,13 @@ func TestHandleLogsInvalidStream(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/logs/task-1/invalid", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/logs/task-1/invalid", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleLogs(w, req)
 
-	if w.Code != hophttp.StatusBadRequest {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusBadRequest)
+	if w.Code != leanhttp.StatusBadRequest {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusBadRequest)
 	}
 }
 
@@ -399,13 +399,13 @@ func TestHandleLogsTaskNotFound(t *testing.T) {
 	mockRunner := NewMockRunner()
 	agent := New(cfg, "test-agent", mockRunner)
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/logs/nonexistent/stdout", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/logs/nonexistent/stdout", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleLogs(w, req)
 
-	if w.Code != hophttp.StatusNotFound {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusNotFound)
+	if w.Code != leanhttp.StatusNotFound {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusNotFound)
 	}
 }
 
@@ -430,14 +430,14 @@ func TestHandleRunEmptyJSON(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 
 	// Empty JSON object - job accepted, but will fail async
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader([]byte("{}")))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader([]byte("{}")))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
 	// Job is accepted (fire-and-forget), validation happens async
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusAccepted)
 	}
 
 	// Wait for async job attempt
@@ -478,13 +478,13 @@ func TestHandleRunWithPorts(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusAccepted)
 	}
 
 	// Wait for async job start
@@ -534,13 +534,13 @@ func TestHandleRunWithFixedPorts(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusAccepted)
 	}
 
 	// Wait for async job start
@@ -596,14 +596,14 @@ func TestHandleRunPortInUse(t *testing.T) {
 	}
 
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
 	// Job is accepted (fire-and-forget), port check happens async
-	if w.Code != hophttp.StatusAccepted {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusAccepted)
 	}
 
 	// Wait for async job attempt
@@ -641,13 +641,13 @@ func TestHandleCapacity(t *testing.T) {
 	go agent.stateLoop(ctx)
 	time.Sleep(10 * time.Millisecond)
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/capacity", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/capacity", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleCapacity(w, req)
 
-	if w.Code != hophttp.StatusOK {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusOK)
+	if w.Code != leanhttp.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusOK)
 	}
 
 	var resp CapacityResponse
@@ -683,13 +683,13 @@ func TestHandleLeader(t *testing.T) {
 	agent := New(cfg, "test-agent", mockRunner)
 	// No getLeader set
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/leader", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/leader", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleLeader(w, req)
 
-	if w.Code != hophttp.StatusOK {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusOK)
+	if w.Code != leanhttp.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusOK)
 	}
 
 	var resp map[string]string
@@ -710,13 +710,13 @@ func TestHandleLeaderWithFunc(t *testing.T) {
 		return "10.0.0.1:9080"
 	})
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/leader", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/leader", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.handleLeader(w, req)
 
-	if w.Code != hophttp.StatusOK {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusOK)
+	if w.Code != leanhttp.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusOK)
 	}
 
 	var resp map[string]string
@@ -737,13 +737,13 @@ func TestProxyToLeaderNoFunc(t *testing.T) {
 	agent := New(cfg, "test-agent", mockRunner)
 	// No getLeader set
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/v1/agents", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/v1/agents", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.proxyToLeader(w, req)
 
-	if w.Code != hophttp.StatusServiceUnavailable {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusServiceUnavailable)
+	if w.Code != leanhttp.StatusServiceUnavailable {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusServiceUnavailable)
 	}
 }
 
@@ -755,13 +755,13 @@ func TestProxyToLeaderNoLeader(t *testing.T) {
 		return "" // No leader available
 	})
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/v1/agents", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/v1/agents", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.proxyToLeader(w, req)
 
-	if w.Code != hophttp.StatusServiceUnavailable {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusServiceUnavailable)
+	if w.Code != leanhttp.StatusServiceUnavailable {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusServiceUnavailable)
 	}
 }
 
@@ -781,13 +781,13 @@ func TestProxyToLeaderSuccess(t *testing.T) {
 		return leaderServer.Listener.Addr().String()
 	})
 
-	req := hophttp.NewRequest(hophttp.MethodGet, "/v1/agents", nil)
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/v1/agents", nil)
+	w := leanhttp.NewRecorder()
 
 	agent.proxyToLeader(w, req)
 
-	if w.Code != hophttp.StatusOK {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusOK)
+	if w.Code != leanhttp.StatusOK {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusOK)
 	}
 
 	// Verify response was proxied
@@ -818,17 +818,17 @@ func TestProxyToLeaderPostForward(t *testing.T) {
 	})
 
 	reqBody := `{"name":"test","command":"echo"}`
-	req := hophttp.NewRequest(hophttp.MethodPost, "/v1/jobs", bytes.NewReader([]byte(reqBody)))
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/v1/jobs", bytes.NewReader([]byte(reqBody)))
 	req.Header.Set("Content-Type", "application/json")
-	w := hophttp.NewRecorder()
+	w := leanhttp.NewRecorder()
 
 	agent.proxyToLeader(w, req)
 
-	if w.Code != hophttp.StatusCreated {
-		t.Errorf("Status code = %d, want %d", w.Code, hophttp.StatusCreated)
+	if w.Code != leanhttp.StatusCreated {
+		t.Errorf("Status code = %d, want %d", w.Code, leanhttp.StatusCreated)
 	}
-	if receivedMethod != hophttp.MethodPost {
-		t.Errorf("Proxied method = %q, want %q", receivedMethod, hophttp.MethodPost)
+	if receivedMethod != leanhttp.MethodPost {
+		t.Errorf("Proxied method = %q, want %q", receivedMethod, leanhttp.MethodPost)
 	}
 	if receivedBody != reqBody {
 		t.Errorf("Proxied body = %q, want %q", receivedBody, reqBody)
@@ -862,9 +862,9 @@ func TestHandleLogsStdoutStream(t *testing.T) {
 
 	// Create a request with a context we can cancel
 	reqCtx, reqCancel := context.WithCancel(context.Background())
-	req := hophttp.NewRequest(hophttp.MethodGet, "/logs/"+task.ID+"/stdout", nil)
+	req := leanhttp.NewRequest(leanhttp.MethodGet, "/logs/"+task.ID+"/stdout", nil)
 	req = req.WithContext(reqCtx)
-	w := hophttp.NewRecorder()
+	w := leanhttp.NewRecorder()
 
 	// Run handleLogs in a goroutine (it blocks on the SSE stream)
 	done := make(chan struct{})
@@ -915,12 +915,12 @@ func TestStopDuringStartDoesNotResurrectTask(t *testing.T) {
 	// Dispatch a job via handleRun — task is added to state, startJob blocks
 	job := types.Job{Name: "myapp", Command: "./app", Count: 1, CPUShares: 1024}
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusAccepted {
-		t.Fatalf("handleRun: status %d, want %d", w.Code, hophttp.StatusAccepted)
+	if w.Code != leanhttp.StatusAccepted {
+		t.Fatalf("handleRun: status %d, want %d", w.Code, leanhttp.StatusAccepted)
 	}
 
 	// Task should be in state (capacity reserved)
@@ -930,8 +930,8 @@ func TestStopDuringStartDoesNotResurrectTask(t *testing.T) {
 	}
 
 	// Stop the job while startJob is still blocked
-	stopReq := hophttp.NewRequest(hophttp.MethodPost, "/stop/myapp", nil)
-	stopW := hophttp.NewRecorder()
+	stopReq := leanhttp.NewRequest(leanhttp.MethodPost, "/stop/myapp", nil)
+	stopW := leanhttp.NewRecorder()
 	agent.handleStop(stopW, stopReq)
 
 	// Task should be removed from state
@@ -969,12 +969,12 @@ func TestHandleRun_EarlyFailure_TaskStaysFailed(t *testing.T) {
 
 	job := types.Job{Name: "failing-app", Command: "echo hello"}
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 
 	agent.handleRun(w, req)
 
-	if w.Code != hophttp.StatusAccepted {
+	if w.Code != leanhttp.StatusAccepted {
 		t.Fatalf("Expected 202 Accepted, got %d", w.Code)
 	}
 
@@ -1017,14 +1017,14 @@ func TestHandleRun_EarlyFailure_VisibleInTaskList(t *testing.T) {
 	// Dispatch job that will fail
 	job := types.Job{Name: "broken", Command: "echo"}
 	body, _ := json.Marshal(job)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 	agent.handleRun(w, req)
 	time.Sleep(50 * time.Millisecond)
 
 	// GET /tasks should show the failed task
-	req = hophttp.NewRequest(hophttp.MethodGet, "/tasks", nil)
-	w = hophttp.NewRecorder()
+	req = leanhttp.NewRequest(leanhttp.MethodGet, "/tasks", nil)
+	w = leanhttp.NewRecorder()
 	agent.handleTasks(w, req)
 
 	var tasks []*types.Task
@@ -1056,8 +1056,8 @@ func TestHandleRun_EarlyFailure_ThenSuccess(t *testing.T) {
 	mockRunner.SetRunError(ErrSimulated)
 	job1 := types.Job{Name: "app", Command: "echo v1"}
 	body, _ := json.Marshal(job1)
-	req := hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w := leanhttp.NewRecorder()
 	agent.handleRun(w, req)
 	time.Sleep(50 * time.Millisecond)
 
@@ -1065,8 +1065,8 @@ func TestHandleRun_EarlyFailure_ThenSuccess(t *testing.T) {
 	mockRunner.SetRunError(nil)
 	job2 := types.Job{Name: "app", Command: "echo v2"}
 	body, _ = json.Marshal(job2)
-	req = hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body))
-	w = hophttp.NewRecorder()
+	req = leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body))
+	w = leanhttp.NewRecorder()
 	agent.handleRun(w, req)
 	time.Sleep(50 * time.Millisecond)
 

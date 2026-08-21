@@ -14,7 +14,7 @@ import (
 
 	"github.com/xinix00/hop/internal/leader"
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 func init() {
@@ -35,22 +35,22 @@ func setupTestServer(t *testing.T) (*Server, *leader.Leader, context.CancelFunc)
 
 // doRequest routes through the server's own mux, so the wildcards in patterns
 // like /v1/jobs/{name}/status are filled exactly as they are in production.
-func doRequest(server *Server, method, path string, body any) *hophttp.Recorder {
+func doRequest(server *Server, method, path string, body any) *leanhttp.Recorder {
 	payload := ""
 	if body != nil {
 		data, _ := json.Marshal(body)
 		payload = string(data)
 	}
-	req := hophttp.NewRequest(method, path, strings.NewReader(payload))
+	req := leanhttp.NewRequest(method, path, strings.NewReader(payload))
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	w := hophttp.NewRecorder()
+	w := leanhttp.NewRecorder()
 	server.mux.ServeHTTP(w, req)
 	return w
 }
 
-func decodeJSON(t *testing.T, w *hophttp.Recorder, v any) {
+func decodeJSON(t *testing.T, w *leanhttp.Recorder, v any) {
 	t.Helper()
 	if err := json.NewDecoder(w.Body).Decode(v); err != nil {
 		t.Fatalf("Failed to decode response: %v (body: %s)", err, w.Body.String())
@@ -176,8 +176,8 @@ func TestHeartbeatInvalidJSON(t *testing.T) {
 	server, _, cancel := setupTestServer(t)
 	defer cancel()
 
-	req := hophttp.NewRequest("POST", "/v1/heartbeat", strings.NewReader("not json"))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest("POST", "/v1/heartbeat", strings.NewReader("not json"))
+	w := leanhttp.NewRecorder()
 	server.mux.ServeHTTP(w, req)
 
 	if w.Code != 400 {
@@ -289,8 +289,8 @@ func TestRunJobInvalidJSON(t *testing.T) {
 	server, _, cancel := setupTestServer(t)
 	defer cancel()
 
-	req := hophttp.NewRequest("POST", "/v1/jobs", strings.NewReader("not json"))
-	w := hophttp.NewRecorder()
+	req := leanhttp.NewRequest("POST", "/v1/jobs", strings.NewReader("not json"))
+	w := leanhttp.NewRecorder()
 	server.mux.ServeHTTP(w, req)
 
 	if w.Code != 400 {

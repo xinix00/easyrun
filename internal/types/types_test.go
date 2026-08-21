@@ -15,7 +15,6 @@ func TestTaskStateConstants(t *testing.T) {
 	}{
 		{TaskRunning, "running"},
 		{TaskFailed, "failed"},
-		{TaskStopped, "stopped"},
 	}
 
 	for _, tt := range tests {

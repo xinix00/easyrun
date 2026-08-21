@@ -8,7 +8,8 @@ import (
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
+	"github.com/xinix00/hop/pkg/httputil"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 const downloadTimeout = 5 * time.Minute
@@ -17,13 +18,13 @@ const downloadTimeout = 5 * time.Minute
 // image path (hopos_stream.go): pooled connections, so several artifacts from
 // the same host cost one handshake instead of one each. The deadline sits on the
 // call, because a streamed image is bounded by silence, not by total time.
-var artifactClient hophttp.Client
+var artifactClient httputil.Client
 
 // downloadHTTP downloads from HTTP/HTTPS URL
 func downloadHTTP(artifact *types.Artifact, destPath string) error {
 	// Timeout on the call, not on a context: Call.Timeout covers the body read
-	// too, and unlike a context it also holds on a node (see hophttp).
-	call := hophttp.Call{Method: hophttp.MethodGet, URL: artifact.URL, Timeout: downloadTimeout}
+	// too, on every platform (leanhttp arms the socket deadline itself).
+	call := leanhttp.Call{Method: leanhttp.MethodGet, URL: artifact.URL, Timeout: downloadTimeout}
 
 	// Add custom headers
 	for k, v := range artifact.Headers {
@@ -44,7 +45,7 @@ func downloadHTTP(artifact *types.Artifact, destPath string) error {
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != hophttp.StatusOK {
+	if resp.StatusCode != leanhttp.StatusOK {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 

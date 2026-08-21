@@ -15,7 +15,6 @@ import (
 
 	"github.com/xinix00/hop/internal/agent"
 	"github.com/xinix00/hop/internal/agentloop"
-	"github.com/xinix00/hop/internal/api"
 	"github.com/xinix00/hop/internal/discovery"
 	"github.com/xinix00/hop/internal/leader"
 	"github.com/xinix00/hop/pkg/config"
@@ -158,18 +157,31 @@ func run(ctx context.Context, cfg *config.Config, nodeID string, standalone bool
 			return agentloop.Heartbeat(leaderAddr, id, ep, version, key, cpuTempMilliC())
 		},
 		DoBecomeLeader: func() (func(), agentloop.LeaderAPI) {
-			var l *leader.Leader
-			stop := becomeLeader(ctx, cfg, ag, &l, cfg.APIKey, standalone)
+			log.Println("Became leader!")
+			stop, l := agentloop.BecomeLeader(ctx, cfg, ag, version, standalone, true)
+			log.Printf("Leader initialized with %d placed jobs from local agent", len(ag.GetPlacedTaskCounts()))
 			return stop, l
 		},
 	}
+
+	// De agent (state-loop + agent-API) moet draaien vóór de eerste
+	// election-poging: BecomeLeader registreert zichzelf en dat bevraagt de
+	// agent-state (zelfde ordening als agentboot).
+	runErr := make(chan error, 1)
+	go func() { runErr <- ag.Run(ctx) }()
+
+	// Eén directe election-poging bij boot (zelfde snelle pad als agentboot):
+	// lock vrij (standalone, of de eerste van een verse cluster) = meteen
+	// leader in plaats van na de takeover-drempel (~4 ticks); lock bezet = de
+	// eerstvolgende tick registreert gewoon bij de zittende leader.
+	loop.BecomeLeaderNow()
 
 	// Main loop: heartbeat to leader, handle leader election (gedeeld met
 	// agentboot — internal/agentloop, de fase-2-extractie).
 	go loop.Run(ctx.Done(), 10*time.Second)
 
-	// Run agent HTTP server
-	if err := ag.Run(ctx); err != nil {
+	// Block on the agent HTTP server, like ag.Run(ctx) did when it ran here.
+	if err := <-runErr; err != nil {
 		log.Printf("Agent error: %v", err)
 	}
 }
@@ -224,72 +236,6 @@ func buildBackend(cfg *config.Config, standalone bool) (hoplock.Backend, error) 
 		return discovery.HoplockServerBackend(c.URL, c.APIKey, cfg.Cluster.Name), nil
 	default:
 		return nil, fmt.Errorf("unknown lock type %q (want one of: hoplockserver, s3, mem)", c.Type)
-	}
-}
-
-func becomeLeader(ctx context.Context, cfg *config.Config, ag *agent.Agent, l **leader.Leader, apiKey string, standalone bool) func() {
-	log.Println("Became leader!")
-
-	// Leader gets its own context — cancelled on leadership loss (not just shutdown)
-	leaderCtx, cancel := context.WithCancel(ctx)
-
-	// Start leader with settle delay - wait for agents to register with placed counts
-	*l = leader.New(ag.ID(), ag, nil)
-	(*l).SetAPIKey(apiKey)
-	if d := cfg.Timeouts.NodeDeadThreshold; d > 0 {
-		(*l).SetAgentTimeout(d)
-	}
-	(*l).EnableSettle()
-
-	// Gecommitte clusterstaat: bij bruikbare S3-config commit deze leader
-	// zijn gewenste staat naast de lease en laadt een verse leader hem
-	// terug — failover zonder state-merging (zelfde gate als agentboot,
-	// zie discovery.StateStoreFromConfig).
-	cleanBoot := true
-	if st := discovery.StateStoreFromConfig(cfg, standalone); st != nil {
-		(*l).SetStatePersister(st)
-		loaded, err := (*l).LoadCommittedState(leaderCtx)
-		if err != nil {
-			log.Printf("committed state not loaded: %v", err)
-			// Store onbereikbaar ≠ store leeg: nooit seeden op een storing.
-			cleanBoot = false
-		} else {
-			cleanBoot = !loaded
-		}
-	}
-
-	// Start leader state loop + health checker BEFORE any state operations
-	// Without this, RegisterAgent deadlocks (query waits on ops channel that nobody reads)
-	go (*l).Run(leaderCtx)
-
-	// Start API server so other agents can register/heartbeat
-	leaderAddr := fmt.Sprintf(":%d", cfg.Node.Port+1000)
-	srv := api.NewServer(*l, leaderAddr, apiKey, cfg.Cluster.Name)
-	go func() {
-		if err := srv.Run(leaderCtx); err != nil {
-			log.Printf("Leader API error: %v", err)
-		}
-	}()
-
-	// Register self with placed counts (during settle, no reconcile yet)
-	(*l).RegisterAgent(ag.ID(), ag.Endpoint(), version, ag.GetPlacedTaskCounts())
-
-	log.Printf("Leader initialized with %d placed jobs from local agent", len(ag.GetPlacedTaskCounts()))
-
-	// Clean boot (geen snapshot én lege job store) → seed de init jobs.
-	// Tijdens settle worden ze alleen gestored; reconcile dispatcht daarna.
-	if cleanBoot && len(cfg.Cluster.InitJobs) > 0 && len((*l).GetJobs()) == 0 {
-		jobs, err := leader.DecodeInitJobs(cfg.Cluster.InitJobs)
-		if err != nil {
-			log.Printf("cluster.init_jobs: %v", err) // al gevalideerd bij boot; hooguit theoretisch
-		} else {
-			(*l).SeedInitJobs(jobs)
-		}
-	}
-
-	return func() {
-		srv.Stop() // release :9080 synchronously
-		cancel()   // stop leader state loop
 	}
 }
 

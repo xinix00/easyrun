@@ -330,7 +330,7 @@ Run Docker containers instead of processes by setting the `image` field:
 
 - **Simplicity over features** - KISS
 - **ExecRunner + DockerRunner** — runner selected by `driver` field (auto-derived from `image`)
-- **States**: running, stopping, stopped, failed
+- **States**: queued, downloading, running, stopping, failed; stopping ends by removing the task
 - **Polling over events** - 10s heartbeat, simple and robust
 - **Channel-based state** - Single goroutine owns mutable state
 

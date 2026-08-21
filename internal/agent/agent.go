@@ -12,17 +12,16 @@ import (
 	"github.com/xinix00/hop/internal/runner"
 	"github.com/xinix00/hop/internal/types"
 	"github.com/xinix00/hop/pkg/config"
-	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 const (
 	defaultMaxRestarts   = 5
 	defaultRestartWindow = 5 * time.Minute
-	shutdownTimeout      = 5 * time.Second
 	proxyTimeout         = 10 * time.Second
 
-	// proxyMaxBody caps a body the proxy forwards to the leader. hophttp sends a
+	// proxyMaxBody caps a body the proxy forwards to the leader. leanhttp sends a
 	// body as bytes, so the proxy has to read it before it can pass it on, and an
 	// unbounded read on a route that has not been authenticated yet is a
 	// pre-auth memory DoS. Same size as httputil's cap, for the same reason.
@@ -50,16 +49,19 @@ type Agent struct {
 
 	ops chan func(*agentState) // all state access goes through here
 
-	server    *hophttp.Server
+	server    *httputil.Server
 	getLeader func() string // returns current leader address (for proxying)
 
 	// Two clients, and the split is the timeout: httpClient carries
 	// proxyTimeout, streamClient carries none. An SSE tail or a log stream must
 	// not be cut off by the deadline that a buffered proxy call wants.
-	httpClient   *hophttp.Client
-	streamClient *hophttp.Client
+	httpClient   *httputil.Client
+	streamClient *httputil.Client
 	apiKey       string        // API key for authenticating with leader and protecting local endpoints
 	shutdownCh   chan struct{} // closed by shutdown() — long-running goroutines select on this
+
+	// restartWait is a test seam. Nil uses the cancellable timer below.
+	restartWait func(time.Duration) bool
 
 	checkStates map[string]*checkState // health check state per task (monitor goroutine only)
 }
@@ -67,10 +69,13 @@ type Agent struct {
 // New creates a new agent with optional runner (nil uses default ExecRunner)
 func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 	endpoint := fmt.Sprintf("http://%s:%d", cfg.Node.IP, cfg.Node.Port)
+	sysInfo := GetSystemInfo() // detect once at startup
 
-	// Build node attributes: auto-detected + user-configured (config overrides)
+	// Build node attributes: auto-detected + user-configured (config overrides).
+	// node.docker betekent: de daemon antwoordt op de socket — een node die
+	// containers echt kan draaien, niet slechts een CLI-binary op het pad.
 	hasDocker := "false"
-	if dockerPresent() {
+	if runner.DockerPresent(cfg.Runner.DockerSocket) {
 		hasDocker = "true"
 	}
 
@@ -98,12 +103,12 @@ func New(cfg *config.Config, id string, r runner.Runner) *Agent {
 		endpoint:     endpoint,
 		config:       cfg,
 		execRunner:   r,
-		dockerRunner: runner.NewDockerRunner(attrs, cfg.Runner.DockerSocket),
-		sysInfo:      GetSystemInfo(), // detect once at startup
+		dockerRunner: runner.NewDockerRunner(attrs, cfg.Runner.DockerSocket, sysInfo.CPUCores),
+		sysInfo:      sysInfo,
 		attributes:   attrs,
 		ops:          make(chan func(*agentState), stateChannelBufferSize),
-		httpClient:   &hophttp.Client{Timeout: proxyTimeout},
-		streamClient: &hophttp.Client{},
+		httpClient:   &httputil.Client{Timeout: proxyTimeout},
+		streamClient: &httputil.Client{},
 		apiKey:       cfg.APIKey,
 		checkStates:  make(map[string]*checkState),
 		getLeader:    func() string { return "" }, // overridden by SetLeaderFunc; default = "no leader"
@@ -248,7 +253,15 @@ func (a *Agent) Init() error {
 	if err := a.execRunner.Cleanup(); err != nil {
 		return err
 	}
-	return a.dockerRunner.Cleanup()
+	// An exec-only host (and every Tamago node) has no Docker daemon to clean.
+	// Docker cleanup is best effort: an unreachable daemon must not prevent
+	// exec/Hop tasks from starting.
+	if runner.DockerPresent(a.config.Runner.DockerSocket) {
+		if err := a.dockerRunner.Cleanup(); err != nil {
+			log.Printf("Warning: Docker startup cleanup failed: %v", err)
+		}
+	}
+	return nil
 }
 
 // runnerFor returns the appropriate runner based on driver
@@ -266,18 +279,14 @@ func (a *Agent) runnerFor(driver string) runner.Runner {
 	return a.execRunner
 }
 
-// stateLoop is the single goroutine that owns all mutable state.
-//
-// ctx is intentionally NOT honoured — exiting on shutdown would deadlock
-// the shutdown path itself, which calls query(...) for the task snapshot.
-// stateLoop dies with the process; goroutines using do/query block until
-// then, which is fine because main waits for shutdownDone before returning.
+// stateLoop is the single goroutine that owns all mutable state. The agent has
+// process lifetime, so this loop dies with the process; honoring ctx here would
+// race shutdown's final task snapshot through query.
 func (a *Agent) stateLoop(ctx context.Context) {
 	state := &agentState{
 		jobs:  make(map[string]*types.Job),
 		tasks: make(map[string]*types.Task),
 	}
-
 	for op := range a.ops {
 		op(state)
 	}
@@ -300,14 +309,13 @@ func query[T any](a *Agent, fn func(*agentState) T) T {
 
 // Run starts the agent HTTP server and state loop
 func (a *Agent) Run(ctx context.Context) error {
-	// Start the state loop
 	go a.stateLoop(ctx)
 
-	auth := func(h hophttp.Handler) hophttp.Handler {
+	auth := func(h leanhttp.Handler) leanhttp.Handler {
 		return httputil.RequireHMAC(a.apiKey, h)
 	}
 
-	mux := hophttp.NewServeMux()
+	mux := leanhttp.NewServeMux()
 	mux.HandleFunc("/health", a.handleHealth)
 	mux.HandleFunc("/capacity", auth(a.handleCapacity))
 	mux.HandleFunc("/tasks", auth(a.handleTasks))
@@ -329,14 +337,15 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/v1/jobs", auth(a.proxyToLeader))
 	mux.HandleFunc("/v1/jobs/", auth(a.proxyToLeader))
 	mux.HandleFunc("/v1/status", auth(a.proxyToLeader))
+	mux.HandleFunc("/v1/tasks", auth(a.proxyToLeader))
 	mux.HandleFunc("/v1/events", auth(a.proxyStreamToLeader))
 
 	addr := fmt.Sprintf(":%d", a.config.Node.Port)
 	// The slowloris guard (a header deadline, and deliberately no write timeout
-	// because /v1/events is a long-lived SSE stream) lives in hophttp.NewServer:
+	// because /v1/events is a long-lived SSE stream) lives in httputil.NewServer:
 	// it is a property of the transport, and only the host transport has one to
 	// set — a node's port sits on the node network behind the switch.
-	a.server = hophttp.NewServer(addr, corsMiddleware(mux.Handler()))
+	a.server = httputil.NewServer(addr, corsMiddleware(mux.Handler()))
 
 	go a.monitorTasks(ctx)
 
@@ -350,18 +359,35 @@ func (a *Agent) Run(ctx context.Context) error {
 	}()
 
 	log.Printf("Agent listening on %s", addr)
-	if err := a.server.ListenAndServe(); err != hophttp.ErrServerClosed {
+	if err := a.server.ListenAndServe(); err != httputil.ErrServerClosed {
 		return err
 	}
 	<-shutdownDone
 	return nil
 }
 
-// stopTasks stops tasks in parallel, removes from state, and blocks until done.
+// stopAndRemove removes the logical task, then makes one best-effort attempt to
+// release the runner resource. A failed physical cleanup is runner-owned
+// quarantine; it must not keep a dead task alive in the scheduler forever.
+func (a *Agent) stopAndRemove(task *types.Task) error {
+	query(a, func(s *agentState) struct{} {
+		delete(s.tasks, task.ID)
+		return struct{}{}
+	})
+	return a.runnerFor(task.Driver).Stop(task)
+}
+
+// stopTasks stops each task once, in parallel. Every task ends in GONE.
 func (a *Agent) stopTasks(tasks []*types.Task) {
 	if len(tasks) == 0 {
 		return
 	}
+	query(a, func(s *agentState) struct{} {
+		for _, task := range tasks {
+			delete(s.tasks, task.ID)
+		}
+		return struct{}{}
+	})
 	var wg sync.WaitGroup
 	for _, task := range tasks {
 		wg.Add(1)
@@ -370,74 +396,51 @@ func (a *Agent) stopTasks(tasks []*types.Task) {
 			if err := a.runnerFor(t.Driver).Stop(t); err != nil {
 				log.Printf("Failed to stop task %s: %v", t.ID, err)
 			}
-			a.do(func(s *agentState) {
-				delete(s.tasks, t.ID)
-			})
 		}(task)
 	}
 	wg.Wait()
 }
 
-// markRunningAsStopping returns every task that needs stopping. Already-
-// Stopping ones get included too: monitor flags a crashed task Stopping
-// before restartTask runs, and shutdown firing mid-restart must still
-// clean up that old task entry — otherwise its taskDir/cgroup leak and
-// the goroutine bumping a swap eventually finds nothing.
-func markRunningAsStopping(s *agentState) []*types.Task {
-	var tasks []*types.Task
+// markAllStopping marks every present task, including failed or already
+// stopping ones. stopTasks performs the single STOPPING -> GONE transition
+// before starting physical cleanup.
+func markAllStopping(s *agentState) []*types.Task {
+	tasks := make([]*types.Task, 0, len(s.tasks))
 	for _, task := range s.tasks {
-		switch task.State {
-		// De startfase (Queued/Downloading) telt mee: die tasks houden een
-		// slot vast terwijl hun download loopt, en de Stop-route weet hoe je
-		// een lopende download afbreekt. Alleen Failed/Stopped blijven liggen —
-		// daar draait niets meer.
-		case types.TaskQueued, types.TaskDownloading, types.TaskRunning, types.TaskStopping:
-			task.State = types.TaskStopping
-			tasks = append(tasks, task)
-		}
+		// Presence means ownership, independent of state. There is no final
+		// stopped state to filter out: after one stop attempt the record is gone.
+		task.State = types.TaskStopping
+		tasks = append(tasks, task)
 	}
 	return tasks
 }
 
-// StopAllTasks stops all running tasks and removes them from state (used when agent is isolated)
+// StopAllTasks attempts to stop every task once (used when the agent is isolated).
 func (a *Agent) StopAllTasks() {
-	tasks := query(a, func(s *agentState) []*types.Task { return markRunningAsStopping(s) })
+	tasks := query(a, func(s *agentState) []*types.Task { return markAllStopping(s) })
 	a.stopTasks(tasks)
 	if len(tasks) > 0 {
-		log.Printf("Isolation mode: stopped and removed %d tasks", len(tasks))
+		log.Printf("Isolation mode: requested cleanup of %d tasks", len(tasks))
 	}
 }
 
-// shutdown gracefully stops all tasks. HTTP drain and task stop run in
-// parallel so the slower one bounds total time (~11s task SIGTERM+SIGKILL,
-// 5s HTTP drain) — sequentially it would just stack and risk hitting
-// systemd's TimeoutStopSec.
+// shutdown stops all tasks and closes the HTTP server. Close is immediate
+// (listener + every connection); the task stop is what bounds total time
+// (~11s SIGTERM+SIGKILL worst case) and must not stack behind an HTTP drain —
+// systemd's TimeoutStopSec is waiting.
 func (a *Agent) shutdown() {
-	close(a.shutdownCh) // signal restart goroutines: stop sleeping, don't spawn
+	close(a.shutdownCh)
 	log.Println("Agent shutting down...")
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	_ = a.server.Close()
 
-	go func() {
-		defer wg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		_ = a.server.Shutdown(ctx)
-	}()
-
-	go func() {
-		defer wg.Done()
-		tasks := query(a, func(s *agentState) []*types.Task { return markRunningAsStopping(s) })
-		a.stopTasks(tasks)
-	}()
-
-	wg.Wait()
+	tasks := query(a, func(s *agentState) []*types.Task { return markAllStopping(s) })
+	a.stopTasks(tasks)
 }
 
 // corsMiddleware adds CORS headers for browser access
-func corsMiddleware(next hophttp.Handler) hophttp.Handler {
-	return func(w hophttp.ResponseWriter, r *hophttp.Request) {
+func corsMiddleware(next leanhttp.Handler) leanhttp.Handler {
+	return func(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, PATCH, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Hop-Auth")
@@ -452,7 +455,7 @@ func corsMiddleware(next hophttp.Handler) hophttp.Handler {
 
 		// Handle preflight
 		if r.Method == "OPTIONS" {
-			w.WriteHeader(hophttp.StatusOK)
+			w.WriteHeader(leanhttp.StatusOK)
 			return
 		}
 
@@ -542,14 +545,13 @@ func (a *Agent) SyncJobs(jobs []*types.Job, updated time.Time) {
 	})
 }
 
-// resourceUsage returns total CPU shares and memory used by running/stopping tasks.
-// Stopping tasks count because they still consume resources until fully stopped.
 // resourceUsage totals what this node has handed out. The rule is the task map
 // itself: **every task in s.tasks holds its reservation, whatever its state.**
 // A task is inserted when it is admitted (the record IS the reservation) and
-// deleted the moment it truly lets go — stop, delete, preemption, shutdown, the
-// restart swap, or an unplaceable hand-back. So presence is the question; state
-// is not.
+// deleted when stop, delete, preemption, shutdown, a restart swap or an
+// unplaceable hand-back claims it. A runner that cannot confirm physical cleanup
+// keeps that resource quarantined internally. So presence is the question;
+// state is not.
 //
 // That is why there is no state filter here. Filtering on state is how this
 // drifted before: Failed was treated as free, so a crashed task's core was

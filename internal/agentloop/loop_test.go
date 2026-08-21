@@ -2,7 +2,9 @@ package agentloop
 
 import (
 	"errors"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/xinix00/hop/internal/types"
 	"github.com/xinix00/hop/pkg/config"
@@ -17,13 +19,19 @@ type mockDiscoverer struct {
 	renewLeaseDisplaced    bool
 	tryBecomeLeaderCalls   int
 	releaseLeadershipCalls int
+	onRelease              func()
 }
 
 func (m *mockDiscoverer) GetLeader() string { return m.leader }
 func (m *mockDiscoverer) RenewLease() (bool, bool) {
 	return m.renewLeaseOK, m.renewLeaseDisplaced
 }
-func (m *mockDiscoverer) ReleaseLeadership() { m.releaseLeadershipCalls++ }
+func (m *mockDiscoverer) ReleaseLeadership() {
+	m.releaseLeadershipCalls++
+	if m.onRelease != nil {
+		m.onRelease()
+	}
+}
 func (m *mockDiscoverer) TryBecomeLeader() bool {
 	m.tryBecomeLeaderCalls++
 	return m.becomeLeaderOK
@@ -88,6 +96,45 @@ func newTestLoop(disc *mockDiscoverer, ag *mockAgent) *Loop {
 }
 
 // ---- tests ----
+
+func TestRunCancellationStopsLeaderBeforeReleasingLease(t *testing.T) {
+	disc := &mockDiscoverer{}
+	loop := newTestLoop(disc, &mockAgent{id: "leader"})
+	var order []string
+	loop.stopLeader = func() { order = append(order, "stop") }
+	loop.l = &mockLeader{}
+	loop.registered = true
+	loop.lastLeaderAddr = "leader:9080"
+	disc.onRelease = func() { order = append(order, "release") }
+
+	done := make(chan struct{})
+	close(done)
+	loop.Run(done, time.Hour)
+
+	if !reflect.DeepEqual(order, []string{"stop", "release"}) {
+		t.Fatalf("shutdown order = %v, want [stop release]", order)
+	}
+	if loop.stopLeader != nil || loop.l != nil || loop.registered || loop.lastLeaderAddr != "" {
+		t.Fatalf("leader state was retained after Run exit: %#v", loop)
+	}
+	if disc.tryBecomeLeaderCalls != 0 {
+		t.Fatalf("already-cancelled Run attempted election %d time(s)", disc.tryBecomeLeaderCalls)
+	}
+}
+
+func TestStepDownIsIdempotent(t *testing.T) {
+	disc := &mockDiscoverer{}
+	loop := newTestLoop(disc, &mockAgent{id: "leader"})
+	stops := 0
+	loop.stopLeader = func() { stops++ }
+
+	loop.stepDown(true)
+	loop.stepDown(true)
+
+	if stops != 1 || disc.releaseLeadershipCalls != 1 {
+		t.Fatalf("repeated stepDown: stops=%d releases=%d, want 1/1", stops, disc.releaseLeadershipCalls)
+	}
+}
 
 // No leader from raft → 4 ticks → tryTakeOver triggered (~30s: T=0,10,20,30)
 func TestTick_NoLeader_TriggersAfter4(t *testing.T) {

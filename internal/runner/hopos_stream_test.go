@@ -24,6 +24,31 @@ type streamSlotManager struct {
 	fail     error // als gezet: StartStream faalt hiermee ná het lezen
 }
 
+type gatedStreamManager struct {
+	*streamSlotManager
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *gatedStreamManager) StartStream(slot int, image io.Reader, size int64, spec hopos.StartSpec) error {
+	err := s.streamSlotManager.StartStream(slot, image, size, spec)
+	close(s.entered)
+	<-s.release
+	return err
+}
+
+type failingStopManager struct {
+	*streamSlotManager
+	stopErr error
+}
+
+func (s *failingStopManager) Stop(slot int, timeout time.Duration) error {
+	if s.stopErr != nil {
+		return s.stopErr
+	}
+	return s.fakeSlotManager.Stop(slot, timeout)
+}
+
 func newStreamSlotManager(cores int) *streamSlotManager {
 	return &streamSlotManager{
 		fakeSlotManager: newFakeSlotManager(cores),
@@ -195,6 +220,121 @@ func TestStopAbortsAQueuedDownload(t *testing.T) {
 	r.mu.RUnlock()
 	if held {
 		t.Error("slot nog bezet na Stop van een lopende download")
+	}
+}
+
+func TestStopDuringSuccessfulStartDoesNotPublishGhost(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "4")
+		_, _ = w.Write([]byte("ELF!"))
+	}))
+	defer srv.Close()
+
+	sm := &gatedStreamManager{
+		streamSlotManager: newStreamSlotManager(2),
+		entered:           make(chan struct{}),
+		release:           make(chan struct{}),
+	}
+	r := NewHopRunner(sm, nil)
+	job := &types.Job{Name: "stop-at-arm", Driver: "hop", Artifacts: []types.Artifact{{URL: srv.URL}}}
+	task := &types.Task{ID: "stop-at-arm", JobName: job.Name, State: types.TaskQueued}
+
+	runDone := make(chan error, 1)
+	go func() { runDone <- r.Run(job, task) }()
+	<-sm.entered
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- r.Stop(task) }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		r.mu.RLock()
+		stopping := r.stopping[task.ID]
+		r.mu.RUnlock()
+		if stopping {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Stop claimde de start niet")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	close(sm.release)
+	if err := <-stopDone; err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if err := <-runDone; err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if task.Pid != 0 {
+		t.Fatalf("gestopte start publiceerde ghost PID/slot %d", task.Pid)
+	}
+	r.mu.RLock()
+	_, held := r.slots[task.ID]
+	r.mu.RUnlock()
+	if held {
+		t.Fatal("slot bleef geclaimd na voltooide Stop")
+	}
+}
+
+func TestHopStopFailureKeepsSlotQuarantined(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "4")
+		_, _ = w.Write([]byte("ELF!"))
+	}))
+	defer srv.Close()
+
+	sm := &failingStopManager{streamSlotManager: newStreamSlotManager(2), stopErr: io.ErrClosedPipe}
+	r := NewHopRunner(sm, nil)
+	job := &types.Job{Name: "retry-stop", Driver: "hop", Artifacts: []types.Artifact{{URL: srv.URL}}}
+	task := &types.Task{ID: "retry-stop", JobName: job.Name}
+	if err := r.Run(job, task); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if err := r.Stop(task); err == nil {
+		t.Fatal("Stop slikte de driverfout")
+	}
+	r.mu.RLock()
+	_, held := r.slots[task.ID]
+	r.mu.RUnlock()
+	if !held {
+		t.Fatal("slot werd ondanks onbevestigde Stop opnieuw uitgeefbaar")
+	}
+}
+
+func TestRepeatedHopStopCannotKillReusedSlot(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "4")
+		_, _ = w.Write([]byte("ELF!"))
+	}))
+	defer srv.Close()
+
+	sm := newStreamSlotManager(2)
+	r := NewHopRunner(sm, nil)
+	job := &types.Job{Name: "reuse", Driver: "hop", Artifacts: []types.Artifact{{URL: srv.URL}}}
+	old := &types.Task{ID: "old", JobName: job.Name}
+	if err := r.Run(job, old); err != nil {
+		t.Fatalf("Run old: %v", err)
+	}
+	oldSlot := old.Pid
+	if err := r.Stop(old); err != nil {
+		t.Fatalf("Stop old: %v", err)
+	}
+
+	fresh := &types.Task{ID: "fresh", JobName: job.Name}
+	if err := r.Run(job, fresh); err != nil {
+		t.Fatalf("Run fresh: %v", err)
+	}
+	if fresh.Pid != oldSlot {
+		t.Fatalf("test verwacht slothergebruik: oud=%d nieuw=%d", oldSlot, fresh.Pid)
+	}
+	if err := r.Stop(old); err != nil {
+		t.Fatalf("herhaalde Stop old: %v", err)
+	}
+	if status := sm.Status(fresh.Pid); !status.CoreOn {
+		t.Fatal("herhaalde Stop met stale task stopte de nieuwe slotbewoner")
+	}
+	if err := r.Stop(fresh); err != nil {
+		t.Fatalf("Stop fresh: %v", err)
 	}
 }
 

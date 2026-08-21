@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/internal/types"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // poolRunner is a hop runner that reports a largest placeable partition, the
@@ -33,10 +33,10 @@ func TestHopJobLargerThanTheLargestHoleIsRefused(t *testing.T) {
 		largest uint64
 		want    int
 	}{
-		{"larger than every hole", 36 << 20, 32 << 20, hophttp.StatusServiceUnavailable},
-		{"exactly the largest hole", 32 << 20, 32 << 20, hophttp.StatusAccepted},
-		{"smaller than the hole", 8 << 20, 32 << 20, hophttp.StatusAccepted},
-		{"node cannot answer", 36 << 20, 0, hophttp.StatusAccepted},
+		{"larger than every hole", 36 << 20, 32 << 20, leanhttp.StatusServiceUnavailable},
+		{"exactly the largest hole", 32 << 20, 32 << 20, leanhttp.StatusAccepted},
+		{"smaller than the hole", 8 << 20, 32 << 20, leanhttp.StatusAccepted},
+		{"node cannot answer", 36 << 20, 0, leanhttp.StatusAccepted},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := testConfig()
@@ -60,8 +60,8 @@ func TestHopJobLargerThanTheLargestHoleIsRefused(t *testing.T) {
 				CPUShares:   1024,
 			}
 			body, _ := json.Marshal(job)
-			w := hophttp.NewRecorder()
-			agent.handleRun(w, hophttp.NewRequest(hophttp.MethodPost, "/run", bytes.NewReader(body)))
+			w := leanhttp.NewRecorder()
+			agent.handleRun(w, leanhttp.NewRequest(leanhttp.MethodPost, "/run", bytes.NewReader(body)))
 
 			if w.Code != c.want {
 				t.Fatalf("status = %d, want %d (limit %d MB, largest hole %d MB)",
@@ -71,10 +71,10 @@ func TestHopJobLargerThanTheLargestHoleIsRefused(t *testing.T) {
 			// made the reported capacity flap and made the node refuse OTHER
 			// jobs that did fit.
 			tasks := query(agent, func(s *agentState) int { return len(s.tasks) })
-			if c.want == hophttp.StatusServiceUnavailable && tasks != 0 {
+			if c.want == leanhttp.StatusServiceUnavailable && tasks != 0 {
 				t.Errorf("refused job left %d task(s) in the state", tasks)
 			}
-			if c.want == hophttp.StatusAccepted && tasks != 1 {
+			if c.want == leanhttp.StatusAccepted && tasks != 1 {
 				t.Errorf("admitted job created %d task(s), want 1", tasks)
 			}
 		})
@@ -107,9 +107,9 @@ func TestReplaceIsNotBlockedByTheHole(t *testing.T) {
 	// First placement: with the hole at 32 MB this one is refused, so seed the
 	// state the way a running predecessor would.
 	body, _ := json.Marshal(job)
-	w := hophttp.NewRecorder()
-	agent.handleRun(w, hophttp.NewRequest(hophttp.MethodPost, "/run?replace=1", bytes.NewReader(body)))
-	if w.Code != hophttp.StatusAccepted {
+	w := leanhttp.NewRecorder()
+	agent.handleRun(w, leanhttp.NewRequest(leanhttp.MethodPost, "/run?replace=1", bytes.NewReader(body)))
+	if w.Code != leanhttp.StatusAccepted {
 		t.Fatalf("replace refused with %d — a rolling update of a job that fills its region would be impossible", w.Code)
 	}
 }

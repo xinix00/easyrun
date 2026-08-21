@@ -34,7 +34,7 @@ go build -o bin/run ./cmd/cli
 
 - Simplicity over features
 - ExecRunner + DockerRunner (runner selected by `driver` field, auto-derived from `image`)
-- State = `running`, `stopped`, `failed` (details in logs)
+- State = `queued`, `downloading`, `running`, `stopping`, `failed`; a stopped task is removed
 - Limits only when set (`CPUShares > 0`, `MemoryLimit > 0`)
 - Single goroutine owns mutable state via ops channel (`do()` and `query()` helpers)
 - Registration protocol separate from heartbeat (placed counts for accurate state)

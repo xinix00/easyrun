@@ -143,35 +143,44 @@ it would dispatch everything → duplicates.
 
 ## Components
 
-### HTTP layer (`pkg/hophttp`)
+### HTTP layer (`leanhttp` + `pkg/httputil`)
 
-Everything in hop that speaks HTTP goes through one shape, with two transports
-underneath:
+Everything in hop that speaks HTTP is
+[`leanhttp`](https://github.com/xinix00/lean) — on a host AND on a HopOS node.
+There used to be a seam here (`pkg/hophttp`: net/http on a host, leanhttp on a
+node) because leanhttp lacked pieces net/http had; leanhttp grew all of them
+(`Call.Context`, `HeaderTimeout`, a mux, `Request.Context`), so the seam
+retired and the host now runs exactly the bytes the node runs. Handlers take
+`leanhttp.Handler` (`func(ResponseWriter, *Request)`), clients build a
+`leanhttp.Call`, routing is `leanhttp.Mux` (method-prefixed patterns,
+`{wildcards}` with `PathValue`, subtree `/` patterns, most-specific-wins with
+conflicting patterns rejected at registration).
 
-| where hop runs | transport | why |
-|---|---|---|
-| host (linux, darwin) | `net/http` | free in a normal binary, and a decade of hardening behind it |
-| HopOS node (`GOOS=tamago`) | [`leanhttp`](https://github.com/xinix00/lean) | `net/http` links `crypto/tls` unconditionally, which costs about 2 MB in a kernel image that never opens an https URL |
+What hop adds on top lives in `pkg/httputil`:
 
-The shape is leanhttp's, not net/http's: leanhttp is the smaller of the two, so
-the intersection lives there. Handlers take `hophttp.Handler`
-(`func(ResponseWriter, *Request)`), clients build a `hophttp.Call`.
+- **`httputil.Client`** — one outbound client, two keep-alive pools split by
+  scheme: leanhttp links no TLS, so `https://` gets a `leanhttps`/`leantls`
+  dialer (chain-verified against the system trust store; on bare metal the
+  kernel provides roots via `x509roots/fallback`).
+- **`httputil.Server`** — the stop-lifecycle around `leanhttp.Serve`: owns the
+  listener and every accepted connection, so an ex-leader releasing its port
+  or an agent shutting down leaves nothing behind. `Close` is immediate; end
+  streams first (the lifecycle ctx), then close.
+- **HMAC auth** (`RequireHMAC`/`SignCall`) and the JSON/SSE response helpers.
 
-Three things are deliberate:
+Two leanhttp properties handlers lean on:
 
-- **The router is ours on both platforms** (`hophttp.Mux`). Method-prefixed
-  patterns, `{wildcards}` with `PathValue`, and subtree `/` patterns, with
-  most-specific-wins precedence. Using each platform's own mux would mean the
-  node routing by one set of precedence rules and the developer's machine by
-  another, differing exactly in the corner cases nobody tests. The full route
-  table of both the agent and the leader API is asserted in
-  `pkg/hophttp/mux_test.go`.
 - **`Flush() error` is on the ResponseWriter interface**, not behind a type
-  assertion. Every writer here can flush, and an assertion that can fail invites
-  a handler that silently buffers `/v1/events`.
-- **Paths are normalised in the transport** (`cleanPath`), the way net/http's
-  ServeMux does it, so a handler never sees `..` and both platforms route the
-  same path.
+  assertion — an assertion that can fail invites a handler that silently
+  buffers `/v1/events`.
+- **`Request.Context()`/`Done()` claim the connection's read side**: correct
+  for a stream (`/v1/events`, log tails — claim before the first Flush), but a
+  buffered handler that asks for it costs the connection its keep-alive. The
+  proxies therefore only pass the request context on streaming routes.
+
+Non-canonical paths (`//`, `.` and `..` segments, ambiguous escapes) are
+rejected by leanhttp's parser, so a handler never sees them and both platforms
+route the same path.
 
 Two deadlines exist because they answer different questions: `Call.Timeout`
 covers a whole call, `Call.HeaderTimeout` only the wait for the response head. An
@@ -308,16 +317,22 @@ instance is the oldest task, so "newest task wins" would be exactly backwards.
   is registered via `agent.WithHopRunner(...)` and falls back to exec elsewhere
 
 ### DockerRunner
-- Runs Docker containers via `docker` CLI (no SDK, no external dependencies)
+- Talks the Docker API directly on the unix socket (leanhttp with a unix
+  dialer) — no docker CLI, no SDK
 - Container naming: `hop-<taskID>` for predictable lifecycle management
-- Port mapping: `-p hostPort:containerPort` (host ports always dynamic)
-- Resource limits: `--memory`, `--cpu-shares` (maps directly from Job fields)
-- Volumes: `-v hostPath:containerPath`
-- Environment: `-e KEY=VAL` + `ER_PORT_<NAME>` vars
-- Logs: `docker logs -f` piped to LogBroadcaster (same SSE streaming as processes)
-- Stop: `docker stop` (SIGTERM → 10s → SIGKILL) + `docker rm`
-- Status: `docker inspect -f '{{.State.Running}}'`
-- Cleanup at startup: `docker rm -f` all `hop-*` containers
+- Port mapping: host port = container port (same convention as every runner)
+- Resource limits: `Memory`, `CpuShares` in the create request (maps directly from Job fields)
+- Volumes: `Binds` (hostPath:containerPath)
+- Environment: job env + `ER_PORT_<NAME>` + `ER_ATTR_*` vars
+- Logs: `/containers/{id}/logs?follow` (multiplexed frames) piped to LogBroadcaster
+- Stop: `/containers/{id}/stop?t=10` (SIGTERM → 10s → SIGKILL) + force remove
+- Status: `/containers/{id}/json` → `.State.Running`
+- Usage: one-shot `/containers/{id}/stats` per monitor tick with CPU deltas in
+  the runner — the old `docker stats --no-stream` fork sampled 1-2s per
+  container and serialized the monitor loop
+- Presence (`node.docker`): `GET /_ping` on the socket — the daemon answers,
+  not merely a CLI binary on the path
+- Cleanup at startup: force-remove all `hop-*` containers
 
 ## Named Ports
 

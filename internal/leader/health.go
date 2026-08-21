@@ -6,18 +6,28 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/xinix00/hop/internal/types"
-	"github.com/xinix00/hop/pkg/hophttp"
 	"github.com/xinix00/hop/pkg/httputil"
+	"github.com/xinix00/lean/leanhttp"
 )
 
 // Run starts the leader's state loop and dead agent checker
 func (l *Leader) Run(ctx context.Context) {
-	go l.stateLoop(ctx)
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		l.stateLoop(ctx)
+	}()
 	if l.persister != nil {
-		go l.persistLoop(ctx) // gecommitte staat (persist.go)
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			l.persistLoop(ctx) // gecommitte staat (persist.go)
+		}()
 	}
 
 	ticker := time.NewTicker(deadAgentCheckInterval)
@@ -34,12 +44,15 @@ func (l *Leader) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			workers.Wait()
+			l.httpClient.CloseIdle()
+			l.deleteClient.CloseIdle()
 			return
 		case <-ticker.C:
 			l.checkDeadAgents()
 			if tick++; tick%3 == 0 {
 				if query(l, func(s *leaderState) bool { return s.settled }) {
-					l.reconcileJobs()
+					go l.reconcileJobs()
 				}
 			}
 		}
@@ -70,7 +83,7 @@ func (l *Leader) checkDeadAgents() {
 	})
 
 	if len(deadIDs) > 0 {
-		l.reconcileJobs()
+		go l.reconcileJobs()
 		for _, id := range deadIDs {
 			l.eventBus.Notify("agent:" + id)
 		}
@@ -138,6 +151,14 @@ func (l *Leader) reconcileJob(job *types.Job, agents []*types.Agent) error {
 	}
 
 	if job.Count == -1 {
+		// Daemons bypass dispatchInstances, so they need the same per-job claim
+		// here. Without it, two reconcile snapshots can both observe the same
+		// missing node and each create a daemon task there.
+		if !l.lockJob(job.Name) {
+			return nil
+		}
+		defer l.unlockJob(job.Name)
+
 		// Daemon: run on ALL agents, check placed to find who's missing
 		missing := query(l, func(s *leaderState) []*types.Agent {
 			var need []*types.Agent
@@ -203,7 +224,7 @@ func (l *Leader) GetClusterStatus() map[string][]*types.Task {
 		return result
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), HTTPClientTimeout)
+	ctx, cancel := context.WithTimeout(l.context(), HTTPClientTimeout)
 	defer cancel()
 
 	type agentResult struct {
@@ -263,7 +284,7 @@ func (l *Leader) GetJobStatus(jobName string) (map[string][]*types.Task, []*type
 		return result, agents
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), HTTPClientTimeout)
+	ctx, cancel := context.WithTimeout(l.context(), HTTPClientTimeout)
 	defer cancel()
 
 	type agentResult struct {
@@ -305,7 +326,7 @@ func (l *Leader) GetJobStatus(jobName string) (map[string][]*types.Task, []*type
 
 // fetchAgentTasks gets the task list from an agent
 func (l *Leader) fetchAgentTasks(ctx context.Context, agent *types.Agent) ([]*types.Task, error) {
-	call := hophttp.Call{Method: hophttp.MethodGet, URL: fmt.Sprintf("%s/tasks", agent.Endpoint)}
+	call := leanhttp.Call{Method: leanhttp.MethodGet, URL: fmt.Sprintf("%s/tasks", agent.Endpoint)}
 	httputil.SignCall(&call, l.apiKey)
 
 	resp, err := l.httpClient.DoContext(ctx, call)

@@ -22,9 +22,7 @@ import (
 
 	"github.com/xinix00/hop/internal/agent"
 	"github.com/xinix00/hop/internal/agentloop"
-	"github.com/xinix00/hop/internal/api"
 	"github.com/xinix00/hop/internal/discovery"
-	"github.com/xinix00/hop/internal/leader"
 	"github.com/xinix00/hop/internal/runner"
 	"github.com/xinix00/hop/pkg/config"
 	"github.com/xinix00/hop/pkg/hopos"
@@ -125,70 +123,19 @@ func Run(ctx context.Context, o Options) error {
 	runErr := make(chan error, 1)
 	go func() { runErr <- ag.Run(ctx) }()
 
-	// becomeLeader — de leader-helft, alleen actief op de election-winnaar:
-	// leader + API-server + gecommitte S3-staat + init-seed. Zelfde volgorde
-	// als cmd/agent's becomeLeader; settle alleen in cluster-modus (op een
-	// standalone boot-verse node valt er niets te settlen — oude gedrag).
+	// becomeLeader — de leader-helft, alleen actief op de election-winnaar.
+	// De choreografie (leader + persister + API-server + zelf-registratie +
+	// init-seed) is gedeeld met cmd/agent: agentloop.BecomeLeader. Settle
+	// alleen in cluster-modus (op een standalone boot-verse node valt er
+	// niets te settlen — oude gedrag). De persister volgt de lock: S3 in
+	// cluster-modus, anders een lokale crash-safe file (!clustered) —
+	// agentboot doet alleen in-memory of S3-election, dus een
+	// hoplockserver-URL in de config mag hier géén gedeelde remote store
+	// worden (onafhankelijke in-memory leaders zouden hem clobberen).
 	becomeLeader := func() (func(), agentloop.LeaderAPI) {
-		leaderCtx, cancel := context.WithCancel(ctx)
-		l := leader.New(o.NodeID, ag, nil)
-		l.SetAPIKey(cfg.APIKey)
-		if d := cfg.Timeouts.NodeDeadThreshold; d > 0 {
-			l.SetAgentTimeout(d)
-		}
-		if clustered {
-			l.EnableSettle()
-		}
-		// Gecommitte clusterstaat (Derek, 15-07): met bruikbare S3-config
-		// commit de leader zijn gewenste staat als object "state/<cluster>"
-		// naast de lease en laadt hij hem bij boot terug — een reboot
-		// herplaatst de jobs (declaratief). Object weghalen = schoon booten.
-		cleanBoot := true
-		// The persister follows the lock backend: S3 in cluster mode, else a
-		// local crash-safe file (!clustered). agentboot only does in-memory or
-		// S3 election, so a hoplockserver URL in the config must NOT become a
-		// shared remote store here (independent in-memory leaders would clobber
-		// it) — passing !clustered forces the local file for that case.
-		if st := discovery.StateStoreFromConfig(cfg, !clustered); st != nil {
-			l.SetStatePersister(st)
-			loaded, err := l.LoadCommittedState(leaderCtx)
-			if err != nil {
-				// Luid maar niet fataal; store onbereikbaar ≠ store leeg:
-				// nooit init jobs seeden op een storing.
-				log.Printf("agentboot: committed state not loaded: %v", err)
-				cleanBoot = false
-			} else {
-				cleanBoot = !loaded
-			}
-		}
-		go l.Run(leaderCtx)
-
-		srv := api.NewServer(l, fmt.Sprintf(":%d", cfg.Node.Port+1000), cfg.APIKey, cfg.Cluster.Name)
-		go func() {
-			if err := srv.Run(leaderCtx); err != nil {
-				log.Printf("agentboot: leader-API: %v", err)
-			}
-		}()
-
-		l.RegisterAgent(o.NodeID, ag.Endpoint(), Version, ag.GetPlacedTaskCounts())
+		stop, l := agentloop.BecomeLeader(ctx, cfg, ag, Version, !clustered, clustered)
 		log.Printf("agentboot: node %s is leader (%s), %d app cores", o.NodeID, cfg.Cluster.Name, sm.NumCores())
-
-		// Clean boot (geen snapshot én lege store — HopOS heeft niets
-		// lokaals) → seed de init jobs: zo komt een kale node uit de doos
-		// met zijn baseline. In cluster-modus stored settle ze eerst;
-		// reconcile dispatcht daarna.
-		if cleanBoot && len(cfg.Cluster.InitJobs) > 0 && len(l.GetJobs()) == 0 {
-			jobs, err := leader.DecodeInitJobs(cfg.Cluster.InitJobs)
-			if err != nil {
-				log.Printf("agentboot: cluster.init_jobs: %v", err)
-			} else {
-				l.SeedInitJobs(jobs)
-			}
-		}
-		return func() {
-			srv.Stop() // release :9080 synchronously
-			cancel()   // stop leader state loop
-		}, l
+		return stop, l
 	}
 
 	// De gedeelde election/heartbeat-lus (internal/agentloop): word leader

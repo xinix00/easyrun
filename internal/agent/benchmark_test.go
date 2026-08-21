@@ -258,7 +258,7 @@ func (m *mockRunner) Status(task *types.Task) (types.TaskState, error) {
 	if ok {
 		return t.State, nil
 	}
-	return types.TaskStopped, nil
+	return types.TaskFailed, nil
 }
 
 func (m *mockRunner) GetStdout(taskID string) *runner.LogBroadcaster { return nil }

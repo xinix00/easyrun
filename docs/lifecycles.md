@@ -48,7 +48,9 @@ goes through an ops channel served by exactly one goroutine.
      **getLeader defaults to a no-op returning ""** so handlers don't
      nil-deref before `SetLeaderFunc` is called.
    - `ag.SetLeaderFunc(disc.GetLeader)`
-   - `ag.Init()` — calls `execRunner.Cleanup()` and `dockerRunner.Cleanup()`.
+   - `ag.Init()` — requires `execRunner.Cleanup()` to succeed. When Docker is
+     installed it also attempts `dockerRunner.Cleanup()`, but a temporarily
+     unreachable daemon only produces a warning.
      ExecRunner.Cleanup currently **does NOT touch leftover
      taskdirs** ([process.go:381](../internal/runner/process.go#L381)) —
      just ensures `/tmp/hop` exists and is 0777. Stale dirs from a crashed
@@ -70,20 +72,22 @@ goes through an ops channel served by exactly one goroutine.
 3. `shutdown()` ([agent.go:362](../internal/agent/agent.go#L362)) runs HTTP
    drain and task stop in **parallel**:
    - HTTP: `server.Shutdown(ctx)` with 5s timeout.
-   - Tasks: `markRunningAsStopping` → `stopTasks` → each runner.Stop().
+   - Tasks: detach every task as `stopping` → `stopTasks` → one
+     `runner.Stop()` attempt per task.
 4. `Run()` does NOT return until `shutdownDone` closes
    ([agent.go:298-302](../internal/agent/agent.go#L298)) — main exits only
-   after everything cleaned up.
+   after every task has had its single cleanup attempt.
 5. Worst-case per task: 10s SIGTERM grace + 1s SIGKILL grace = ~11s.
    With parallel HTTP drain (5s), total agent shutdown ≤ ~11s.
 
 **Invariants**
 - `main()` does NOT return while any task is being stopped — guaranteed by
   the `shutdownDone` synchronization.
-- Every task that was Running gets a SIGTERM. After 10s, anything still
-  alive gets SIGKILL. After 1s more, we give up and log.
-- `cleanupTaskDir` and `removeCgroup` run regardless of whether SIGKILL
-  succeeded. (Cleanup is safe because mounts are tracked, not discovered.)
+- Every present task gets one runner cleanup attempt. An owned exec process
+  group gets SIGTERM; after 10s it gets SIGKILL, followed by 1s confirmation.
+- A logical task is already gone before its runner cleanup starts. If an exec
+  process group cannot be confirmed gone after SIGKILL, its runner ownership,
+  taskdir and cgroup stay quarantined rather than being unsafely released.
 - systemd's `TimeoutStopSec=30` gives us 19s headroom over the worst-case
   11s. Hard crash (kill -9 on hop) leaks taskdirs and mounts — by design;
   operator reboots.
@@ -185,43 +189,40 @@ every 5s. For each Running task:
 ### 3.4 Restart
 
 `restartTask` ([handlers.go:451](../internal/agent/handlers.go#L451)):
-1. Look up the job by name. If gone, log and return.
-2. **Read & possibly reset RestartCount** inside one state op:
+1. Make one best-effort `runner.Stop(task)` call for the previous attempt.
+2. Look up the job by name. If gone, remove the task and return.
+3. **Read & possibly reset RestartCount** inside one state op:
    ```go
    if t.LastFailedAt was longer ago than RestartWindow { t.RestartCount = 0 }
    t.LastFailedAt = now
    return t.RestartCount
    ```
-3. If `restartCount >= maxRestarts` (and maxRestarts > 0): mark Failed,
+4. If `restartCount >= maxRestarts` (and maxRestarts >= 0): mark Failed,
    delete checkState, return.
-4. **Backoff**: `1s * 2^(restartCount-1)`, capped at 30s. Sleeps inline.
-5. `runner.Stop(task)` on the old task (in case it's a zombie).
+5. **Backoff**: exponential with jitter, capped at 30s and cancellable by
+   shutdown.
 6. `resolveJobForRun(job)` — same filter as in startJob.
-7. `allocatePortsForJob(runJob)` — if it fails (port in use):
-   **manually bump `t.RestartCount++`** then `restartTask(task)` again.
-   Without the bump, the recursive call sees the same count, never trips
-   maxRestarts, and stack-overflows.
-   ([handlers.go:524](../internal/agent/handlers.go#L524))
+7. `allocatePortsForJob(runJob)` — if it fails, increment `RestartCount` and
+   continue the same loop.
 8. Atomic swap: `replacement.RestartCount = old.RestartCount + 1`;
    delete old from `s.tasks`, insert replacement.
-9. `runner.Run(runJob, replacement)`. On failure: mark replacement Failed,
-   call `restartTask(replacement)`. The replacement already has a bumped
-   count from the swap, so recursion is bounded.
+9. `runner.Run(runJob, replacement)`. On failure, mark replacement Failed and
+   continue the loop; that new attempt gets one cleanup call.
 
 **Invariants**
 - `RestartCount` only ever increments — never decrements within a window.
 - `restartTask` always either (a) starts a new task, (b) marks Failed and
-  returns, or (c) recurses with a strictly higher count. Stack depth is
-  bounded by `maxRestarts`.
-- Every recursion path goes through the backoff sleep on the next entry.
+  returns, or (c) loops with a strictly higher count. Stack use is constant,
+  including when restarts are unlimited.
+- Every retry after the first goes through the backoff on the next loop entry.
 
 ### 3.5 Death: Stop / cleanup
 
 `runner.Stop(task)` ([process.go:160](../internal/runner/process.go#L160)):
 1. SIGTERM the pgroup.
-2. `waitForPgroupExit(pid, 10s)` — poll `Kill(-pid, 0)` every 100ms.
+2. Poll the owned process-generation record for `ESRCH` for up to 10s.
 3. If still alive: SIGKILL.
-4. `waitForPgroupExit(pid, 1s)` for kernel reaping.
+4. Poll the same generation record for 1s more.
 5. `cleanupTaskDir(taskID)`:
    - Iterate `r.mounts[taskID]` in **reverse order** (deepest first).
    - `MNT_DETACH` each.
@@ -372,9 +373,9 @@ leak":
 - **Stale taskdirs from a crashed agent.** No way to know what was
   mounted without persistence. Reboot or `rm -rf /tmp/hop` (agent
   stopped) cleans it up.
-- **Half-set-up taskdirs from cmd.Start failure mid-setup.** Run's
-  cleanup path is best-effort; some intermediate mounts may persist if
-  the process is killed during setup. Same recovery as above.
+- **Taskdirs interrupted by a hard agent kill during setup.** Ordinary setup,
+  artifact and `cmd.Start` errors roll back tracked mounts transactionally;
+  a process kill can still interrupt that rollback. Same recovery as above.
 - **DockerRunner residue** is handled separately via
   `docker rm -f hop-*` at startup.
 
@@ -384,16 +385,7 @@ leak":
 
 (Use this as the scrap pad while reading.)
 
-- [ ] `markRunningAsStopping` returns tasks that were Running. If a task
-      was already Stopping (mid-restart) when shutdown fires, do we wait
-      for it? Currently we don't — `stopTasks` only sees what
-      markRunningAsStopping returned. Is that intentional?
 - [ ] On leader failover, the old leader's `dispatching` flag map is
       reset to empty in the new leader's stateLoop init. If the old
       leader was mid-dispatch and crashed, the new leader doesn't know.
       Settle should handle this (no dispatch during settle) — verify.
-- [ ] Restart backoff sleep is inline (`time.Sleep`). During the sleep,
-      the task is in state Stopping but its `Stop` already ran. If the
-      agent shuts down during this sleep, the goroutine is killed and
-      the task entry just sits there. State persistence on next start
-      restores it as Stopping forever?
