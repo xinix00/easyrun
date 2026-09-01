@@ -46,6 +46,23 @@ type Options struct {
 	// every heartbeat and shown by `hop agents`. One number per node — the
 	// hottest sensor if there are several. nil or 0 = no sensor.
 	Temp func() int
+
+	// RestoreState is een eerder gemaakte agent-snapshot (agent.Snapshot):
+	// jobs en taken van de vórige agent op deze node. Bedoeld voor de
+	// kern-flip van HopOS, waar het OS zichzelf vervangt terwijl de taken
+	// gewoon doordraaien — zonder dit kent de nieuwe agent zijn eigen
+	// draaiende taken niet meer en wil hij ze plaatsen op slots die ze al
+	// bezetten. Leeg = gewone start.
+	//
+	// Werkt óók zonder lock-backend, en dat is de reden dat het hier zit en
+	// niet in de persister: een standalone node heeft geen gecommitte staat
+	// om uit te herstellen.
+	RestoreState []byte
+
+	// OnSnapshot krijgt, als hij gezet is, een functie waarmee de aanroeper
+	// op elk moment de agent-state kan uitlezen. HopOS gebruikt hem vlak vóór
+	// een kernwissel; wie hem niet zet merkt er niets van.
+	OnSnapshot func(snap func() ([]byte, error))
 }
 
 // Run boots the agent (+ leader zodra deze node de election wint) and blocks
@@ -122,6 +139,23 @@ func Run(ctx context.Context, o Options) error {
 	// RegisterAgent reconciliet en dat bevraagt de agent-state.
 	runErr := make(chan error, 1)
 	go func() { runErr <- ag.Run(ctx) }()
+
+	// State van de vórige agent op deze node terugzetten (kern-flip). Vóór de
+	// election-lus hieronder, want die registreert en reconciliet meteen —
+	// dan moeten de draaiende taken al bekend zijn, anders plaatst hij ze
+	// opnieuw bovenop zichzelf. Een onbruikbaar blob is geen reden om niet te
+	// starten: de taken draaien nog, ze zijn alleen even onbekend, en de
+	// leader corrigeert dat bij de eerste synchronisatie.
+	if len(o.RestoreState) > 0 {
+		if err := ag.Restore(o.RestoreState); err != nil {
+			log.Printf("agentboot: restoring the previous agent state failed (%v) — continuing with an empty state", err)
+		} else {
+			log.Printf("agentboot: agent state restored from the previous kernel")
+		}
+	}
+	if o.OnSnapshot != nil {
+		o.OnSnapshot(ag.Snapshot)
+	}
 
 	// becomeLeader — de leader-helft, alleen actief op de election-winnaar.
 	// De choreografie (leader + persister + API-server + zelf-registratie +
