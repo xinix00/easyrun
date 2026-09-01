@@ -63,6 +63,13 @@ type Options struct {
 	// op elk moment de agent-state kan uitlezen. HopOS gebruikt hem vlak vóór
 	// een kernwissel; wie hem niet zet merkt er niets van.
 	OnSnapshot func(snap func() ([]byte, error))
+
+	// OnFlip voert de kern-flip uit: haal de bundel op url, controleer de
+	// sha256 en spring erin (HopOS' kernflip.FlipFromURL). Gezet = de agent
+	// opent POST /flip achter de gewone HMAC — de enige weg waarlangs een
+	// draaiende node om een nieuwe kern gevraagd kan worden. nil = het
+	// endpoint antwoordt eerlijk 501.
+	OnFlip func(url, sha256 string) error
 }
 
 // Run boots the agent (+ leader zodra deze node de election wint) and blocks
@@ -102,6 +109,9 @@ func Run(ctx context.Context, o Options) error {
 	// POSIX layer.
 	hr := runner.NewHopRunner(sm, attrs)
 	ag := agent.New(cfg, o.NodeID, hr).WithHopRunner(hr)
+	if o.OnFlip != nil {
+		ag.SetFlipFunc(o.OnFlip)
+	}
 	ag.SetSysInfo(agent.SystemInfo{
 		CPUCores:    sm.NumCores(),
 		MemoryBytes: o.MemoryBytes,

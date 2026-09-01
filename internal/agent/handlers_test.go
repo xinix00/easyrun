@@ -1335,3 +1335,56 @@ func TestUnplaceableJobIsNotRestarted(t *testing.T) {
 		t.Fatalf("%d task(s) left in state, want 0 (task must be handed back to the leader)", left)
 	}
 }
+
+func TestHandleFlip(t *testing.T) {
+	sha := "e7a4da1f76c3e5d11a346362f58757fcee0f5720888a5bf52935daae1f52e4f7"
+	body := func(url, sha string) *bytes.Reader {
+		b, _ := json.Marshal(map[string]string{"url": url, "sha256": sha})
+		return bytes.NewReader(b)
+	}
+
+	// Zonder haak: eerlijk 501, en er wordt niets uitgevoerd.
+	a := New(testConfig(), "test-agent", NewMockRunner())
+	w := leanhttp.NewRecorder()
+	a.handleFlip(w, leanhttp.NewRequest(leanhttp.MethodPost, "/flip", body("http://h/k.flip", sha)))
+	if w.Code != leanhttp.StatusNotImplemented {
+		t.Errorf("zonder haak: status = %d, wil %d", w.Code, leanhttp.StatusNotImplemented)
+	}
+
+	// Met haak: 202, en de haak krijgt exact url+sha.
+	got := make(chan [2]string, 1)
+	a.SetFlipFunc(func(url, s string) error { got <- [2]string{url, s}; return nil })
+	w = leanhttp.NewRecorder()
+	a.handleFlip(w, leanhttp.NewRequest(leanhttp.MethodPost, "/flip", body("http://h/k.flip", sha)))
+	if w.Code != leanhttp.StatusAccepted {
+		t.Errorf("status = %d, wil %d", w.Code, leanhttp.StatusAccepted)
+	}
+	select {
+	case g := <-got:
+		if g[0] != "http://h/k.flip" || g[1] != sha {
+			t.Errorf("haak kreeg %v", g)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("haak nooit aangeroepen")
+	}
+
+	// Misvormd: geen actie, wel een duidelijke fout.
+	for name, r := range map[string]*bytes.Reader{
+		"kale hostnaam":  body("h/k.flip", sha),
+		"korte som":      body("http://h/k.flip", "deadbeef"),
+		"geen hex":       body("http://h/k.flip", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+		"kapotte json":   bytes.NewReader([]byte("{")),
+	} {
+		w = leanhttp.NewRecorder()
+		a.handleFlip(w, leanhttp.NewRequest(leanhttp.MethodPost, "/flip", r))
+		if w.Code != leanhttp.StatusBadRequest {
+			t.Errorf("%s: status = %d, wil %d", name, w.Code, leanhttp.StatusBadRequest)
+		}
+	}
+	if w = leanhttp.NewRecorder(); true {
+		a.handleFlip(w, leanhttp.NewRequest(leanhttp.MethodGet, "/flip", nil))
+		if w.Code != leanhttp.StatusMethodNotAllowed {
+			t.Errorf("GET: status = %d, wil %d", w.Code, leanhttp.StatusMethodNotAllowed)
+		}
+	}
+}

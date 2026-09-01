@@ -60,6 +60,12 @@ type Agent struct {
 	apiKey       string        // API key for authenticating with leader and protecting local endpoints
 	shutdownCh   chan struct{} // closed by shutdown() — long-running goroutines select on this
 
+	// onFlip vraagt HopOS zichzelf live te vervangen (de kern-flip): de node
+	// haalt de bundel op url, controleert de sha256 en springt erin terwijl de
+	// taken doordraaien. Gezet via SetFlipFunc (agentboot, alleen op HopOS-
+	// nodes die het kunnen); nil = het /flip-endpoint zegt eerlijk 501.
+	onFlip func(url, sha256 string) error
+
 	// restartWait is a test seam. Nil uses the cancellable timer below.
 	restartWait func(time.Duration) bool
 
@@ -140,6 +146,10 @@ func (p progressSink) TaskDownloading(taskID string, downloaded, total uint64) {
 
 // WithHopRunner registers the HopOS slot runner; jobs with driver "hop" are
 // dispatched to it. Only meaningful on HopOS nodes (node.os == "hopos").
+// SetFlipFunc schakelt het /flip-endpoint in (de kern-flip van HopOS). Vóór
+// Run aanroepen, net als de andere bedrading.
+func (a *Agent) SetFlipFunc(fn func(url, sha256 string) error) { a.onFlip = fn }
+
 func (a *Agent) WithHopRunner(r runner.Runner) *Agent {
 	a.hopRunner = r
 	if pr, ok := r.(runner.ProgressReporter); ok {
@@ -324,6 +334,7 @@ func (a *Agent) Run(ctx context.Context) error {
 	mux.HandleFunc("/stop/", auth(a.handleStop))
 	mux.HandleFunc("/stop-task/", auth(a.handleStopTask))
 	mux.HandleFunc("/logs/", auth(a.handleLogs))
+	mux.HandleFunc("/flip", auth(a.handleFlip))
 	mux.HandleFunc("/leader", a.handleLeader)
 
 	// Proxy endpoints - forward to leader for cluster-wide operations.

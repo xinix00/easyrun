@@ -959,3 +959,61 @@ func (a *Agent) handleLogs(w leanhttp.ResponseWriter, r *leanhttp.Request) {
 		}
 	}
 }
+
+// handleFlip vraagt de node zijn eigen kern live te vervangen (de kern-flip
+// van HopOS, docs/kern-flip.md in hop-os): POST {"url","sha256"} — de node
+// haalt de bundel op, controleert de som en springt erin terwijl de taken
+// doordraaien. Dít is de plek voor dat verzoek en niet een open poort: het
+// endpoint zit achter dezelfde HMAC als job-dispatch, want wie een kern mag
+// aanleveren mag alles.
+//
+// Het antwoord is een 202, niet het resultaat: een geslaagde flip keert per
+// definitie nooit terug (de kern die antwoordt bestaat dan niet meer). De
+// aanroeper ziet het vervolg op de console van de node en aan de her-
+// registratie bij de leader; een mislukte flip logt hier en de node draait
+// gewoon door.
+func (a *Agent) handleFlip(w leanhttp.ResponseWriter, r *leanhttp.Request) {
+	if r.Method != leanhttp.MethodPost {
+		leanhttp.Error(w, "method not allowed", leanhttp.StatusMethodNotAllowed)
+		return
+	}
+	if a.onFlip == nil {
+		httputil.WriteJSON(w, leanhttp.StatusNotImplemented, map[string]string{
+			"error": "this node cannot flip its kernel (not a HopOS node, or flipping is disabled)",
+		})
+		return
+	}
+	var req struct {
+		URL    string `json:"url"`
+		SHA256 string `json:"sha256"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		httputil.WriteJSON(w, leanhttp.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if !strings.Contains(req.URL, "://") {
+		httputil.WriteJSON(w, leanhttp.StatusBadRequest, map[string]string{"error": "url must be absolute"})
+		return
+	}
+	if len(req.SHA256) != 64 {
+		httputil.WriteJSON(w, leanhttp.StatusBadRequest, map[string]string{"error": "sha256 must be 64 hex characters"})
+		return
+	}
+	for _, c := range req.SHA256 {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') && (c < 'A' || c > 'F') {
+			httputil.WriteJSON(w, leanhttp.StatusBadRequest, map[string]string{"error": "sha256 must be 64 hex characters"})
+			return
+		}
+	}
+	log.Printf("agent: kernel flip requested: %s (sha256 %s…)", req.URL, req.SHA256[:12])
+	// In een eigen goroutine: een geslaagde flip keert nooit terug, en dit
+	// antwoord moet de deur nog uit. De fetch geeft ruimte genoeg.
+	go func() {
+		if err := a.onFlip(req.URL, req.SHA256); err != nil {
+			log.Printf("agent: kernel flip failed: %v", err)
+		}
+	}()
+	httputil.WriteJSON(w, leanhttp.StatusAccepted, map[string]string{
+		"status": "flip requested — the node fetches, verifies and replaces its kernel; watch its console and its re-registration",
+	})
+}
