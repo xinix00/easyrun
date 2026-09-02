@@ -536,3 +536,35 @@ func TestHopRunnerFailureLandsInTaskLog(t *testing.T) {
 		t.Fatalf("log draagt de reden niet: %q (fout was %q)", got, err)
 	}
 }
+
+// Na een kern-flip draaien er kooien die déze runner nooit uitdeelde (de
+// nieuwe kern adopteerde ze, de agent kreeg zijn taken terug uit de handoff).
+// Zonder AdoptRunning deelt de eerste nieuwe job er een opnieuw uit en weigert
+// de node dat met "slot N still live" — gemeten 02-09 op de M4.
+func TestAllocateSkipsCagesTheNodeReportsLive(t *testing.T) {
+	sm := newFakeSlotManager(9)
+	r := NewHopRunner(sm, map[string]string{"node.os": "hopos"})
+
+	// De node meldt kooi 1 en 3 als draaiend; de runner deelde ze nooit uit
+	// (verse map, precies de situatie ná een kern-flip).
+	sm.mu.Lock()
+	for _, c := range []int{1, 3} {
+		if sm.slots[c] == nil {
+			sm.slots[c] = &fakeSlot{}
+		}
+		sm.slots[c].coreOn = true
+	}
+	sm.mu.Unlock()
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	got, err := r.allocateSlotLocked("", 1)
+	if err != nil || got != 2 {
+		t.Errorf("allocate = %d, %v; wil kooi 2 — kooi 1 draait op de node", got, err)
+	}
+	// En een SMP-app van twee kooien moet 3 overslaan en op 4 landen.
+	got, err = r.allocateSlotLocked("", 2)
+	if err != nil || got != 4 {
+		t.Errorf("allocate(2) = %d, %v; wil kooi 4 (3 draait)", got, err)
+	}
+}

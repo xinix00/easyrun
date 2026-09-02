@@ -268,6 +268,12 @@ func (r *HopRunner) Stop(task *types.Task) error {
 	r.mu.Lock()
 	slot, ok := r.slots[task.ID]
 	if !ok {
+		// Onbekende taak = niet van ons. Dat blijft zo, en met opzet: een
+		// STALE task-record mag nooit de nieuwe bewoner van dat kooinummer
+		// omleggen (TestRepeatedHopStopCannotKillReusedSlot). Kooien die deze
+		// runner niet zelf startte maar wél toebehoren — de bewoners die een
+		// kern-flip overleefden — komen via AdoptRunning binnen; dát is een
+		// expliciete eigendomsoverdracht, geen gok op een kooinummer.
 		r.mu.Unlock()
 		return nil
 	}
@@ -415,7 +421,26 @@ func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error)
 	for slot := 1; limit < 0 || slot+cores-1 <= limit; slot++ {
 		ok := true
 		for c := slot; c < slot+cores; c++ {
+			// Twee vragen, en maar één ervan is van ons. r.inUse is puur een
+			// RESERVERING voor starts die nog onderweg zijn (tussen deze
+			// toewijzing en StartStream weet de node nog van niets, en twee
+			// gelijktijdige dispatches mogen niet dezelfde kooi pakken).
+			// Wat er ECHT draait weet alleen HopOS, en dat vragen we hem —
+			// in plaats van een eigen kopie bij te houden die kan afdrijven.
+			//
+			// Dat afdrijven is geen theorie: na een kern-flip adopteert de
+			// nieuwe kern de bewoners en krijgt de agent zijn taken terug,
+			// maar deze map is dan een verse map in geheugen. Hij deelde
+			// vrolijk kooi 1 opnieuw uit terwijl welcome erin draaide, en de
+			// node weigerde dat terecht met "slot 1 still live" (GEMETEN
+			// 02-09, M4, eerste job ná een geslaagde flip). Derek: "als HopOS
+			// het weet en HOP weet wat er draait, waarom is er dan nog een
+			// derde afhankelijkheid?"
 			if _, busy := r.inUse[c]; busy {
+				ok = false
+				break
+			}
+			if r.sm.Status(c).CoreOn {
 				ok = false
 				break
 			}
@@ -429,6 +454,44 @@ func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error)
 		}
 	}
 	return 0, fmt.Errorf("hop driver: no %d contiguous free %q cores", cores, coreClass)
+}
+
+// AdoptRunning draagt de kooien van al-draaiende taken over aan deze runner:
+// na een KERN-FLIP adopteert de nieuwe kern de bewoners en krijgt de agent
+// zijn taken terug uit de handoff, maar de lifecycle-plumbing van deze runner
+// (welke task welke kooi houdt) is een verse map in geheugen. Zonder deze stap
+// is zo'n bewoner niet meer te stoppen: Stop kent zijn kooi niet, geeft stil
+// nil terug, en de kooi draait door op de node terwijl HOP de task opruimt
+// (GEMETEN 02-09 op de M4: welcome verwijderd, node meldde hem nog live).
+//
+// Dit is géén tweede waarheid over wat er draait — dat vraagt de toewijzer aan
+// de node (zie allocateSlotLocked). Het is puur EIGENDOM: welke task mag deze
+// kooi straks stoppen. Idempotent; het pakt nooit een kooi af die deze runner
+// zelf al uitdeelde.
+//
+// slots is task-ID → kooinummer (types.Task.Pid, door de node gevuld); cores
+// hoeveel kooien die taak houdt (SMP-apps houden er meer).
+func (r *HopRunner) AdoptRunning(slots map[string]int, cores map[string]int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for id, slot := range slots {
+		if slot < 1 {
+			continue
+		}
+		if _, known := r.slots[id]; known {
+			continue
+		}
+		n := cores[id]
+		if n < 1 {
+			n = 1
+		}
+		r.slots[id] = slot
+		for c := slot; c < slot+n; c++ {
+			if _, busy := r.inUse[c]; !busy {
+				r.inUse[c] = id
+			}
+		}
+	}
 }
 
 func (r *HopRunner) release(taskID string) {

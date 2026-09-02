@@ -91,7 +91,7 @@ func (a *Agent) Restore(b []byte) error {
 	if h.Version != handoffVersion {
 		return fmt.Errorf("agent handoff: version %d, this agent speaks %d", h.Version, handoffVersion)
 	}
-	return query(a, func(s *agentState) error {
+	if err := query(a, func(s *agentState) error {
 		for name, j := range h.Jobs {
 			if j != nil {
 				s.jobs[name] = j
@@ -103,5 +103,29 @@ func (a *Agent) Restore(b []byte) error {
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	// De kooien van de herstelde taken aan de runner overdragen: hij moet ze
+	// straks kunnen stoppen, en zijn eigen boekhouding is een verse map.
+	if ad, ok := a.hopRunner.(interface {
+		AdoptRunning(map[string]int, map[string]int)
+	}); ok {
+		slots, cores := map[string]int{}, map[string]int{}
+		for id, t := range h.Tasks {
+			// GEEN state-filter: aanwezigheid is de maat, nooit de state —
+			// een task die queued of failed staat houdt zijn kooi net zo goed
+			// bezet, en vrijgeven gebeurt door het record te verwijderen.
+			if t == nil || t.Pid < 1 {
+				continue
+			}
+			slots[id] = t.Pid
+			if n := t.CPUShares / 1024; n > 1 {
+				cores[id] = n
+			}
+		}
+		ad.AdoptRunning(slots, cores)
+	}
+	return nil
 }

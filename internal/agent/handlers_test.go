@@ -1370,10 +1370,10 @@ func TestHandleFlip(t *testing.T) {
 
 	// Misvormd: geen actie, wel een duidelijke fout.
 	for name, r := range map[string]*bytes.Reader{
-		"kale hostnaam":  body("h/k.flip", sha),
-		"korte som":      body("http://h/k.flip", "deadbeef"),
-		"geen hex":       body("http://h/k.flip", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
-		"kapotte json":   bytes.NewReader([]byte("{")),
+		"kale hostnaam": body("h/k.flip", sha),
+		"korte som":     body("http://h/k.flip", "deadbeef"),
+		"geen hex":      body("http://h/k.flip", "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"),
+		"kapotte json":  bytes.NewReader([]byte("{")),
 	} {
 		w = leanhttp.NewRecorder()
 		a.handleFlip(w, leanhttp.NewRequest(leanhttp.MethodPost, "/flip", r))
