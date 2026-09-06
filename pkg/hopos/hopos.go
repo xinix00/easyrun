@@ -64,10 +64,17 @@ type SlotStatus struct {
 	Cage string
 }
 
+// DedicatedPlacement reports whether a dedicated physical core run is free.
+// The node still confirms and reserves it in StartStream.
+type DedicatedPlacement interface {
+	CanPlaceDedicated(slot, cores int) bool
+}
+
 // StartSpec carries everything a one-phase start needs. It is the union of
 // what StartLoader and StartStaged each took, because a streaming start IS
 // both phases at once.
 type StartSpec struct {
+	CoreClass  string            // optional physical core class, including sharegroup pools
 	MemLimit   uint64            // partition size (the job's memory_limit)
 	Cores      int               // SMP cores for the app itself (>=1)
 	Sharegroup string            // "" = dedicated core; else cooperative pool

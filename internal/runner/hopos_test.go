@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,6 +27,7 @@ type fakeSlotManager struct {
 	cage string
 
 	// Laatste sharegroup-plaatsing (voor assertions in de core-deling-test).
+	lastCoreClass  string
 	lastSharegroup string
 	lastPoolCores  int
 }
@@ -80,6 +82,7 @@ func (f *fakeSlotManager) StartStream(slot int, image io.Reader, size int64, spe
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.lastSharegroup, f.lastPoolCores = spec.Sharegroup, spec.PoolCores
+	f.lastCoreClass = spec.CoreClass
 	f.slots[slot] = &fakeSlot{
 		image: img, memLimit: spec.MemLimit, cores: spec.Cores,
 		env: spec.Env, mounts: spec.Mounts, ports: spec.Ports,
@@ -558,13 +561,125 @@ func TestAllocateSkipsCagesTheNodeReportsLive(t *testing.T) {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	got, err := r.allocateSlotLocked("", 1)
+	got, err := r.allocateSlotLocked("", 1, false)
 	if err != nil || got != 2 {
 		t.Errorf("allocate = %d, %v; wil kooi 2 — kooi 1 draait op de node", got, err)
 	}
 	// En een SMP-app van twee kooien moet 3 overslaan en op 4 landen.
-	got, err = r.allocateSlotLocked("", 2)
+	got, err = r.allocateSlotLocked("", 2, false)
 	if err != nil || got != 4 {
 		t.Errorf("allocate(2) = %d, %v; wil kooi 4 (3 draait)", got, err)
+	}
+}
+
+func TestHopRunnerClassSharingDoesNotConsumeSMPIDs(t *testing.T) {
+	srv := imageServer(t, []byte("img"))
+	sm := newFakeSlotManager(9)
+	r := NewHopRunner(sm, nil)
+	for i := 0; i < 2; i++ {
+		job := hopJob(srv.URL)
+		job.Tags = map[string]string{"sharegroup": "trusted", "core-class": "big"}
+		task := &types.Task{ID: fmt.Sprintf("shared-%d", i)}
+		if err := r.Run(job, task); err != nil {
+			t.Fatal(err)
+		}
+		if task.Pid != 10+i {
+			t.Fatalf("shared cage=%d, want %d", task.Pid, 10+i)
+		}
+	}
+	job := hopJob(srv.URL)
+	job.CPUShares = 2048
+	job.Tags = map[string]string{"core-class": "big"}
+	task := &types.Task{ID: "smp"}
+	if err := r.Run(job, task); err != nil {
+		t.Fatal(err)
+	}
+	if task.Pid > 9 {
+		t.Fatalf("SMP cage outside core range: %d", task.Pid)
+	}
+}
+func TestHopRunnerOneCoreClassSharing(t *testing.T) {
+	srv := imageServer(t, []byte("img"))
+	sm := newFakeSlotManager(1)
+	sm.classes[1] = "big"
+	r := NewHopRunner(sm, nil)
+	for i := 0; i < 2; i++ {
+		job := hopJob(srv.URL)
+		job.Tags = map[string]string{"sharegroup": "trusted", "core-class": "big"}
+		task := &types.Task{ID: fmt.Sprintf("shared-%d", i)}
+		if err := r.Run(job, task); err != nil {
+			t.Fatal(err)
+		}
+		if sm.lastCoreClass != "big" {
+			t.Fatalf("lost physical class: %q", sm.lastCoreClass)
+		}
+		if task.Pid != 2+i {
+			t.Fatalf("cage=%d", task.Pid)
+		}
+	}
+}
+
+type placementManager struct {
+	*fakeSlotManager
+	occupied map[int]bool
+}
+
+func (s *placementManager) CanPlaceDedicated(slot, cores int) bool {
+	for c := slot; c < slot+cores; c++ {
+		if s.occupied[c] {
+			return false
+		}
+	}
+	return true
+}
+func TestHopRunnerSkipsPhysicalPoolForSMP(t *testing.T) {
+	sm := &placementManager{newFakeSlotManager(9), map[int]bool{7: true}}
+	for c := 1; c <= 9; c++ {
+		sm.classes[c] = "small"
+	}
+	for c := 7; c <= 9; c++ {
+		sm.classes[c] = "big"
+	}
+	r := NewHopRunner(sm, nil)
+	sm.slots[1] = &fakeSlot{coreOn: true, logs: make(chan string)}
+	sm.slots[2] = &fakeSlot{coreOn: true, logs: make(chan string)}
+	r.AdoptRunning(map[string]int{"old-shared-a": 1, "old-shared-b": 2}, nil)
+	got, err := r.allocateSlotLocked("big", 2, false)
+	if err != nil || got != 8 {
+		t.Fatalf("SMP slot=%d err=%v", got, err)
+	}
+	got, err = r.allocateSlotLocked("big", 1, true)
+	if err != nil || got != 10 {
+		t.Fatalf("new shared slot=%d err=%v", got, err)
+	}
+}
+
+func TestHopRunnerFullPhysicalRunIsPendingCapacity(t *testing.T) {
+	sm := &placementManager{newFakeSlotManager(3), map[int]bool{1: true, 2: true, 3: true}}
+	r := NewHopRunner(sm, nil)
+	if _, err := r.allocateSlotLocked("", 2, false); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("full physical run must be capacity, got %v", err)
+	}
+}
+func TestHopRunnerLegacySharedCageReleasedOnlyAfterStop(t *testing.T) {
+	sm := &placementManager{newFakeSlotManager(3), map[int]bool{3: true}}
+	sm.slots[1] = &fakeSlot{coreOn: true, logs: make(chan string)}
+	sm.slots[2] = &fakeSlot{coreOn: true, logs: make(chan string)}
+	r := NewHopRunner(sm, nil)
+	r.AdoptRunning(map[string]int{"old-a": 1, "old-b": 2}, nil)
+	if _, err := r.allocateSlotLocked("", 2, false); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("reused live legacy cage: %v", err)
+	}
+	if err := r.Stop(&types.Task{ID: "old-a", Pid: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.allocateSlotLocked("", 2, false); !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("reused live neighbor: %v", err)
+	}
+	if err := r.Stop(&types.Task{ID: "old-b", Pid: 2}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := r.allocateSlotLocked("", 2, false); err != nil || got != 1 {
+		t.Fatalf("stopped cages remain reserved: slot=%d err=%v", got, err)
 	}
 }

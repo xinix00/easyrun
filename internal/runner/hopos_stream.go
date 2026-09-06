@@ -145,6 +145,7 @@ func (r *HopRunner) runViaStream(ctx context.Context, cancel context.CancelFunc,
 
 	err = r.sm.StartStream(slot, body, size, hopos.StartSpec{
 		MemLimit:   job.MemoryLimit,
+		CoreClass:  job.Tags["core-class"],
 		Cores:      cores,
 		Sharegroup: sharegroup,
 		PoolCores:  poolCores,

@@ -185,7 +185,7 @@ func (r *HopRunner) run(job *types.Job, task *types.Task) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	r.mu.Lock()
-	slot, err := r.allocateSlotLocked(job.Tags["core-class"], allocCages)
+	slot, err := r.allocateSlotLocked(job.Tags["core-class"], allocCages, sharegroup != "")
 	if err != nil {
 		r.mu.Unlock()
 		cancel()
@@ -407,18 +407,22 @@ func (r *HopRunner) Cleanup() error { return nil }
 // honoring an optional core-class tag) and returns the first (the primary).
 // For cores == 1 this is just the first free slot; for an SMP app the run is
 // the primary plus its secondary cores. Caller holds r.mu.
-func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error) {
-	// Cage IDs are not a leader-facing capacity: HopOS stacks more cages than it
-	// has cores (sharegroups) and enforces its own hard ceiling, so HOP just
-	// hands out the next free ID and lets the node place it or reject — the real
-	// core/RAM walls live in admission (agent) and PlaceCage (node). A
-	// class-constrained job is the exception: a class only maps to real cores,
-	// so it is bounded by the node's core count.
-	limit := -1 // unbounded — the first free run always terminates the search
-	if coreClass != "" {
+func (r *HopRunner) allocateSlotLocked(coreClass string, cores int, shared bool) (int, error) {
+	// Shared cage IDs live above the physical range, leaving low IDs available
+	// for SMP (whose primary cage must equal its primary core). Core class is
+	// checked by the node against physical pool cores, never these cage IDs.
+	first, limit := 1, -1
+	if shared {
+		first = r.sm.NumCores() + 1
+	} else if coreClass != "" || cores > 1 {
 		limit = r.sm.NumCores()
 	}
-	for slot := 1; limit < 0 || slot+cores-1 <= limit; slot++ {
+	for slot := first; limit < 0 || slot+cores-1 <= limit; slot++ {
+		if !shared && slot+cores-1 <= r.sm.NumCores() {
+			if placement, ok := r.sm.(hopos.DedicatedPlacement); ok && !placement.CanPlaceDedicated(slot, cores) {
+				continue
+			}
+		}
 		ok := true
 		for c := slot; c < slot+cores; c++ {
 			// Twee vragen, en maar één ervan is van ons. r.inUse is puur een
@@ -444,7 +448,7 @@ func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error)
 				ok = false
 				break
 			}
-			if coreClass != "" && r.sm.CoreClass(c) != coreClass {
+			if !shared && coreClass != "" && r.sm.CoreClass(c) != coreClass {
 				ok = false
 				break
 			}
@@ -453,7 +457,7 @@ func (r *HopRunner) allocateSlotLocked(coreClass string, cores int) (int, error)
 			return slot, nil
 		}
 	}
-	return 0, fmt.Errorf("hop driver: no %d contiguous free %q cores", cores, coreClass)
+	return 0, fmt.Errorf("%w: hop driver: no %d contiguous free %q cores", ErrNoCapacity, cores, coreClass)
 }
 
 // AdoptRunning draagt de kooien van al-draaiende taken over aan deze runner:

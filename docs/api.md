@@ -375,6 +375,11 @@ Returns capacity, live usage and node attributes:
 - `tasks_running` is a display count of tasks in state `running` — it is not
   what capacity is computed from.
 
+For HopOS jobs, `core-class` selects physical cores, including the cores of a
+`sharegroup` pool. Shared cage IDs are independent of that class and start above
+the physical core range, leaving low IDs available for dedicated SMP. The node
+confirms placement; unavailable physical capacity leaves the job pending.
+
 ### Tasks
 
 ```
