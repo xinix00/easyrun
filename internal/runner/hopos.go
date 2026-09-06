@@ -491,6 +491,16 @@ func (r *HopRunner) AdoptRunning(slots map[string]int, cores map[string]int) {
 				r.inUse[c] = id
 			}
 		}
+		// The old kernel's log pump and broadcasters did not survive the
+		// flip. Reconnect the adopted task to its existing slot log stream.
+		stdout := NewLogBroadcaster()
+		r.logs.put(id, stdout, NewLogBroadcaster())
+		logLines := r.sm.Logs(slot)
+		go func() {
+			for line := range logLines {
+				_, _ = stdout.Write([]byte(line))
+			}
+		}()
 	}
 }
 
